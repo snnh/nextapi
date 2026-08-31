@@ -1,0 +1,1672 @@
+//! OpenAI Responses 适配器（/v1/responses）。
+//!
+//! 要点（PLAN.md §4.2/§4.4）：
+//! - 系统提示 → `instructions`；输入为 `input` 数组（message / function_call_output 等 item）；
+//! - 输出 item 类型：message / reasoning / function_call；usage 为 input/output_tokens(+details)；
+//! - 有状态能力（previous_response_id、store 等）转为其他协议时列为降级能力；
+//! - 流式：response.* 事件序列（response.output_text.delta / response.completed 等）。
+//!
+//! 转换策略（§4.3）：能直接映射的字段直接映射；Responses 无对应能力的字段（如
+//! seed/n 等）记 `ctx.degrade`；Responses 有状态/专属字段（previous_response_id、
+//! store/include/background、input.reasoning）作为入口转其他协议时列为降级能力，
+//! 值仍原样保留到 `IrRequest.extra` 以便回写。
+
+use std::collections::HashMap;
+
+use serde_json::{Map, Value};
+
+use super::ir::*;
+use super::{ConvCtx, ConvertError};
+
+/// 请求体中被本适配器识别并映射的顶层字段；其余进 `extra`。
+const KNOWN_REQUEST_FIELDS: [&str; 10] = [
+    "model",
+    "instructions",
+    "input",
+    "max_output_tokens",
+    "temperature",
+    "top_p",
+    "text",
+    "tools",
+    "tool_choice",
+    "stream",
+];
+
+/// 响应体顶层规范字段；其余进 `extra`。
+const KNOWN_RESPONSE_FIELDS: [&str; 7] = [
+    "id",
+    "object",
+    "created_at",
+    "status",
+    "model",
+    "output",
+    "usage",
+];
+
+fn json_object() -> Value {
+    Value::Object(Map::new())
+}
+
+fn json_number_f64(v: f64) -> Value {
+    serde_json::Number::from_f64(v)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+/// 将 serde_json::Value 序列化为字符串（用于 SSE data 载荷）。
+fn json_to_string(v: &Value) -> Result<String, ConvertError> {
+    serde_json::to_string(v).map_err(|e| ConvertError::Parse(e.to_string()))
+}
+
+/// 角色 → Responses 字符串（user/assistant；system 不回写进 input）。
+fn role_to_response_str(r: IrRole) -> &'static str {
+    match r {
+        IrRole::System => "system",
+        IrRole::User => "user",
+        IrRole::Assistant => "assistant",
+        IrRole::Tool => "tool",
+    }
+}
+
+/// 解析输入 message item 的角色；未知角色记降级，缺省按 user 容错。
+fn parse_response_role(role: Option<&str>, ctx: &mut ConvCtx) -> IrRole {
+    match role {
+        Some("user") => IrRole::User,
+        Some("assistant") => IrRole::Assistant,
+        Some("system") => IrRole::System,
+        Some(other) => {
+            ctx.degrade("input.message.role", format!("未知角色，按 user 处理: {other}"));
+            IrRole::User
+        }
+        _ => IrRole::User,
+    }
+}
+
+/// 将可能的 arguments（字符串或对象）归一为 JSON 字符串。
+fn parse_arguments_any(v: &Value) -> String {
+    if v.is_string() {
+        v.as_str().unwrap_or_default().to_string()
+    } else if v.is_null() {
+        String::new()
+    } else {
+        serde_json::to_string(v).unwrap_or_default()
+    }
+}
+
+/// 解析单个输入 content part。
+///
+/// Responses 输入 part 类型：`input_text` / `input_image` / `input_file`。
+fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
+    if !p.is_object() {
+        ctx.degrade("input.content.part", "content part 非对象");
+        return None;
+    }
+    match p["type"].as_str().unwrap_or_default() {
+        "input_text" => Some(IrPart::Text {
+            text: p["text"].as_str().unwrap_or_default().to_string(),
+        }),
+        "input_image" => {
+            let url_val = p.get("image_url").cloned().unwrap_or_default();
+            let url = if let Some(s) = url_val.as_str() {
+                s.to_string()
+            } else if let Some(o) = url_val.as_object() {
+                o.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string()
+            } else {
+                String::new()
+            };
+            if url.is_empty() {
+                ctx.degrade("input.image_url", "input_image 缺 url");
+                return None;
+            }
+            if let Some(rest) = url.strip_prefix("data:") {
+                let (media_type, data) = split_data_url(rest);
+                Some(IrPart::ImageInline { media_type, data })
+            } else {
+                Some(IrPart::ImageUrl { url })
+            }
+        }
+        "input_file" => {
+            let name = p["filename"]
+                .as_str()
+                .or_else(|| p["file_id"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            let url = p["file_url"].as_str().or_else(|| p["url"].as_str()).map(String::from);
+            let data = p["file_data"].as_str().or_else(|| p["data"].as_str()).map(String::from);
+            if name.is_empty() && url.is_none() && data.is_none() {
+                ctx.degrade("input.file", "input_file 无内容");
+                return None;
+            }
+            Some(IrPart::File { name, url, data })
+        }
+        other => {
+            ctx.degrade("input.content.part.type", format!("未知 part 类型: {other}"));
+            None
+        }
+    }
+}
+
+/// `data:...` URL 片段拆分为 (media_type, base64 data)。
+fn split_data_url(rest: &str) -> (String, String) {
+    if let Some(semi) = rest.find(';') {
+        let media = rest[..semi].to_string();
+        let after = &rest[semi + 1..];
+        if let Some(comma) = after.find(',') {
+            (media, after[comma + 1..].to_string())
+        } else {
+            (media, after.to_string())
+        }
+    } else if let Some(comma) = rest.find(',') {
+        ("application/octet-stream".into(), rest[comma + 1..].to_string())
+    } else {
+        ("application/octet-stream".into(), rest.to_string())
+    }
+}
+
+/// 解析一条输入 item 为 IR 消息。
+/// 返回 `None` 表示该 item 无法/无需形成消息（reasoning、未知类型）。
+fn parse_input_item(item: &Value, ctx: &mut ConvCtx) -> Result<Option<IrMessage>, ConvertError> {
+    if !item.is_object() {
+        ctx.degrade("input.item", "输入项非对象");
+        return Ok(None);
+    }
+    let typ = item["type"].as_str().unwrap_or_default();
+    match typ {
+        "message" => {
+            let mut msg = IrMessage {
+                role: parse_response_role(item["role"].as_str(), ctx),
+                ..Default::default()
+            };
+            if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                let mut parts = Vec::new();
+                for p in content {
+                    if let Some(part) = parse_input_content_part(p, ctx) {
+                        parts.push(part);
+                    }
+                }
+                if !parts.is_empty() {
+                    msg.content = Some(IrContent::Parts(parts));
+                }
+            }
+            Ok(Some(msg))
+        }
+        "function_call" => {
+            let id = item["call_id"]
+                .as_str()
+                .or_else(|| item["id"].as_str())
+                .unwrap_or_default()
+                .to_string();
+            let name = item["name"].as_str().unwrap_or_default().to_string();
+            let arguments = parse_arguments_any(item.get("arguments").unwrap_or(&Value::Null));
+            let mut msg = IrMessage {
+                role: IrRole::Assistant,
+                ..Default::default()
+            };
+            msg.tool_calls.push(IrToolCall { id, name, arguments });
+            Ok(Some(msg))
+        }
+        "function_call_output" => {
+            let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
+            let output = item["output"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let msg = IrMessage {
+                role: IrRole::Tool,
+                tool_call_id: Some(call_id),
+                content: Some(IrContent::Text(output)),
+                ..Default::default()
+            };
+            Ok(Some(msg))
+        }
+        "reasoning" => {
+            ctx.degrade("input.reasoning", "推理 item 无法回放为消息，忽略");
+            Ok(None)
+        }
+        other => {
+            ctx.degrade("input.item.type", format!("未知输入项类型，忽略: {other}"));
+            Ok(None)
+        }
+    }
+}
+
+/// 将一条待插入的消息合并进 messages 列表。
+/// 连续多个 function_call（assistant + tool_calls）会合入同一个 assistant 消息，
+/// 使 tool_calls 能成组（对应 Responses 的多个 function_call output item）。
+fn push_message(messages: &mut Vec<IrMessage>, msg: IrMessage) {
+    if msg.role == IrRole::Assistant && !msg.tool_calls.is_empty() {
+        if let Some(last) = messages.last_mut() {
+            if last.role == IrRole::Assistant {
+                last.tool_calls.extend(msg.tool_calls);
+                return;
+            }
+        }
+    }
+    messages.push(msg);
+}
+
+/// 解析 Responses 工具（function 类型平铺或嵌套）。
+/// 非 function 类型（web_search 等）记降级丢弃。
+fn parse_response_tools(v: &Value, ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertError> {
+    let arr = v
+        .as_array()
+        .ok_or_else(|| ConvertError::Parse("tools 不是数组".into()))?;
+    let mut out = Vec::new();
+    for t in arr {
+        if t["type"].as_str().unwrap_or_default() != "function" {
+            ctx.degrade(
+                "tools",
+                format!("非 function 类型工具定义，丢弃: {}", t["type"].as_str().unwrap_or_default()),
+            );
+            continue;
+        }
+        // 平铺：{type,name,description,parameters}；嵌套：{type,function:{...}} 皆可容错解析
+        let f = if t.get("function").is_some() { &t["function"] } else { t };
+        let name = f["name"].as_str().unwrap_or_default().to_string();
+        if name.is_empty() {
+            ctx.degrade("tools", "function 工具缺 name");
+            continue;
+        }
+        out.push(IrTool {
+            name,
+            description: f["description"].as_str().map(String::from),
+            parameters: f.get("parameters").cloned().unwrap_or_else(json_object),
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// 请求：Responses JSON → IR
+// ---------------------------------------------------------------------------
+
+/// 请求 JSON → IR。
+pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertError> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| ConvertError::Parse("请求体不是对象".into()))?;
+    let mut req = IrRequest::default();
+    req.model = v["model"].as_str().unwrap_or_default().to_string();
+    req.stream = v["stream"].as_bool().unwrap_or(false);
+
+    // instructions → system 消息（置于最前）
+    if let Some(instr) = v.get("instructions").and_then(|i| i.as_str()) {
+        if !instr.is_empty() {
+            req.messages.push(IrMessage {
+                role: IrRole::System,
+                content: Some(IrContent::Text(instr.to_string())),
+                ..Default::default()
+            });
+        }
+    }
+
+    // input：字符串 → 用户文本消息；数组/对象 → 逐 item 解析；连续 function_call 合入同一 assistant 消息
+    if let Some(input) = v.get("input") {
+        if let Some(s) = input.as_str() {
+            req.messages.push(IrMessage {
+                role: IrRole::User,
+                content: Some(IrContent::Text(s.to_string())),
+                ..Default::default()
+            });
+        } else if let Some(arr) = input.as_array() {
+            for item in arr {
+                if let Some(msg) = parse_input_item(item, ctx)? {
+                    push_message(&mut req.messages, msg);
+                }
+            }
+        } else if input.is_object() {
+            if let Some(msg) = parse_input_item(input, ctx)? {
+                push_message(&mut req.messages, msg);
+            }
+        } else {
+            ctx.degrade("input", "input 既非字符串/数组/对象，忽略");
+        }
+    }
+
+    // max_output_tokens → max_tokens
+    if let Some(mt) = v.get("max_output_tokens") {
+        if let Some(n) = mt.as_u64() {
+            req.max_tokens = Some(n);
+        }
+    }
+
+    req.temperature = v["temperature"].as_f64();
+    req.top_p = v["top_p"].as_f64();
+
+    // text.format → response_format；text.verbosity 为 Responses 专属 → 降级
+    if let Some(text) = v.get("text").and_then(|t| t.as_object()) {
+        if let Some(fmt) = text.get("format") {
+            req.response_format = Some(fmt.clone());
+        }
+        if text.get("verbosity").is_some() {
+            ctx.degrade("text.verbosity", "Responses 专属字段，无法映射");
+        }
+    }
+
+    if let Some(tools) = v.get("tools") {
+        req.tools = parse_response_tools(tools, ctx)?;
+    }
+    req.tool_choice = v.get("tool_choice").cloned();
+
+    // 有状态/Responses 专属字段：作为入口转其他协议时记为降级能力（值仍保留到 extra）
+    for f in ["previous_response_id", "store", "include", "background"] {
+        if v.get(f).is_some() {
+            ctx.degrade(f, "Responses 有状态/专属字段，无法映射为 IR，原样保留到 extra");
+        }
+    }
+
+    // 未知字段进 extra（含 metadata、previous_response_id、store、include、background 等）
+    for (k, val) in obj {
+        if !KNOWN_REQUEST_FIELDS.contains(&k.as_str()) {
+            req.extra.insert(k.clone(), val.clone());
+        }
+    }
+
+    Ok(req)
+}
+
+// ---------------------------------------------------------------------------
+// 请求：IR → Responses JSON
+// ---------------------------------------------------------------------------
+
+/// 将 IR 内容归一为纯文本（用于 instructions / 工具输出拼接）。
+fn content_as_text(content: Option<&IrContent>) -> String {
+    match content {
+        Some(IrContent::Text(s)) => s.clone(),
+        Some(IrContent::Parts(ps)) => {
+            let mut out = String::new();
+            for p in ps {
+                if let IrPart::Text { text } = p {
+                    out.push_str(text);
+                }
+            }
+            out
+        }
+        None => String::new(),
+    }
+}
+
+/// IR part → Responses 输入 content part。
+fn ir_part_to_input_part(p: &IrPart, ctx: &mut ConvCtx) -> Value {
+    match p {
+        IrPart::Text { text } => json_build(&[("type", "input_text"), ("text", text)]),
+        IrPart::ImageUrl { url } => json_build(&[("type", "input_image"), ("image_url", url)]),
+        IrPart::ImageInline { media_type, data } => {
+            json_build(&[("type", "input_image"), ("image_url", &format!("data:{media_type};base64,{data}"))])
+        }
+        IrPart::InputAudio { .. } => {
+            ctx.degrade("content.input_audio", "Responses 不支持 input_audio，丢弃");
+            json_build(&[("type", "input_text"), ("text", "")])
+        }
+        IrPart::File { name, url, data } => {
+            let mut o = Map::new();
+            o.insert("type".into(), Value::String("input_file".into()));
+            if !name.is_empty() {
+                o.insert("filename".into(), Value::String(name.clone()));
+            }
+            if let Some(u) = url {
+                o.insert("file_url".into(), Value::String(u.clone()));
+            }
+            if let Some(d) = data {
+                o.insert("file_data".into(), Value::String(d.clone()));
+            }
+            Value::Object(o)
+        }
+    }
+}
+
+/// 便捷构造字符串键值 JSON 对象（用于 Responses part）。
+fn json_build(pairs: &[(&str, &str)]) -> Value {
+    let mut o = Map::new();
+    for (k, v) in pairs {
+        o.insert(k.to_string(), Value::String(v.to_string()));
+    }
+    Value::Object(o)
+}
+
+/// 构造 Responses 输入 message item（roles：user/assistant）。
+fn request_message_item(role: IrRole, content: &IrContent, ctx: &mut ConvCtx) -> Value {
+    let role_str = if role == IrRole::Assistant { "assistant" } else { "user" };
+    let parts = match content {
+        IrContent::Text(s) => vec![json_build(&[("type", "input_text"), ("text", s)])],
+        IrContent::Parts(ps) => ps.iter().map(|p| ir_part_to_input_part(p, ctx)).collect(),
+    };
+    json_build_with("message", role_str, parts)
+}
+
+/// 构造带 role + content 数组的输入 message item。
+fn json_build_with(type_: &str, role: &str, parts: Vec<Value>) -> Value {
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String(type_.into()));
+    o.insert("role".into(), Value::String(role.into()));
+    o.insert("content".into(), Value::Array(parts));
+    Value::Object(o)
+}
+
+/// 构造 Responses 输入 function_call item。
+fn function_call_input_item(tc: &IrToolCall) -> Value {
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("function_call".into()));
+    o.insert("call_id".into(), Value::String(tc.id.clone()));
+    o.insert("name".into(), Value::String(tc.name.clone()));
+    o.insert("arguments".into(), Value::String(tc.arguments.clone()));
+    Value::Object(o)
+}
+
+/// IR 工具定义 → Responses 工具（function 平铺）。
+fn response_tool_from_ir(t: &IrTool) -> Value {
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("function".into()));
+    o.insert("name".into(), Value::String(t.name.clone()));
+    if let Some(d) = &t.description {
+        o.insert("description".into(), Value::String(d.clone()));
+    }
+    o.insert("parameters".into(), t.parameters.clone());
+    Value::Object(o)
+}
+
+/// 记录 ext 字段在 Responses 请求无对应输入槽 → 降级。
+fn degrade_ext(req: &IrRequest, ctx: &mut ConvCtx) {
+    if req.ext.thinking.is_some() {
+        ctx.degrade("ext.thinking", "Responses 请求无对应输入字段");
+    }
+    if req.ext.web_search.is_some() {
+        ctx.degrade("ext.web_search", "Responses 请求无对应输入字段");
+    }
+    if req.ext.cache_control.is_some() {
+        ctx.degrade("ext.cache_control", "Responses 请求无对应输入字段");
+    }
+    if req.ext.top_k.is_some() {
+        ctx.degrade("ext.top_k", "Responses 请求无对应输入字段");
+    }
+    if req.ext.service_tier.is_some() {
+        ctx.degrade("ext.service_tier", "Responses 请求无对应输入字段");
+    }
+    for k in req.ext.extra.keys() {
+        ctx.degrade(k.clone(), "Responses 请求无对应输入字段");
+    }
+}
+
+/// IR → 请求 JSON。extra 先铺底，再写规范字段（规范字段覆盖 extra 同名字段）。
+pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, ConvertError> {
+    let mut body = req.extra.clone();
+    degrade_ext(req, ctx);
+
+    body.insert("model".into(), Value::String(req.model.clone()));
+
+    // system 消息 → instructions；其余消息 → input items
+    let mut instructions = String::new();
+    let mut input_items: Vec<Value> = Vec::new();
+    for m in &req.messages {
+        match m.role {
+            IrRole::System => {
+                let text = content_as_text(m.content.as_ref());
+                if !text.is_empty() {
+                    if !instructions.is_empty() {
+                        instructions.push('\n');
+                    }
+                    instructions.push_str(&text);
+                }
+            }
+            IrRole::User | IrRole::Assistant => {
+                if m.content.is_some() {
+                    input_items.push(request_message_item(m.role, m.content.as_ref().unwrap(), ctx));
+                }
+                for tc in &m.tool_calls {
+                    input_items.push(function_call_input_item(tc));
+                }
+            }
+            IrRole::Tool => {
+                let mut o = Map::new();
+                o.insert("type".into(), Value::String("function_call_output".into()));
+                o.insert("call_id".into(), Value::String(m.tool_call_id.clone().unwrap_or_default()));
+                o.insert("output".into(), Value::String(content_as_text(m.content.as_ref())));
+                input_items.push(Value::Object(o));
+            }
+        }
+    }
+    if !instructions.is_empty() {
+        body.insert("instructions".into(), Value::String(instructions));
+    }
+    body.insert("input".into(), Value::Array(input_items));
+
+    if !req.tools.is_empty() {
+        body.insert("tools".into(), Value::Array(req.tools.iter().map(response_tool_from_ir).collect()));
+    }
+    if let Some(tc) = &req.tool_choice {
+        body.insert("tool_choice".into(), tc.clone());
+    }
+    if let Some(t) = req.temperature {
+        body.insert("temperature".into(), json_number_f64(t));
+    }
+    if let Some(tp) = req.top_p {
+        body.insert("top_p".into(), json_number_f64(tp));
+    }
+    if let Some(mt) = req.max_tokens {
+        body.insert("max_output_tokens".into(), Value::from(mt));
+    }
+    if let Some(s) = req.seed {
+        body.insert("seed".into(), Value::from(s));
+    }
+    if req.n.is_some() {
+        ctx.degrade("n", "Responses 不支持 n，忽略");
+    }
+    // response_format → text.format
+    if let Some(rf) = &req.response_format {
+        let mut text = Map::new();
+        text.insert("format".into(), rf.clone());
+        body.insert("text".into(), Value::Object(text));
+    }
+
+    body.insert("stream".into(), Value::Bool(req.stream));
+
+    Ok(Value::Object(body))
+}
+
+// ---------------------------------------------------------------------------
+// 非流式响应：Responses JSON → IR
+// ---------------------------------------------------------------------------
+
+/// 解析 Responses usage（input/output_tokens + details）。
+fn parse_responses_usage(u: &Value) -> IrUsage {
+    let mut usage = IrUsage::default();
+    usage.prompt_tokens = u["input_tokens"].as_u64().unwrap_or(0);
+    usage.completion_tokens = u["output_tokens"].as_u64().unwrap_or(0);
+    usage.total_tokens = u["total_tokens"].as_u64();
+
+    if let Some(details) = u.get("input_tokens_details").and_then(|d| d.as_object()) {
+        if let Some(cached) = details.get("cached_tokens").and_then(|c| c.as_u64()) {
+            usage.cache_read_tokens = Some(cached);
+        }
+        let mut rest = Map::new();
+        for (k, val) in details {
+            if k != "cached_tokens" {
+                rest.insert(k.clone(), val.clone());
+            }
+        }
+        if !rest.is_empty() {
+            usage.extra.insert("input_tokens_details".into(), Value::Object(rest));
+        }
+    }
+    if let Some(details) = u.get("output_tokens_details").and_then(|d| d.as_object()) {
+        if let Some(rt) = details.get("reasoning_tokens").and_then(|r| r.as_u64()) {
+            usage.extra.insert("reasoning_tokens".into(), Value::from(rt));
+        }
+        let mut rest = Map::new();
+        for (k, val) in details {
+            if k != "reasoning_tokens" {
+                rest.insert(k.clone(), val.clone());
+            }
+        }
+        if !rest.is_empty() {
+            usage.extra.insert("output_tokens_details".into(), Value::Object(rest));
+        }
+    }
+    if let Some(o) = u.as_object() {
+        for (k, val) in o {
+            if !matches!(
+                k.as_str(),
+                "input_tokens" | "output_tokens" | "total_tokens" | "input_tokens_details" | "output_tokens_details"
+            ) {
+                usage.extra.insert(k.clone(), val.clone());
+            }
+        }
+    }
+    usage
+}
+
+/// 将文本追加到 IR 消息内容（多个 output_text part 拼接）。
+fn append_message_text(msg: &mut IrMessage, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    match msg.content.as_mut() {
+        Some(IrContent::Text(s)) => s.push_str(text),
+        Some(IrContent::Parts(ps)) => match ps.last_mut() {
+            Some(IrPart::Text { text: t }) => t.push_str(text),
+            _ => ps.push(IrPart::Text { text: text.to_string() }),
+        },
+        None => msg.content = Some(IrContent::Text(text.to_string())),
+    }
+}
+
+/// 非流式响应 JSON → IR。
+pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, ConvertError> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| ConvertError::Parse("响应体不是对象".into()))?;
+    let mut resp = IrResponse::default();
+    resp.id = v["id"].as_str().unwrap_or_default().to_string();
+    resp.model = v["model"].as_str().unwrap_or_default().to_string();
+    resp.created = v["created_at"].as_i64().unwrap_or(0);
+
+    let mut msg = IrMessage {
+        role: IrRole::Assistant,
+        ..Default::default()
+    };
+
+    // output items → assistant 消息 + tool_calls + reasoning_content
+    if let Some(output) = v.get("output").and_then(|o| o.as_array()) {
+        for item in output {
+            match item["type"].as_str().unwrap_or_default() {
+                "message" => {
+                    // output_text parts 拼接
+                    if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                        let mut text = String::new();
+                        for part in content {
+                            if let Some(t) = part["text"].as_str() {
+                                text.push_str(t);
+                            } else {
+                                ctx.degrade("output.message.content.part", "未知 message content part，忽略");
+                            }
+                        }
+                        append_message_text(&mut msg, &text);
+                    }
+                }
+                "function_call" => {
+                    let id = item["call_id"]
+                        .as_str()
+                        .or_else(|| item["id"].as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let name = item["name"].as_str().unwrap_or_default().to_string();
+                    let arguments = parse_arguments_any(item.get("arguments").unwrap_or(&Value::Null));
+                    msg.tool_calls.push(IrToolCall { id, name, arguments });
+                }
+                "reasoning" => {
+                    // summary 文本拼接
+                    if let Some(summary) = item.get("summary").and_then(|s| s.as_array()) {
+                        let mut texts = String::new();
+                        for s in summary {
+                            if let Some(t) = s["text"].as_str() {
+                                texts.push_str(t);
+                            }
+                        }
+                        if !texts.is_empty() {
+                            if let Some(rc) = msg.reasoning_content.as_mut() {
+                                rc.push_str(&texts);
+                            } else {
+                                msg.reasoning_content = Some(texts);
+                            }
+                        }
+                    }
+                }
+                other => {
+                    ctx.degrade("output.item.type", format!("未知输出项类型: {other}"));
+                }
+            }
+        }
+    }
+
+    // status → finish_reason；incomplete_details 进 extra
+    let status = v["status"].as_str();
+    let finish_reason = status.map(normalize_finish_reason);
+    resp.choices.push(IrChoice {
+        index: 0,
+        message: msg,
+        finish_reason,
+    });
+    if status == Some("incomplete") {
+        if let Some(details) = v.get("incomplete_details") {
+            resp.extra.insert("incomplete_details".into(), details.clone());
+        }
+    }
+
+    if let Some(u) = v.get("usage") {
+        resp.usage = Some(parse_responses_usage(u));
+    }
+
+    // 未知响应字段进 extra
+    for (k, val) in obj {
+        if !KNOWN_RESPONSE_FIELDS.contains(&k.as_str()) {
+            resp.extra.insert(k.clone(), val.clone());
+        }
+    }
+
+    Ok(resp)
+}
+
+// ---------------------------------------------------------------------------
+// 非流式响应：IR → Responses JSON
+// ---------------------------------------------------------------------------
+
+/// IR usage → Responses usage（input/output_tokens + details）。
+fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
+    let mut out = Map::new();
+    out.insert("input_tokens".into(), Value::from(u.prompt_tokens));
+    out.insert("output_tokens".into(), Value::from(u.completion_tokens));
+    if let Some(t) = u.total_tokens {
+        out.insert("total_tokens".into(), Value::from(t));
+    }
+
+    let mut input_details = Map::new();
+    if let Some(cached) = u.cache_read_tokens {
+        input_details.insert("cached_tokens".into(), Value::from(cached));
+    }
+    if let Some(d) = u.extra.get("input_tokens_details").and_then(|v| v.as_object()) {
+        for (k, val) in d {
+            input_details.entry(k.clone()).or_insert_with(|| val.clone());
+        }
+    }
+    if !input_details.is_empty() {
+        out.insert("input_tokens_details".into(), Value::Object(input_details));
+    }
+
+    let mut output_details = Map::new();
+    if let Some(rt) = u.extra.get("reasoning_tokens") {
+        output_details.insert("reasoning_tokens".into(), rt.clone());
+    }
+    if let Some(d) = u.extra.get("output_tokens_details").and_then(|v| v.as_object()) {
+        for (k, val) in d {
+            output_details.entry(k.clone()).or_insert_with(|| val.clone());
+        }
+    }
+    if !output_details.is_empty() {
+        out.insert("output_tokens_details".into(), Value::Object(output_details));
+    }
+
+    for (k, val) in &u.extra {
+        if k != "reasoning_tokens" && k != "output_tokens_details" && k != "input_tokens_details" {
+            out.insert(k.clone(), val.clone());
+        }
+    }
+
+    if u.cache_write_tokens.is_some() {
+        ctx.degrade("usage.cache_write_tokens", "Responses 无 cache_write_tokens 映射");
+    }
+    Value::Object(out)
+}
+
+/// 构造 Responses 输出 message item。
+fn output_message_item(role: IrRole, text: &str) -> Value {
+    let mut content = Vec::new();
+    if !text.is_empty() {
+        let mut part = Map::new();
+        part.insert("type".into(), Value::String("output_text".into()));
+        part.insert("text".into(), Value::String(text.to_string()));
+        content.push(Value::Object(part));
+    }
+    json_build_item_message(role, content)
+}
+
+/// 构造输出 message item（type=message, status=completed）。
+fn json_build_item_message(role: IrRole, content: Vec<Value>) -> Value {
+    let mut o = Map::new();
+    o.insert("id".into(), Value::String(format!("msg_{}", rand_suffix())));
+    o.insert("type".into(), Value::String("message".into()));
+    o.insert("status".into(), Value::String("completed".into()));
+    o.insert("role".into(), Value::String(role_to_response_str(role).into()));
+    o.insert("content".into(), Value::Array(content));
+    Value::Object(o)
+}
+
+/// 构造输出 function_call item。
+fn output_function_call_item(tc: &IrToolCall) -> Value {
+    let mut o = Map::new();
+    o.insert("id".into(), Value::String(format!("fc_{}", rand_suffix())));
+    o.insert("type".into(), Value::String("function_call".into()));
+    o.insert("status".into(), Value::String("completed".into()));
+    o.insert("call_id".into(), Value::String(tc.id.clone()));
+    o.insert("name".into(), Value::String(tc.name.clone()));
+    o.insert("arguments".into(), Value::String(tc.arguments.clone()));
+    Value::Object(o)
+}
+
+/// 构造输出 reasoning item。
+fn output_reasoning_item(text: &str) -> Value {
+    let mut summary = Vec::new();
+    if !text.is_empty() {
+        let mut part = Map::new();
+        part.insert("type".into(), Value::String("summary_text".into()));
+        part.insert("text".into(), Value::String(text.to_string()));
+        summary.push(Value::Object(part));
+    }
+    let mut o = Map::new();
+    o.insert("id".into(), Value::String(format!("rs_{}", rand_suffix())));
+    o.insert("type".into(), Value::String("reasoning".into()));
+    o.insert("status".into(), Value::String("completed".into()));
+    o.insert("summary".into(), Value::Array(summary));
+    Value::Object(o)
+}
+
+/// 生成短随机后缀（保证 item id 唯一，避免碰撞）。
+fn rand_suffix() -> String {
+    // 用当前纳秒 + 简单哈希组成足够唯一的后缀
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}", n)
+}
+
+/// IR → 非流式响应 JSON。
+pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, ConvertError> {
+    let mut body = resp.extra.clone();
+    body.insert("id".into(), Value::String(resp.id.clone()));
+    body.insert("object".into(), Value::String("response".into()));
+    body.insert("created_at".into(), Value::from(resp.created));
+    body.insert("model".into(), Value::String(resp.model.clone()));
+
+    let has_incomplete = resp.extra.contains_key("incomplete_details");
+    body.insert("status".into(), Value::String(if has_incomplete { "incomplete" } else { "completed" }.into()));
+    if let Some(details) = resp.extra.get("incomplete_details") {
+        body.insert("incomplete_details".into(), details.clone());
+    }
+
+    let mut output = Vec::new();
+    for ch in &resp.choices {
+        let msg = &ch.message;
+        if let Some(content) = &msg.content {
+            output.push(output_message_item(msg.role, &content_as_text(Some(content))));
+        }
+        for tc in &msg.tool_calls {
+            output.push(output_function_call_item(tc));
+        }
+        if let Some(rc) = &msg.reasoning_content {
+            output.push(output_reasoning_item(rc));
+        }
+    }
+    body.insert("output".into(), Value::Array(output));
+
+    if let Some(u) = &resp.usage {
+        body.insert("usage".into(), usage_from_ir(u, ctx));
+    }
+
+    Ok(Value::Object(body))
+}
+
+// ---------------------------------------------------------------------------
+// 流式 chunk
+// ---------------------------------------------------------------------------
+
+/// Responses 流式状态（双向复用）：
+/// - 入站（Responses 流 → IR chunk）：id/model、function_call item_id → 工具序号映射。
+/// - 出站（IR chunk → Responses 事件）：created/completed 标记、输出 item 编排、
+///   message/reasoning/function_call 的累积文本与参数。
+#[derive(Debug, Default)]
+pub struct StreamState {
+    /// 响应骨架（来自 response.created / 首个 IR chunk）
+    pub id: String,
+    pub model: String,
+    pub created_at: i64,
+
+    // —— 入站 (chunk_to_ir) ——
+    /// function_call item_id → IR 内工具序号（index，供聚合器对齐）
+    item_to_index: HashMap<String, u32>,
+    /// 已分配的工具序号计数
+    fn_index_counter: u32,
+
+    // —— 出站 (chunk_from_ir) ——
+    /// 是否已发出 response.created
+    created: bool,
+    /// 是否已发出 response.completed
+    completed: bool,
+    /// 下一个输出 item 的 output_index
+    next_output_index: u32,
+    /// message 输出 item 状态
+    message_item_added: bool,
+    message_item_id: String,
+    message_output_index: u32,
+    message_text: String,
+    /// reasoning 输出 item 状态
+    reasoning_item_added: bool,
+    reasoning_item_id: String,
+    reasoning_output_index: u32,
+    reasoning_text: String,
+    /// function_call 输出 item：IR 工具 index → 状态
+    tool_items: HashMap<u32, FnItemState>,
+}
+
+/// function_call 输出 item 的累积状态（出站用）。
+#[derive(Debug, Default, Clone)]
+struct FnItemState {
+    output_index: u32,
+    item_id: String,
+    call_id: String,
+    name: String,
+    arguments: String,
+}
+
+/// SSE data 载荷 → IR chunk；无业务内容（created/output_item.added/空 delta/完成帧 等）返回 Ok(None)。
+pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Option<IrChunk>, ConvertError> {
+    let v: Value = serde_json::from_str(data).map_err(|e| ConvertError::Parse(e.to_string()))?;
+    let _obj = v
+        .as_object()
+        .ok_or_else(|| ConvertError::Parse("chunk 不是对象".into()))?;
+    let etype = v["type"].as_str().unwrap_or_default();
+
+    match etype {
+        "response.created" => {
+            let resp = &v["response"];
+            st.id = resp["id"].as_str().unwrap_or_default().to_string();
+            st.model = resp["model"].as_str().unwrap_or_default().to_string();
+            st.created_at = resp["created_at"].as_i64().unwrap_or(0);
+            Ok(None)
+        }
+        "response.output_item.added" => {
+            let item = &v["item"];
+            if item["type"].as_str() == Some("function_call") {
+                // 记录 item_id → index（按出现顺序分配）
+                let item_id = item["id"].as_str().unwrap_or_default().to_string();
+                let idx = st.fn_index_counter;
+                st.fn_index_counter += 1;
+                st.item_to_index.insert(item_id, idx);
+            }
+            Ok(None)
+        }
+        "response.output_item.done" => {
+            // function_call 完成帧可跳过（聚合器已完成累积）
+            Ok(None)
+        }
+        "response.output_text.delta" => {
+            let text = v["delta"].as_str().unwrap_or_default();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let mut chunk = base_chunk(st);
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: Some(text.to_string()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            });
+            Ok(Some(chunk))
+        }
+        "response.reasoning_summary_text.delta" => {
+            let text = v["delta"].as_str().unwrap_or_default();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let mut chunk = base_chunk(st);
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    reasoning_content: Some(text.to_string()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            });
+            Ok(Some(chunk))
+        }
+        "response.function_call_arguments.delta" => {
+            let item_id = v["item_id"].as_str().unwrap_or_default().to_string();
+            let text = v["delta"].as_str().unwrap_or_default();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let index = st.item_to_index.get(&item_id).copied().unwrap_or(0);
+            let mut chunk = base_chunk(st);
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    tool_calls: vec![IrToolCallDelta {
+                        index,
+                        id: None,
+                        name: None,
+                        arguments: Some(text.to_string()),
+                    }],
+                    ..Default::default()
+                },
+                finish_reason: None,
+            });
+            Ok(Some(chunk))
+        }
+        "response.completed" | "response.incomplete" => {
+            let resp = &v["response"];
+            let finish = if etype == "response.completed" { "completed" } else { "incomplete" };
+            let mut chunk = base_chunk(st);
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta::default(),
+                finish_reason: Some(normalize_finish_reason(finish)),
+            });
+            if let Some(u) = resp.get("usage") {
+                chunk.usage = Some(parse_responses_usage(u));
+            }
+            Ok(Some(chunk))
+        }
+        other => {
+            ctx.degrade("stream.event.type", format!("未知事件，忽略: {other}"));
+            Ok(None)
+        }
+    }
+}
+
+/// 基于 st 骨架构建空 chunk。
+fn base_chunk(st: &StreamState) -> IrChunk {
+    IrChunk {
+        id: st.id.clone(),
+        model: st.model.clone(),
+        created: st.created_at,
+        ..Default::default()
+    }
+}
+
+/// 构造 response.created 事件。
+fn encode_response_created(st: &StreamState) -> Result<String, ConvertError> {
+    let mut resp = Map::new();
+    resp.insert("id".into(), Value::String(st.id.clone()));
+    resp.insert("object".into(), Value::String("response".into()));
+    resp.insert("created_at".into(), Value::from(st.created_at));
+    resp.insert("status".into(), Value::String("in_progress".into()));
+    resp.insert("model".into(), Value::String(st.model.clone()));
+    resp.insert("output".into(), Value::Array(vec![]));
+    resp.insert("usage".into(), Value::Null);
+    json_to_string(&json_build_event("response.created", Value::Object(resp)))
+}
+
+/// 构造 events 时使用的通用包装（type + response/…）。
+fn json_build_event(type_: &str, payload: Value) -> Value {
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String(type_.into()));
+    o.insert("response".into(), payload);
+    Value::Object(o)
+}
+
+/// 构造 message output_item.added 事件。
+fn encode_output_item_added_message(st: &StreamState) -> Result<String, ConvertError> {
+    let item = json_build_item_message(IrRole::Assistant, vec![]);
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.output_item.added".into()));
+    o.insert("output_index".into(), Value::from(st.message_output_index));
+    o.insert("item".into(), item);
+    json_to_string(&Value::Object(o))
+}
+
+/// 构造 output_text.delta 事件。
+fn encode_output_text_delta(st: &StreamState, text: &str) -> Result<String, ConvertError> {
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.output_text.delta".into()));
+    o.insert("item_id".into(), Value::String(st.message_item_id.clone()));
+    o.insert("output_index".into(), Value::from(st.message_output_index));
+    o.insert("content_index".into(), Value::from(0));
+    o.insert("delta".into(), Value::String(text.to_string()));
+    json_to_string(&Value::Object(o))
+}
+
+/// 构造 reasoning output_item.added 事件。
+fn encode_output_item_added_reasoning(st: &StreamState) -> Result<String, ConvertError> {
+    let mut summary = Vec::new();
+    let mut part = Map::new();
+    part.insert("type".into(), Value::String("summary_text".into()));
+    part.insert("text".into(), Value::String("".into()));
+    summary.push(Value::Object(part));
+    let mut item = Map::new();
+    item.insert("id".into(), Value::String(st.reasoning_item_id.clone()));
+    item.insert("type".into(), Value::String("reasoning".into()));
+    item.insert("status".into(), Value::String("in_progress".into()));
+    item.insert("summary".into(), Value::Array(summary));
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.output_item.added".into()));
+    o.insert("output_index".into(), Value::from(st.reasoning_output_index));
+    o.insert("item".into(), Value::Object(item));
+    json_to_string(&Value::Object(o))
+}
+
+/// 构造 reasoning_summary_text.delta 事件。
+fn encode_reasoning_summary_text_delta(st: &StreamState, text: &str) -> Result<String, ConvertError> {
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.reasoning_summary_text.delta".into()));
+    o.insert("item_id".into(), Value::String(st.reasoning_item_id.clone()));
+    o.insert("output_index".into(), Value::from(st.reasoning_output_index));
+    o.insert("summary_index".into(), Value::from(0));
+    o.insert("delta".into(), Value::String(text.to_string()));
+    json_to_string(&Value::Object(o))
+}
+
+/// 构造 function_call output_item.added 事件。
+fn encode_output_item_added_function_call(st: &StreamState, idx: u32) -> Result<String, ConvertError> {
+    let state = st.tool_items.get(&idx).cloned().unwrap_or_default();
+    let mut item = Map::new();
+    item.insert("id".into(), Value::String(state.item_id));
+    item.insert("type".into(), Value::String("function_call".into()));
+    item.insert("status".into(), Value::String("in_progress".into()));
+    item.insert("call_id".into(), Value::String(state.call_id));
+    item.insert("name".into(), Value::String(state.name));
+    item.insert("arguments".into(), Value::String(state.arguments));
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.output_item.added".into()));
+    o.insert("output_index".into(), Value::from(state.output_index));
+    o.insert("item".into(), Value::Object(item));
+    json_to_string(&Value::Object(o))
+}
+
+/// 构造 function_call_arguments.delta 事件。
+fn encode_function_call_arguments_delta(st: &StreamState, idx: u32, text: &str) -> Result<String, ConvertError> {
+    let state = st.tool_items.get(&idx).cloned().unwrap_or_default();
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.function_call_arguments.delta".into()));
+    o.insert("item_id".into(), Value::String(state.item_id));
+    o.insert("output_index".into(), Value::from(state.output_index));
+    o.insert("delta".into(), Value::String(text.to_string()));
+    json_to_string(&Value::Object(o))
+}
+
+/// 基于 st 累积状态构建 response.completed 的 response 对象。
+fn build_completed_response(st: &StreamState, usage: Option<&IrUsage>, ctx: &mut ConvCtx) -> Value {
+    let mut output = Vec::new();
+    if st.message_item_added {
+        output.push(output_message_item(IrRole::Assistant, &st.message_text));
+    }
+    if st.reasoning_item_added {
+        output.push(output_reasoning_item(&st.reasoning_text));
+    }
+    let mut tools: Vec<&FnItemState> = st.tool_items.values().collect();
+    tools.sort_by_key(|t| t.output_index);
+    for t in tools {
+        output.push(output_function_call_item_from_state(t));
+    }
+
+    let usage_val = usage.map(|u| usage_from_ir(u, ctx)).unwrap_or(Value::Null);
+    let mut resp = Map::new();
+    resp.insert("id".into(), Value::String(st.id.clone()));
+    resp.insert("object".into(), Value::String("response".into()));
+    resp.insert("created_at".into(), Value::from(st.created_at));
+    resp.insert("status".into(), Value::String("completed".into()));
+    resp.insert("model".into(), Value::String(st.model.clone()));
+    resp.insert("output".into(), Value::Array(output));
+    resp.insert("usage".into(), usage_val);
+    Value::Object(resp)
+}
+
+/// 由累积状态构造 function_call 输出 item。
+fn output_function_call_item_from_state(t: &FnItemState) -> Value {
+    let mut o = Map::new();
+    o.insert("id".into(), Value::String(t.item_id.clone()));
+    o.insert("type".into(), Value::String("function_call".into()));
+    o.insert("status".into(), Value::String("completed".into()));
+    o.insert("call_id".into(), Value::String(t.call_id.clone()));
+    o.insert("name".into(), Value::String(t.name.clone()));
+    o.insert("arguments".into(), Value::String(t.arguments.clone()));
+    Value::Object(o)
+}
+
+/// 构造 response.completed 事件。
+fn encode_response_completed(st: &StreamState, chunk: &IrChunk, ctx: &mut ConvCtx) -> Result<String, ConvertError> {
+    let resp = build_completed_response(st, chunk.usage.as_ref(), ctx);
+    json_to_string(&Value::Object({
+        let mut o = Map::new();
+        o.insert("type".into(), Value::String("response.completed".into()));
+        o.insert("response".into(), resp);
+        o
+    }))
+}
+
+/// IR chunk → Responses 事件 JSON 字符串列表。事件序列保证合法（created→…→completed）。
+pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+    let mut events: Vec<String> = Vec::new();
+
+    // 首个 chunk 产出 response.created 并记录骨架
+    if !st.created {
+        st.created = true;
+        st.id = chunk.id.clone();
+        st.model = chunk.model.clone();
+        st.created_at = chunk.created;
+        events.push(encode_response_created(st)?);
+    }
+
+    if let Some(choice) = chunk.choices.first() {
+        // 文本增量
+        if let Some(content) = &choice.delta.content {
+            if !content.is_empty() {
+                if !st.message_item_added {
+                    st.message_item_added = true;
+                    st.message_output_index = st.next_output_index;
+                    st.next_output_index += 1;
+                    st.message_item_id = format!("item_{}", st.message_output_index);
+                    events.push(encode_output_item_added_message(st)?);
+                }
+                st.message_text.push_str(content);
+                events.push(encode_output_text_delta(st, content)?);
+            }
+        }
+        // 思考增量
+        if let Some(rc) = &choice.delta.reasoning_content {
+            if !rc.is_empty() {
+                if !st.reasoning_item_added {
+                    st.reasoning_item_added = true;
+                    st.reasoning_output_index = st.next_output_index;
+                    st.next_output_index += 1;
+                    st.reasoning_item_id = format!("item_{}", st.reasoning_output_index);
+                    events.push(encode_output_item_added_reasoning(st)?);
+                }
+                st.reasoning_text.push_str(rc);
+                events.push(encode_reasoning_summary_text_delta(st, rc)?);
+            }
+        }
+        // 工具调用增量（同一 index 只发一次 output_item.added）
+        for tc in &choice.delta.tool_calls {
+            let idx = tc.index;
+            if !st.tool_items.contains_key(&idx) {
+                let output_index = st.next_output_index;
+                st.next_output_index += 1;
+                let state = FnItemState {
+                    output_index,
+                    item_id: format!("item_{}", output_index),
+                    call_id: tc.id.clone().unwrap_or_default(),
+                    name: tc.name.clone().unwrap_or_default(),
+                    arguments: String::new(),
+                };
+                st.tool_items.insert(idx, state);
+                events.push(encode_output_item_added_function_call(st, idx)?);
+            }
+            if let Some(args) = &tc.arguments {
+                if let Some(state) = st.tool_items.get_mut(&idx) {
+                    state.arguments.push_str(args);
+                    events.push(encode_function_call_arguments_delta(st, idx, args)?);
+                }
+            }
+        }
+    }
+
+    // finish_reason 或 usage → response.completed
+    let has_finish = chunk.choices.first().map(|c| c.finish_reason.is_some()).unwrap_or(false);
+    let has_usage = chunk.usage.is_some();
+    if (has_finish || has_usage) && !st.completed {
+        st.completed = true;
+        events.push(encode_response_completed(st, chunk, ctx)?);
+    }
+
+    Ok(events)
+}
+
+/// 流终止：若未发过 completed 则补发一个（无 usage）；否则返回空。
+pub fn stream_end(st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+    if st.completed {
+        return Ok(vec![]);
+    }
+    st.completed = true;
+    let resp = build_completed_response(st, None, ctx);
+    let mut o = Map::new();
+    o.insert("type".into(), Value::String("response.completed".into()));
+    o.insert("response".into(), resp);
+    Ok(vec![json_to_string(&Value::Object(o))?])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> ConvCtx {
+        ConvCtx::new()
+    }
+
+    fn event_types(evs: &[String]) -> Vec<String> {
+        evs.iter()
+            .map(|e| serde_json::from_str::<Value>(e).unwrap()["type"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn text_conversation() {
+        let j = serde_json::json!({
+            "model": "gpt-4o",
+            "instructions": "You are helpful.",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}
+            ],
+            "max_output_tokens": 128,
+            "temperature": 0.7,
+        });
+        let mut c = ctx();
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.model, "gpt-4o");
+        assert_eq!(req.max_tokens, Some(128));
+        assert_eq!(req.temperature, Some(0.7));
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[0].role, IrRole::System);
+        assert_eq!(req.messages[0].content, Some(IrContent::Text("You are helpful.".into())));
+        assert_eq!(req.messages[1].role, IrRole::User);
+        assert_eq!(
+            req.messages[1].content,
+            Some(IrContent::Parts(vec![IrPart::Text { text: "Hello".into() }]))
+        );
+
+        // IR → Responses
+        let back = request_from_ir(&req, &mut c).unwrap();
+        assert_eq!(back["instructions"], "You are helpful.");
+        assert_eq!(back["max_output_tokens"], 128);
+        let input = back["input"].as_array().unwrap();
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["type"], "message");
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["type"], "input_text");
+        assert_eq!(input[0]["content"][0]["text"], "Hello");
+    }
+
+    #[test]
+    fn tool_call_and_result() {
+        let j = serde_json::json!({
+            "model": "gpt-4o",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "weather in bj?"}]},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"bj\"}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}
+            ],
+            "tools": [{"type": "function", "name": "get_weather", "description": "weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]
+        });
+        let mut c = ctx();
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.tools.len(), 1);
+        assert_eq!(req.tools[0].name, "get_weather");
+        // user -> function_call(assistant) -> function_call_output(tool)
+        assert_eq!(req.messages[0].role, IrRole::User);
+        assert_eq!(req.messages[1].role, IrRole::Assistant);
+        assert_eq!(req.messages[1].tool_calls.len(), 1);
+        assert_eq!(req.messages[1].tool_calls[0].id, "call_1");
+        assert_eq!(req.messages[1].tool_calls[0].name, "get_weather");
+        assert_eq!(req.messages[1].tool_calls[0].arguments, "{\"city\":\"bj\"}");
+        assert_eq!(req.messages[2].role, IrRole::Tool);
+        assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(req.messages[2].content, Some(IrContent::Text("sunny".into())));
+
+        // IR → Responses
+        let back = request_from_ir(&req, &mut c).unwrap();
+        let input = back["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[1]["call_id"], "call_1");
+        assert_eq!(input[2]["type"], "function_call_output");
+        assert_eq!(input[2]["call_id"], "call_1");
+        assert_eq!(input[2]["output"], "sunny");
+        assert_eq!(back["tools"][0]["type"], "function");
+        assert_eq!(back["tools"][0]["name"], "get_weather");
+    }
+
+    #[test]
+    fn image_input_image() {
+        let j = serde_json::json!({
+            "model": "gpt-4o",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "what is this?"},
+                    {"type": "input_image", "image_url": "https://example.com/a.png"},
+                    {"type": "input_image", "image_url": {"url": "data:image/png;base64,AAAABBBB"}}
+                ]
+            }]
+        });
+        let mut c = ctx();
+        let req = request_to_ir(&j, &mut c).unwrap();
+        let content = req.messages[0].content.as_ref().unwrap();
+        let parts = match content {
+            IrContent::Parts(ps) => ps,
+            other => panic!("应为 Parts: {other:?}"),
+        };
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], IrPart::Text { text: "what is this?".into() });
+        assert_eq!(parts[1], IrPart::ImageUrl { url: "https://example.com/a.png".into() });
+        assert_eq!(parts[2], IrPart::ImageInline { media_type: "image/png".into(), data: "AAAABBBB".into() });
+
+        // IR → Responses：input_image 回写
+        let back = request_from_ir(&req, &mut c).unwrap();
+        let content = back["input"][0]["content"].as_array().unwrap();
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(content[1]["image_url"], "https://example.com/a.png");
+        assert_eq!(content[2]["image_url"], "data:image/png;base64,AAAABBBB");
+    }
+
+    #[test]
+    fn previous_response_id_degraded() {
+        let j = serde_json::json!({
+            "model": "gpt-4o",
+            "input": "hi",
+            "previous_response_id": "resp_abc",
+            "store": true,
+            "metadata": {"a": 1}
+        });
+        let mut c = ctx();
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, IrRole::User);
+        // 有状态字段保留到 extra，并记为降级
+        assert_eq!(req.extra["previous_response_id"], "resp_abc");
+        assert_eq!(req.extra["store"], true);
+        assert_eq!(req.extra["metadata"]["a"], 1);
+        let fields: Vec<String> = c.degraded.iter().map(|d| d.field.clone()).collect();
+        assert!(fields.contains(&"previous_response_id".to_string()));
+        assert!(fields.contains(&"store".to_string()));
+        // metadata 只进 extra，不降级
+        assert!(!fields.contains(&"metadata".to_string()));
+    }
+
+    #[test]
+    fn max_output_tokens_normalized_and_n_degraded() {
+        // Responses → IR：max_output_tokens → max_tokens
+        let j = serde_json::json!({
+            "model": "gpt-4o",
+            "input": "hi",
+            "max_output_tokens": 256
+        });
+        let mut c = ctx();
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.max_tokens, Some(256));
+
+        // IR → Responses：max_tokens → max_output_tokens；n 降级
+        let mut req2 = IrRequest {
+            model: "gpt-4o".into(),
+            messages: vec![IrMessage {
+                role: IrRole::User,
+                content: Some(IrContent::Text("hi".into())),
+                ..Default::default()
+            }],
+            max_tokens: Some(256),
+            n: Some(2),
+            ..Default::default()
+        };
+        let mut c2 = ctx();
+        let back = request_from_ir(&req2, &mut c2).unwrap();
+        assert_eq!(back["max_output_tokens"], 256);
+        assert!(c2.degraded.iter().any(|d| d.field == "n"));
+        req2.n = None;
+        let _ = req2;
+    }
+
+    #[test]
+    fn usage_cache_and_reasoning_tokens() {
+        // Responses → IR
+        let j = serde_json::json!({
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 123,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [{
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi there"}]
+            }],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_tokens_details": {"cached_tokens": 3},
+                "output_tokens_details": {"reasoning_tokens": 2}
+            }
+        });
+        let mut c = ctx();
+        let resp = response_to_ir(&j, &mut c).unwrap();
+        assert_eq!(resp.id, "resp_1");
+        assert_eq!(resp.created, 123);
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
+        assert_eq!(resp.choices[0].message.content, Some(IrContent::Text("hi there".into())));
+        let usage = resp.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 5);
+        assert_eq!(usage.total_tokens, Some(15));
+        assert_eq!(usage.cache_read_tokens, Some(3));
+        assert_eq!(usage.extra["reasoning_tokens"], 2);
+
+        // IR → Responses
+        let back = response_from_ir(&resp, &mut c).unwrap();
+        assert_eq!(back["object"], "response");
+        assert_eq!(back["status"], "completed");
+        assert_eq!(back["created_at"], 123);
+        assert_eq!(back["output"][0]["type"], "message");
+        assert_eq!(back["output"][0]["content"][0]["type"], "output_text");
+        assert_eq!(back["output"][0]["content"][0]["text"], "hi there");
+        assert_eq!(back["usage"]["input_tokens"], 10);
+        assert_eq!(back["usage"]["output_tokens"], 5);
+        assert_eq!(back["usage"]["total_tokens"], 15);
+        assert_eq!(back["usage"]["input_tokens_details"]["cached_tokens"], 3);
+        assert_eq!(back["usage"]["output_tokens_details"]["reasoning_tokens"], 2);
+    }
+
+    #[test]
+    fn response_output_items_combined() {
+        let j = serde_json::json!({
+            "id": "resp_1", "object": "response", "created_at": 1,
+            "status": "completed", "model": "gpt-4o",
+            "output": [
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "thinking..."}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "answer"}]},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"bj\"}"}
+            ]
+        });
+        let mut c = ctx();
+        let resp = response_to_ir(&j, &mut c).unwrap();
+        let msg = &resp.choices[0].message;
+        assert_eq!(msg.reasoning_content.as_deref(), Some("thinking..."));
+        assert_eq!(msg.content, Some(IrContent::Text("answer".into())));
+        assert_eq!(msg.tool_calls.len(), 1);
+        assert_eq!(msg.tool_calls[0].id, "call_1");
+
+        let back = response_from_ir(&resp, &mut c).unwrap();
+        let output = back["output"].as_array().unwrap();
+        assert_eq!(output.len(), 3);
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[1]["type"], "function_call");
+        assert_eq!(output[2]["type"], "reasoning");
+    }
+
+    #[test]
+    fn streaming_event_sequence_and_roundtrip() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+
+        // 1. 文本 delta（首 chunk）
+        let ch1 = IrChunk {
+            id: "resp_1".into(),
+            model: "gpt-4o".into(),
+            created: 123,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta { role: Some(IrRole::Assistant), content: Some("Hello".into()), ..Default::default() },
+                finish_reason: None,
+            }],
+            ..Default::default()
+        };
+        let ev1 = chunk_from_ir(&ch1, &mut st, &mut c).unwrap();
+        assert_eq!(event_types(&ev1), ["response.created", "response.output_item.added", "response.output_text.delta"]);
+
+        // 2. 工具调用（新 index）
+        let ch2 = IrChunk {
+            id: "resp_1".into(), model: "gpt-4o".into(), created: 123,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    tool_calls: vec![IrToolCallDelta {
+                        index: 0,
+                        id: Some("call_1".into()),
+                        name: Some("get_weather".into()),
+                        arguments: Some("{\"city\"".into()),
+                    }],
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            ..Default::default()
+        };
+        let ev2 = chunk_from_ir(&ch2, &mut st, &mut c).unwrap();
+        assert_eq!(event_types(&ev2), ["response.output_item.added", "response.function_call_arguments.delta"]);
+        // function_call item 的 call_id/name
+        let added_item = serde_json::from_str::<Value>(&ev2[0]).unwrap();
+        assert_eq!(added_item["item"]["type"], "function_call");
+        assert_eq!(added_item["item"]["name"], "get_weather");
+        assert_eq!(added_item["output_index"], 1);
+
+        // 3. 工具参数增量（复用 index 0）
+        let ch3 = IrChunk {
+            id: "resp_1".into(), model: "gpt-4o".into(), created: 123,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    tool_calls: vec![IrToolCallDelta { index: 0, arguments: Some(":\"bj\"}".into()), ..Default::default() }],
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            ..Default::default()
+        };
+        let ev3 = chunk_from_ir(&ch3, &mut st, &mut c).unwrap();
+        assert_eq!(event_types(&ev3), ["response.function_call_arguments.delta"]);
+
+        // 4. 完成 + usage
+        let ch4 = IrChunk {
+            id: "resp_1".into(), model: "gpt-4o".into(), created: 123,
+            choices: vec![IrChunkChoice { index: 0, delta: IrDelta::default(), finish_reason: Some("stop".into()) }],
+            usage: Some(IrUsage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: Some(15),
+                cache_read_tokens: Some(3),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ev4 = chunk_from_ir(&ch4, &mut st, &mut c).unwrap();
+        assert_eq!(event_types(&ev4), ["response.completed"]);
+        let completed = serde_json::from_str::<Value>(&ev4[0]).unwrap();
+        assert_eq!(completed["response"]["status"], "completed");
+        assert_eq!(completed["response"]["usage"]["input_tokens"], 10);
+        assert_eq!(completed["response"]["usage"]["output_tokens"], 5);
+        assert_eq!(completed["response"]["usage"]["input_tokens_details"]["cached_tokens"], 3);
+        // completed 的 output 骨架包含 message + function_call
+        let out = completed["response"]["output"].as_array().unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["type"], "message");
+        assert_eq!(out[1]["type"], "function_call");
+        assert_eq!(out[1]["arguments"], "{\"city\":\"bj\"}");
+
+        // 已发过 completed，stream_end 不再补发
+        assert!(stream_end(&mut st, &mut c).unwrap().is_empty());
+
+        // 回放：把用户侧事件喂回 chunk_to_ir，重建内容/工具/usage
+        let mut st2 = StreamState::default();
+        let mut chunks: Vec<IrChunk> = Vec::new();
+        for e in ev1.iter().chain(ev2.iter()).chain(ev3.iter()).chain(ev4.iter()) {
+            if let Some(ch) = chunk_to_ir(e, &mut st2, &mut c).unwrap() {
+                chunks.push(ch);
+            }
+        }
+        // 文本增量
+        assert!(chunks.iter().any(|ch| ch.choices.iter().any(|c| c.delta.content.as_deref() == Some("Hello"))));
+        // 工具参数增量（两个片段）
+        let tool_args: Vec<&str> = chunks
+            .iter()
+            .filter_map(|ch| ch.choices.first().and_then(|c| c.delta.tool_calls.first()))
+            .filter_map(|tc| tc.arguments.as_deref())
+            .collect();
+        assert!(tool_args.contains(&"{\"city\""));
+        assert!(tool_args.contains(&":\"bj\"}"));
+        // 完成帧：finish_reason + usage
+        let last = chunks.last().unwrap();
+        assert_eq!(last.choices[0].finish_reason.as_deref(), Some("stop"));
+        assert_eq!(last.usage.as_ref().unwrap().cache_read_tokens, Some(3));
+    }
+
+    #[test]
+    fn stream_end_completes_when_missing() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let resp = stream_end(&mut st, &mut c).unwrap();
+        assert_eq!(resp.len(), 1);
+        let ev = serde_json::from_str::<Value>(&resp[0]).unwrap();
+        assert_eq!(ev["type"], "response.completed");
+    }
+}

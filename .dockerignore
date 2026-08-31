@@ -1,0 +1,18 @@
+# 构建上下文排除项（保持镜像小）
+/target
+/data
+.git
+.gitignore
+
+# 前端（M8 使用 rust-embed，构建时不需要）
+web/node_modules
+web/dist
+
+# 本地配置与文档
+config.yaml
+config.example.yaml
+PLAN.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+.owc

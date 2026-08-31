@@ -1,0 +1,57 @@
+# =============================================================================
+# NextAPI docker-compose（现代 Compose 语法）
+# -----------------------------------------------------------------------------
+# 服务：
+#   postgres : PostgreSQL 16，数据持久化到命名卷 pgdata，带健康检查；
+#   nextapi  : 构建自当前目录，等待 postgres healthy 后启动，端口 8080。
+#
+# 首次运行：
+#   cp config.example.yaml config.yaml
+#   docker-compose up -d
+#
+# 生产必改：NEXTAPI_SECRET_KEY（敏感字段加密密钥）、NEXTAPI_ADMIN_JWT_SECRET。
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: nextapi
+      POSTGRES_PASSWORD: nextapi
+      POSTGRES_DB: nextapi
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextapi -d nextapi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nextapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      # 数据库连接（启动类参数，env 优先于 YAML 的 database.url）
+      DATABASE_URL: postgres://nextapi:nextapi@postgres:5432/nextapi
+      # ⚠️ 生产必改：敏感字段 AES-256-GCM 加密密钥（env-only，不落 DB/YAML）。
+      #    用足够长的随机串，如 `openssl rand -base64 48`。
+      NEXTAPI_SECRET_KEY: "__CHANGE_ME__请替换为随机密钥__"
+      # ⚠️ 生产必填：管理端 JWT 签名密钥。为空且未开启 server.debug 则拒绝启动。
+      NEXTAPI_ADMIN_JWT_SECRET: "__CHANGE_ME__请替换为随机密钥__"
+      # 可选：首次启动的管理员初始密码；留空则生成随机密码并打印到容器日志。
+      NEXTAPI_ADMIN_INITIAL_PASSWORD: ""
+    volumes:
+      # 配置文件只读挂载（hot 参数热加载仍生效，需容器内可见文件变化）
+      - ./config.yaml:/etc/nextapi/config.yaml:ro
+      # WAL 与数据持久化（异步记账不因重启丢失）
+      - nextapi-data:/data
+
+volumes:
+  pgdata:
+  nextapi-data:

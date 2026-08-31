@@ -1,0 +1,10 @@
+/target
+web/node_modules
+web/dist
+/data
+*.wal
+config.local.yaml
+.env
+.DS_Store
+.owc/
+PLAN.md

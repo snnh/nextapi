@@ -1,0 +1,44 @@
+[package]
+name = "nextapi"
+version = "0.1.0"
+edition = "2021"
+description = "NextAPI — 自托管 LLM 网关（协议转换 / 聚合路由 / 日志统计 / 计价）"
+license = "Apache-2.0"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "rust_decimal",
+    "json",
+    "migrate",
+] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1", features = ["serde"] }
+arc-swap = "1"
+notify = "8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+prometheus-client = "0.23"
+argon2 = "0.5"
+jsonwebtoken = "9"
+aes-gcm = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+anyhow = "1"
+thiserror = "2"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+[profile.release]
+lto = true
+codegen-units = 1

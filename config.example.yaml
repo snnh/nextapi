@@ -1,0 +1,202 @@
+# =============================================================================
+# NextAPI 配置示例（config.example.yaml）
+# -----------------------------------------------------------------------------
+# 字段名与默认值以 src/config.rs 的 ConfigFile 为准。
+#
+# 使用方式：
+#   cp config.example.yaml config.yaml
+# 路径可用环境变量 NEXTAPI_CONFIG 覆盖（默认 ./config.yaml）。
+#
+# 【配置分类与生效语义】
+#   hot    —— 热加载运行参数：改文件即热生效，但「UI 保存值优先」。
+#             UI 里改过的键（system_settings.source=ui）不会被文件重载覆盖；
+#             文件变化只更新 source=file 的键。
+#   seed   —— 种子业务实体：仅「首次初始化」写入 DB（app_meta.seeded_at 标记，
+#             不靠"表空才写入"）。之后再改本文件不会改动 DB，请到管理后台修改。
+#   derived —— 由 hot/seed 派生或 DB 覆盖，不单独重载。
+#
+# 【优先级】
+#   hot 运行参数：UI 保存值 > YAML 热加载值
+#   启动类参数（server.listen / database.url / server.admin_jwt_secret）：
+#       环境变量 > UI 保存值 > YAML（env 仅启动时读取，UI 中显示 source=env 且只读）
+#   NEXTAPI_SECRET_KEY 是唯一 env-only 例外：不落 DB、不进 YAML、不可 UI 设置。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 启动类参数（需重启才生效；优先级 env > UI > YAML）
+# -----------------------------------------------------------------------------
+server:
+  listen: "0.0.0.0:8080"          # 监听地址。环境变量 NEXTAPI_LISTEN 可覆盖。
+  admin_jwt_secret: ""            # 管理端 JWT 签名密钥。生产必填；为空且非 debug 模式拒绝启动。
+                                  # 环境变量 NEXTAPI_ADMIN_JWT_SECRET 可覆盖。
+                                  # ⚠️ 敏感字段：用足够长的随机串；/api/config 导出时掩码。
+  debug: false                    # 调试模式：放宽启动检查。仅本地开发使用。
+
+database:
+  # 数据库连接串。启动类参数，env DATABASE_URL > UI > YAML。
+  url: "postgres://nextapi:nextapi@localhost:5432/nextapi"
+
+# -----------------------------------------------------------------------------
+# hot 类：网关运行参数（改文件即热生效；UI 保存值优先）
+# -----------------------------------------------------------------------------
+gateway:
+  default_rate_limit_rpm: 600       # 默认每 Key 每分钟请求数上限
+  default_timeout_secs: 300         # 非流式请求上游超时（秒）
+  stream_timeout_secs: 600          # 流式请求上游超时（秒）
+  billing_timezone: "Asia/Shanghai" # 计费时区（分时段/窗口起点/日志日界）
+  display_currency: "CNY"           # 混合统计默认展示币种（CNY|USD）
+  display_precision: 6              # 金额展示舍入小数位（DB 仍 NUMERIC(20,10)）
+  fx_stale_max_minutes: 1440        # 最近成功汇率超过该分钟数视为过期不可用
+  log_async: true                   # 异步写库；false=同步（调试用）
+  log_queue_capacity: 10000         # 有界队列容量；溢出先写 WAL 再丢弃内存条目
+  log_wal_dir: "/data/wal"          # WAL 落盘目录
+  log_wal_file_max_mb: 128          # WAL 单文件上限
+  log_wal_archive_tail_mb: 64       # 尾部 N MB 全部写入并重放完成即归档
+  log_partition_days: 30            # usage_logs 每分区覆盖天数（30 天分文件存储）
+  log_detail_retention_days: 0      # 明细不自动清理；仅作手动清理默认 before（0=永久）
+  log_aggregate_retention_days: 365 # 汇总表保留建议值，不自动删除（0=永久）
+  log_debug_ttl_minutes: 60         # 按 Key debug 模式最长开启时长（分钟）
+  admin_login_rate_limit_per_min: 10 # 登录接口防爆破限速（次/分钟）
+  anthropic_default_max_tokens: 65536 # 转 Anthropic 缺省 max_tokens（64k）
+  batch_insert_interval_ms: 500     # 批量写库批次间隔
+  quota_check_cache_secs: 3         # 用量上限聚合结果缓存秒数
+  quota_exceed_action: "block"      # block=429 硬阻断 | warn=仅日志告警
+
+# -----------------------------------------------------------------------------
+# seed 类：管理员账号（仅首次初始化写入 DB）
+# -----------------------------------------------------------------------------
+admin:
+  username: "admin"               # 唯一管理员用户名
+  initial_password: ""            # 为空则首次启动生成随机密码并打印一次到日志；
+                                  # 环境变量 NEXTAPI_ADMIN_INITIAL_PASSWORD 亦可提供
+  password_hash: ""               # argon2 哈希；非空则忽略 initial_password
+
+# -----------------------------------------------------------------------------
+# seed 类：上游（仅首次初始化写入 DB；之后请到管理后台维护）
+# -----------------------------------------------------------------------------
+# upstreams:
+#   - name: dashscope                  # 唯一名称
+#     kind: openai_compatible          # openai|anthropic|gemini|aliyun|baidu|kimi|tencent|
+#                                      #  zhipu|volcano|openrouter|zenmux|custom
+#     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+#     api_key: "sk-xxx"                # ⚠️ 敏感字段：落库前 AES-256-GCM 加密，导出掩码
+#     protocols: [openai_chat, openai_responses]  # 该上游支持的协议
+#     enabled: true
+#     timeout_ms: 300000
+#     breaker_threshold: 5             # 连续失败阈值 → 自动禁用 + 冷却
+#     probe_model: ""                  # 半开探活用（无 /models 时）
+#     use_proxy: false                 # 是否走代理；true 且 proxy_id 为空 → 跟随 proxy.default_proxy_id
+#     proxy_id: ""                     # 指向 proxies 的 id
+#     extra:
+#       protocol_priority: [openai_chat, openai_responses]  # 目标协议优先级（per-upstream 覆盖）
+#       overrides:                     # 请求头/请求体 add/set 覆盖（未配置即原样转发）
+#         headers:
+#           set:
+#             User-Agent: nextapi
+#         body:
+#           set:
+#             temperature: 0.7
+
+# seed 类：模型路由（仅首次初始化）
+# model_routes:
+#   - model_pattern: "deepseek-chat"        # 网关模型名（支持通配符 *）
+#     upstream_id: "<upstream-uuid>"        # 目标上游 ID
+#     override_model: "deepseek-chat"       # 上游模型名覆盖（透传时重写）
+#     priority: 10                          # 数字越小优先级越高
+#     weight: 1                             # 加权轮询权重
+#     enabled: true
+#     retries: 3
+#     retry_status_codes: [429, 500, 502, 503, 504]
+#     lock_upstream: false                  # 锁定上游：失败不自动故障转移
+#     sort_order: 1                         # 同 priority 稳定排序
+
+# seed 类：价格规则（仅首次初始化；每条 = upstream_id + model_id + base_price + 有序 segments）
+# 计价键为 (upstream_id, model_id) 精确匹配；未设置价格即不计价（成本记 NULL + 未定价提示）。
+# 单位：token_in/token_out/token_cache_write/token_cache_read 每 1M；image 每张；video_second 每秒。
+# price_rules:
+#   - upstream_id: "<upstream-uuid>"    # 必填：绑定到具体供应商
+#     model_id: "deepseek-chat"         # 必填：网关模型 ID，精确匹配
+#     unit: token_in
+#     currency: CNY                     # CNY|USD，原币种存储不转换
+#     base_price: 3.0                   # 默认价；无分段命中时使用
+#     context_basis: prompt_tokens      # 上下文长度判定：prompt_tokens|total_tokens
+#     dimensions: {}                    # 图片/视频维度（{} = 无维度规则）
+#     segments:                         # 有序分段，每段直接填价；按数组顺序取第一个命中
+#       - name: peak                    # 纯分时段（工作日白天高峰）
+#         price: 3.0
+#         weekdays: [mon, tue, wed, thu, fri]
+#         windows: [["09:00", "12:00"], ["14:00", "18:00"]]
+#       - name: long_context            # 纯分上下文长度段
+#         price: 3.5
+#         min_prompt_tokens: 32769
+#       - name: default                 # 兜底段（不配任何条件）
+#         price: 1.5
+#     effective_from: 2026-01-01
+#     effective_to: null
+#     priority: 10
+
+# seed 类：手动汇率（source=manual，优先级最高；仅首次初始化写入 DB）
+fx_rates:
+  - { from: USD, to: CNY, rate: 7.2, source: manual }
+
+# -----------------------------------------------------------------------------
+# hot 类：联网拉取汇率（source=auto，与 manual 分行共存）
+# -----------------------------------------------------------------------------
+fx_auto_fetch:
+  enabled: true
+  provider: "frankfurter"           # frankfurter|ecb|custom
+  base: "USD"
+  symbols: ["CNY"]
+  refresh_interval_minutes: 60
+  cache_ttl_minutes: 60
+  timeout_secs: 10
+  use_proxy: false                  # 外联代理矩阵：是否走代理
+  proxy_id: ""                      # 空 + use_proxy=true → 跟随 proxy.default_proxy_id
+
+# hot 类：价格表 URL 导入（SSRF 防护：仅 https、限大小与超时）
+price_import:
+  allow_url: true
+  max_size_mb: 1
+  timeout_secs: 10
+  use_proxy: false
+  proxy_id: ""
+
+# hot 类：媒体 URL 下载转内联（默认关闭，SSRF 防护）
+media_download:
+  enabled: false
+  max_size_mb: 10
+  timeout_secs: 30
+  use_proxy: false
+  proxy_id: ""
+
+# -----------------------------------------------------------------------------
+# hot 类：系统默认代理（供应商/更新检查/FX/导入/下载可跟随）
+# -----------------------------------------------------------------------------
+proxy:
+  default_proxy_id: ""              # 空 = 直连；use_proxy=true 且未显式指定 proxy_id 时跟随此值
+  no_proxy: []                      # 全局直连名单（与所选代理自身 no_proxy 取并集；CIDR/域名，支持 * 后缀）
+  probe_url: "https://api.github.com" # 代理连通性测试固定探测地址（白名单，防 SSRF）
+
+# seed 类：初始代理配置（密码导入即加密，导出仅掩码）
+# proxies:
+#   - name: "my-http-proxy"
+#     kind: http                    # http|https|socks5
+#     host: "proxy.example.com"
+#     port: 8080
+#     username: ""                  # 可选
+#     password: ""                  # ⚠️ 敏感字段：需 NEXTAPI_SECRET_KEY，落库 AES-256-GCM 加密
+#     no_proxy: ["internal.local"]  # 该代理自身直连名单
+#     enabled: true
+
+# hot 类：GitHub 更新检查（只展示版本/说明/链接，不自动下载安装）
+update_check:
+  enabled: false
+  repo: ""                          # 如 owner/nextapi
+  interval_hours: 24                # 0 = 关闭定时，仅手动检查
+  use_proxy: false
+  proxy_id: ""
+
+# hot 类：图片/视频异步任务轮询
+media_poller:
+  interval_secs: 5
+  max_age_hours: 24
