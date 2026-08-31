@@ -6,11 +6,13 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层已完成（2026-08）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.15，约 950 行中文）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
+**当前状态：M1 工程骨架、M2 协议层、M3 网关核心已完成（2026-08）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.15，约 950 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
 
 M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
 
-M2 已交付：协议层 `src/protocol/`——IR（OpenAI Chat 为枢轴 + ext 扩展字段）+ 四协议适配器（chat/responses/anthropic/gemini，非流式 + SSE 流式双向）、错误体翻译、SSE 行解析器、降级收集（`ConvCtx` → `X-NextAPI-Degraded`）、转换矩阵文档（`docs/protocol-matrix.md`）。转换逻辑为纯函数，M3 网关核心负责接线。
+M2 已交付：协议层 `src/protocol/`——IR（OpenAI Chat 为枢轴 + ext 扩展字段）+ 四协议适配器（chat/responses/anthropic/gemini，非流式 + SSE 流式双向）、错误体翻译、SSE 行解析器、降级收集（`ConvCtx` → `X-NextAPI-Degraded`）、转换矩阵文档（`docs/protocol-matrix.md`）。转换逻辑为纯函数。
+
+M3 已交付：网关核心——网关 Key 鉴权（sk-nx-，SHA-256 哈希 + 前缀）、RPM 滑窗/TPM 预检/用量上限（quota_usage + 判定缓存）、模型白名单；渠道化路由（通配匹配、优先级分组 + 加权随机、熔断自动禁用 + 冷却 + 半开探活、lock_upstream）；透传（模型名重写、鉴权头替换、请求头/体 add/set 嵌套覆盖、SSE 逐行改写 model/id）与转换决策（per-upstream 协议优先级、转换失败回退透传）；SSE 首字节边界语义；reqwest 按代理/直连分池 + no_proxy 并集直连；管理 API `/api/keys`、`/api/upstreams`（含真实连通性测试）、`/api/model-routes`（批量替换）；实体快照缓存 `src/cache.rs`（写路径失效刷新）。usage 旁路记账在 M4 接入。
 
 其他文件说明：
 
@@ -68,14 +70,23 @@ src/
 ├── error.rs         # ApiError 统一错误
 ├── state.rs         # AppState（PgPool / ArcSwap<HotConfig> / SettingsEngine / Crypto / Jwt / Metrics）
 ├── metrics.rs       # Prometheus /metrics
+├── entities.rs      # 业务实体行结构（api_keys/upstreams/model_routes/proxy_configs）
+├── cache.rs         # 实体内存快照（RwLock<Arc<Snapshot>>，写路径失效刷新）
+├── routing/mod.rs   # 模型通配匹配、优先级分组 + 加权随机、熔断状态机（含半开探活/指数退避）
+├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
+├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
+├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 5 个端点）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
 ├── auth/mod.rs      # 单管理员 JWT + 登录防爆破（内存滑窗）+ require_admin 中间件 + 审计写入
 └── admin/
     ├── mod.rs       # /api 路由聚合
+    ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次）
+    ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持）
+    ├── routes.rs    # /api/model-routes 批量替换
     ├── proxies.rs   # /api/proxies CRUD（密码加密、掩码回传=保持原值、test 桩 M3 启用）
     ├── settings_api.rs # /api/settings + /api/config(+reload)
     └── audit.rs     # /api/audit 分页查询
-migrations/0001_init.sql  # app_meta/system_settings/admin_users/admin_audit_logs/proxy_configs/fx_rates
+migrations/          # 0001_init.sql（M1 表）+ 0002_gateway.sql（api_keys/upstreams/model_routes/quota_usage）
 tests/                    # 集成测试（后续里程碑）
 web/                      # Vue3 管理后台（M8）
 ```

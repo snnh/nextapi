@@ -7,15 +7,21 @@ use tracing::{error, info, warn};
 
 mod admin;
 mod auth;
+mod cache;
 mod config;
 mod crypto;
 mod db;
+mod entities;
 mod error;
+mod gateway;
+mod limit;
 mod metrics;
 mod protocol;
+mod routing;
 mod seed;
 mod settings;
 mod state;
+mod upstream;
 
 use state::AppState;
 
@@ -68,9 +74,18 @@ async fn main() -> anyhow::Result<()> {
     info!(%listen, listen_src, jwt_src, "启动类参数解析完成");
 
     let state = Arc::new(AppState {
-        db: pool,
+        db: pool.clone(),
         hot,
         settings: engine.clone(),
+        cache: {
+            let c = cache::EntityCache::new();
+            c.reload(&pool, &crypto).await?;
+            c
+        },
+        limiter: limit::RateLimiter::new(),
+        quota_cache: limit::QuotaCache::new(),
+        breaker: routing::Breaker::new(),
+        client_pools: upstream::ClientPools::new(),
         file_config: std::sync::RwLock::new(cfg.clone()),
         config_path: config_path.clone().into(),
         crypto,
@@ -120,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_admin,
             )),
         )
+        .merge(gateway::router())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 
