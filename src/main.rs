@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use axum::{middleware, routing::get, Router};
@@ -15,12 +16,14 @@ mod entities;
 mod error;
 mod gateway;
 mod limit;
+mod logging;
 mod metrics;
 mod protocol;
 mod routing;
 mod seed;
 mod settings;
 mod state;
+mod stats;
 mod upstream;
 
 use state::AppState;
@@ -73,6 +76,31 @@ async fn main() -> anyhow::Result<()> {
     }
     info!(%listen, listen_src, jwt_src, "启动类参数解析完成");
 
+    // 5.5 日志统计接线（M4-C）：WAL / 有界队列 / 分区预热。失败只 warn，不阻塞启动。
+    let cfg_hot = cfg.hot();
+    let gw = &cfg_hot.gateway;
+    let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.min(1_000_000).max(16));
+    let wal = logging::wal::WalWriter::new(gw.log_wal_dir.clone().into(), gw.log_wal_file_max_mb);
+    // 启动即重放 WAL（失败只 warn）
+    if let Err(e) = logging::wal::replay_and_archive(wal.dir(), &pool, &gw.billing_timezone).await {
+        warn!("WAL 启动重放失败（忽略，继续启动）: {e}");
+    }
+    // 预热 usage_logs 分区（失败只 warn）
+    if let Err(e) = logging::partition::ensure_partitions(&pool, gw.log_partition_days, 2).await {
+        warn!("usage_logs 分区预热失败（忽略，继续启动）: {e}");
+    }
+    // 指标与日志出口：Metrics::new() 只建一次，复用进 state；sink 内部共享底层计数/深度句柄。
+    let metrics = metrics::Metrics::new();
+    let log_depth_gauge = metrics.log_queue_depth.clone();
+    let sink = logging::LogSink::new(
+        if gw.log_async { Some(log_tx) } else { None },
+        pool.clone(),
+        wal.clone(),
+        metrics.log_overflows.clone(),
+        metrics.log_queue_depth.clone(),
+        gw.billing_timezone.clone(),
+    );
+
     let state = Arc::new(AppState {
         db: pool.clone(),
         hot,
@@ -90,9 +118,50 @@ async fn main() -> anyhow::Result<()> {
         config_path: config_path.clone().into(),
         crypto,
         jwt: auth::JwtService::new(jwt_secret),
-        metrics: metrics::Metrics::new(),
+        metrics,
+        log_sink: sink.clone(),
         version: env!("CARGO_PKG_VERSION"),
         started_at: chrono::Utc::now(),
+    });
+
+    // 5.6 启动日志后台写者与周期任务（失败只 warn）。
+    // log_async=false 时 LogSink 无队列（直写），此处立即关闭 rx，writer 直接退出。
+    let writer_handle = if gw.log_async {
+        let hot_clone = state.hot.clone();
+        let wal_clone = wal.clone();
+        let pool_clone = pool.clone();
+        Some(tokio::spawn(logging::writer::run_writer(
+            pool_clone,
+            log_rx,
+            hot_clone,
+            wal_clone,
+            log_depth_gauge,
+        )))
+    } else {
+        drop(log_rx);
+        None
+    };
+    // 周期任务：每 60s 重放非活跃 WAL；每 6h 维护分区。
+    let wal_dir = wal.dir().to_path_buf();
+    let tz = gw.billing_timezone.clone();
+    let part_days = gw.log_partition_days;
+    let pool_replay = pool.clone();
+    let pool_part = pool.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            if let Err(e) = logging::wal::replay_and_archive(&wal_dir, &pool_replay, &tz).await {
+                warn!("WAL 周期重放失败: {e}");
+            }
+        }
+    });
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+            if let Err(e) = logging::partition::ensure_partitions(&pool_part, part_days, 2).await {
+                warn!("usage_logs 分区维护失败: {e}");
+            }
+        }
     });
 
     // 6. 配置文件热加载监听（仅 hot 类生效；不覆盖 UI 保存值与 DB 业务实体）
@@ -123,7 +192,8 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => warn!("配置文件监听不可用，热加载停用: {e}"),
     }
 
-    // 7. 路由
+    // 7. 路由（state 之后被 with_state 消费，先保留 log_sink 供优雅关闭）
+    let log_sink_for_close = state.log_sink.clone();
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics::handle))
@@ -145,6 +215,11 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    // 优雅关闭：close 后 await writer 退出（超时 10s，容忍后台排空）。
+    log_sink_for_close.close();
+    if let Some(handle) = writer_handle {
+        let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
+    }
     Ok(())
 }
 

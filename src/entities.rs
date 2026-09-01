@@ -171,3 +171,59 @@ impl ProxyRow {
         }
     }
 }
+
+// ===========================================================================
+// M4 日志统计（contracts/m4-logging.md §8）：usage_logs / usage_hourly 行结构。
+// 仅追加到文件末尾，不改动任何既有内容。
+// ===========================================================================
+
+/// usage_logs 明细行（与 migrations/0003_logging.sql 表结构全字段对齐）。
+/// NUMERIC → `rust_decimal::Decimal`，JSONB → `serde_json::Value`；仅 M4-B 查询侧使用。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct UsageLogRow {
+    pub id: i64,
+    pub request_id: String,
+    pub ts: chrono::DateTime<chrono::Utc>,
+    pub key_id: Option<Uuid>,
+    pub model: String,
+    pub upstream_id: Option<Uuid>,
+    pub protocol_in: String,
+    pub protocol_out: String,
+    pub convert_mode: String,
+    pub stream: bool,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub images: Option<i32>,
+    pub image_size: Option<String>,
+    pub video_seconds: Option<Decimal>,
+    pub video_resolution: Option<String>,
+    pub video_task_type: Option<String>,
+    pub latency_ms: Option<i32>,
+    pub status: i32,
+    pub error: Option<String>,
+    pub retry_count: i32,
+    pub ttfb_ms: Option<i32>,
+    pub degraded: bool,
+    pub pricing_source: Option<String>,
+    pub cost_cny: Option<Decimal>,
+    pub cost_usd: Option<Decimal>,
+    pub price_used: Option<serde_json::Value>,
+    pub fx_snapshot: Option<serde_json::Value>,
+    pub usage_raw: Option<serde_json::Value>,
+    pub debug_payload: Option<serde_json::Value>,
+}
+
+/// usage_hourly 汇总行（hour, model 为复合主键；cost 列可空）。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct HourlyAggRow {
+    pub hour: chrono::DateTime<chrono::Utc>,
+    pub model: String,
+    pub requests: i64,
+    pub errors: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cost_cny: Option<Decimal>,
+    pub cost_usd: Option<Decimal>,
+}

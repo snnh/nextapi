@@ -8,3 +8,4 @@ config.local.yaml
 .DS_Store
 .owc/
 PLAN.md
+contracts/

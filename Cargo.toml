@@ -29,6 +29,7 @@ notify = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 prometheus-client = "0.23"
+crc32fast = "1"
 argon2 = "0.5"
 jsonwebtoken = "9"
 aes-gcm = "0.10"

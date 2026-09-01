@@ -13,10 +13,15 @@ use axum::{
     Router,
 };
 use bytes::Bytes;
+use futures::Stream;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+use crate::logging::LogEvent;
 
 use crate::entities::{ApiKeyRow, ModelRouteRow, UpstreamRow};
 use crate::error::ApiError;
@@ -103,6 +108,172 @@ enum ExecOutcome {
 enum Fail {
     Upstream(UpstreamError),
     Convert(ConvertError),
+}
+
+// ---------------------------------------------------------------------------
+// 流式 tee 记账（合同 §12.3）：在输出 Body 外再包一层收集流，
+// 逐 chunk 收集文本（上限 256KB）+ 记录 ttfb，流结束（含 Err）时组装 LogEvent 并 sink.log。
+// ---------------------------------------------------------------------------
+
+/// 流式收集状态：text 为 UTF-8 安全累积的 SSE 文本；ttfb_ms 为首 chunk 相对请求起点的毫秒。
+struct StreamCollect {
+    text: String,
+    ttfb_ms: Option<i32>,
+}
+
+/// 单次流式响应的收集上限（字节）。
+const STREAM_TEXT_MAX: usize = 256 * 1024;
+
+/// 把字节以 UTF-8 安全方式追加到收集缓冲（不切断多字节字符；超限截断）。
+fn append_chunk(collect: &Mutex<StreamCollect>, bytes: &[u8], start: Instant) {
+    let mut c = collect.lock().unwrap_or_else(|p| p.into_inner());
+    if c.text.len() < STREAM_TEXT_MAX {
+        let remain = STREAM_TEXT_MAX - c.text.len();
+        let mut take = bytes.len().min(remain);
+        // 裁剪到字符边界，避免把多字节字符截断
+        while take > 0 && std::str::from_utf8(&bytes[..take]).is_err() {
+            take -= 1;
+        }
+        c.text.push_str(&String::from_utf8_lossy(&bytes[..take]));
+    }
+    if c.ttfb_ms.is_none() {
+        c.ttfb_ms = Some(start.elapsed().as_millis() as i32);
+    }
+}
+
+/// 将 axum::Error 映射为 std::io::Error（供 Body::from_stream 的 Err 类型约束）。
+fn to_io_err(e: axum::Error) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, e.into_inner())
+}
+
+/// 打包一次流式记账上下文，供 TeeStream 在流结束时 spawn 处理。
+struct TeeLogCtx {
+    state: Arc<AppState>,
+    tmpl: LogEvent,
+    labels: RequestLabels,
+    params_meta: serde_json::Value,
+    debug_req: Option<(serde_json::Value, bool)>,
+    retry_count: i32,
+    entry_protocol: Protocol,
+}
+
+/// 包装 Body 的收集流：透传 chunk，结束时（含 Err）按入口协议提取 usage 并记账。
+/// Ok 项为 Bytes；Err 项为 io::Error（以匹配 Body::from_stream 的 Into<BoxError> 约束）。
+struct TeeStream {
+    inner: axum::body::BodyDataStream,
+    collect: Arc<Mutex<StreamCollect>>,
+    start: Instant,
+    ctx: Option<TeeLogCtx>,
+    done: bool,
+    finalized: bool,
+}
+
+impl Stream for TeeStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if self.done {
+                if !self.finalized {
+                    self.finalized = true;
+                    finalize_stream(self.get_mut());
+                }
+                return Poll::Ready(None);
+            }
+            match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    append_chunk(&self.collect, &bytes, self.start);
+                    return Poll::Ready(Some(Ok(bytes)));
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    self.done = true;
+                    // 转发错误；下次 poll 会 finalize 一次性记账
+                    return Poll::Ready(Some(Err(to_io_err(e))));
+                }
+                Poll::Ready(None) => {
+                    self.done = true;
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+/// 流结束（含 Err）：取收集文本，按入口协议提取 usage，组装 LogEvent 并 sink.log
+/// （status=200 —— HTTP 响应头已发，即使中途断流，客户端看到的仍是 200）。
+fn finalize_stream(stream: &mut TeeStream) {
+    let Some(ctx) = stream.ctx.take() else { return };
+    let collect = stream.collect.clone();
+    let start = stream.start;
+    tokio::spawn(async move {
+        let c = collect.lock().unwrap_or_else(|p| p.into_inner());
+        let text = c.text.clone();
+        let ttfb = c.ttfb_ms;
+        drop(c);
+
+        let usage = crate::upstream::usage::extract_sse_usage(ctx.entry_protocol, &text);
+        let mut ev = ctx.tmpl.clone();
+        ev.status = 200;
+        ev.latency_ms = Some(start.elapsed().as_millis() as i32);
+        ev.ttfb_ms = ttfb;
+        ev.retry_count = ctx.retry_count;
+        ev.prompt_tokens = usage.prompt_tokens;
+        ev.completion_tokens = usage.completion_tokens;
+        ev.cache_write_tokens = usage.cache_write_tokens;
+        ev.cache_read_tokens = usage.cache_read_tokens;
+        ev.usage_raw = Some(serde_json::json!({
+            "params": ctx.params_meta.clone(),
+            "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
+        }));
+        if let Some((req, req_trunc)) = &ctx.debug_req {
+            let (resp, resp_trunc) =
+                crate::logging::redact::redact_and_truncate(text.as_bytes(), crate::logging::DEBUG_MAX_BYTES);
+            ev.debug_payload = Some(serde_json::json!({
+                "request": req.clone(),
+                "response": resp,
+                "truncated": *req_trunc || resp_trunc,
+            }));
+        }
+        ctx.state.log_sink.log(ev);
+
+        let total = usage.prompt_tokens.unwrap_or(0).saturating_add(usage.completion_tokens.unwrap_or(0));
+        if total > 0 {
+            ctx.state.metrics.gateway_tokens.get_or_create(&ctx.labels).inc_by(total.max(0) as u64);
+        }
+    });
+}
+
+/// 在输出 Body 外再包一层 tee 收集流。
+#[allow(clippy::too_many_arguments)]
+fn tee_log_stream(
+    inner: Body,
+    state: Arc<AppState>,
+    tmpl: LogEvent,
+    collect: Arc<Mutex<StreamCollect>>,
+    start: Instant,
+    entry_protocol: Protocol,
+    labels: RequestLabels,
+    params_meta: serde_json::Value,
+    debug_req: Option<(serde_json::Value, bool)>,
+    retry_count: i32,
+) -> Body {
+    let stream = TeeStream {
+        inner: inner.into_data_stream(),
+        collect,
+        start,
+        ctx: Some(TeeLogCtx {
+            state,
+            tmpl,
+            labels,
+            params_meta,
+            debug_req,
+            retry_count,
+            entry_protocol,
+        }),
+        done: false,
+        finalized: false,
+    };
+    Body::from_stream(stream)
 }
 
 // ---------------------------------------------------------------------------
@@ -323,31 +494,124 @@ fn stream_rsp(request_id: &str, body: Body) -> Response {
     (StatusCode::OK, h, body).into_response()
 }
 
-/// 非流式成功响应：透传改写回网关模型名；转换走 response_to_ir → response_from_ir。
+/// mode 转换后的字符串（contract §12.7）。
+fn mode_str(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Passthrough => "passthrough",
+        Mode::Convert(_) => "convert",
+        Mode::PassthroughFallback => "passthrough_fallback",
+    }
+}
+
+/// 错误摘要 ≤2000 字符（不切断 UTF-8 码点）。
+fn truncate_msg(msg: &str) -> String {
+    if msg.len() <= 2000 {
+        return msg.to_string();
+    }
+    let mut end = 2000;
+    while end > 0 && !msg.is_char_boundary(end) {
+        end -= 1;
+    }
+    msg[..end].to_string()
+}
+
+/// 从 Fail 中抽取人类可读的消息摘要。
+fn fail_message(fail: &Fail) -> String {
+    match fail {
+        Fail::Upstream(e) => match e {
+            UpstreamError::Status(_, body) => body.clone(),
+            other => other.to_string(),
+        },
+        Fail::Convert(e) => e.to_string(),
+    }
+}
+
+/// 构建 debug_payload（req 已脱敏；resp 按字节脱敏 + 截断）。
+fn debug_payload(req: &Option<(serde_json::Value, bool)>, resp_bytes: &[u8]) -> Option<serde_json::Value> {
+    let (req, req_trunc) = req.as_ref()?;
+    let (resp, resp_trunc) =
+        crate::logging::redact::redact_and_truncate(resp_bytes, crate::logging::DEBUG_MAX_BYTES);
+    Some(serde_json::json!({
+        "request": req.clone(),
+        "response": resp,
+        "truncated": *req_trunc || resp_trunc,
+    }))
+}
+
+/// 鉴权后的失败统一记账（contract §12.5）。token 恒 None，protocol_out 未知 = protocol_in，
+/// convert_mode 未决策 = "none"（已在模板初始化时置 "none"，此处兜底）。
+fn log_fail(
+    state: &AppState,
+    tmpl: &LogEvent,
+    start: Instant,
+    status: u16,
+    msg: &str,
+    retry_count: i32,
+) {
+    let mut ev = tmpl.clone();
+    ev.status = status as i32;
+    ev.error = Some(truncate_msg(msg));
+    ev.latency_ms = Some(start.elapsed().as_millis() as i32);
+    ev.retry_count = retry_count;
+    if ev.protocol_out.is_empty() {
+        ev.protocol_out = ev.protocol_in.clone();
+    }
+    if ev.convert_mode.is_empty() {
+        ev.convert_mode = "none".into();
+    }
+    state.log_sink.log(ev);
+}
+
+/// 非流式成功/转换失败结果（供打点使用）。
+struct NonstreamOutcome {
+    response: Response,
+    /// 200 或 502
+    status: u16,
+    degraded: bool,
+    error: Option<String>,
+    /// 返回给客户端的最终 JSON（用于 debug_payload）
+    final_json: Option<serde_json::Value>,
+}
+
+/// 非流式响应：透传改写回网关模型名；转换走 response_to_ir → response_from_ir。
+/// 返回响应与打点所需的元数据（status/degraded/error/最终 JSON）。
 fn nonstream_success(
     entry: Protocol,
     mode: Mode,
     json: serde_json::Value,
     gateway_model: &str,
     request_id: &str,
-) -> Response {
+) -> NonstreamOutcome {
     match mode {
         Mode::Convert(t) => {
             let mut ctx = ConvCtx::new();
             match protocol::response_to_ir(t, &json, &mut ctx)
                 .and_then(|ir| protocol::response_from_ir(entry, &ir, &mut ctx))
             {
-                Ok(out) => json_rsp(StatusCode::OK, request_id, ctx.degraded_header().as_deref(), out),
-                Err(e) => json_rsp(
-                    StatusCode::BAD_GATEWAY,
-                    request_id,
-                    None,
-                    error_from_ir(entry, &IrError {
+                Ok(out) => NonstreamOutcome {
+                    response: json_rsp(StatusCode::OK, request_id, ctx.degraded_header().as_deref(), out.clone()),
+                    status: 200,
+                    degraded: !ctx.degraded.is_empty(),
+                    error: None,
+                    final_json: Some(out),
+                },
+                Err(e) => {
+                    let body = error_from_ir(
+                        entry,
+                        &IrError {
+                            status: 502,
+                            message: format!("响应转换失败: {e}"),
+                            ..Default::default()
+                        },
+                    );
+                    NonstreamOutcome {
+                        response: json_rsp(StatusCode::BAD_GATEWAY, request_id, None, body.clone()),
                         status: 502,
-                        message: format!("响应转换失败: {e}"),
-                        ..Default::default()
-                    }),
-                ),
+                        degraded: false,
+                        error: Some(truncate_msg(&format!("响应转换失败: {e}"))),
+                        final_json: Some(body),
+                    }
+                }
             }
         }
         _ => {
@@ -357,7 +621,13 @@ fn nonstream_success(
                     obj.insert("model".into(), serde_json::Value::String(gateway_model.to_string()));
                 }
             }
-            json_rsp(StatusCode::OK, request_id, None, v)
+            NonstreamOutcome {
+                response: json_rsp(StatusCode::OK, request_id, None, v.clone()),
+                status: 200,
+                degraded: false,
+                error: None,
+                final_json: Some(v),
+            }
         }
     }
 }
@@ -435,6 +705,36 @@ async fn run_gateway(
         return error_resp(entry_protocol, &request_id, 401, "未授权");
     }
 
+    // 鉴权通过后创建记账事件模板（contract §12.1；鉴权前的 401 不记账，避免刷库）。
+    // model/stream/params 在解析后填充；上游相关字段（upstream_id/protocol_out/convert_mode）按候选填充。
+    let mut tmpl = LogEvent {
+        request_id: request_id.clone(),
+        ts: chrono::Utc::now(),
+        key_id: Some(key.id),
+        model: String::new(),
+        upstream_id: None,
+        protocol_in: entry_protocol.as_str().to_string(),
+        protocol_out: String::new(),
+        convert_mode: "none".into(),
+        stream: false,
+        status: 0,
+        error: None,
+        prompt_tokens: None,
+        completion_tokens: None,
+        cache_write_tokens: None,
+        cache_read_tokens: None,
+        latency_ms: None,
+        retry_count: 0,
+        ttfb_ms: None,
+        degraded: false,
+        usage_raw: None,
+        debug_payload: None,
+    };
+    let debug_active = key.debug_active();
+    // params_meta 在 body 解析后计算（早退路径不引用，故延迟初始化）。
+    let params_meta: serde_json::Value;
+    let mut debug_req: Option<(serde_json::Value, bool)> = None;
+
     // 预取热配置（避免跨 await 持有 ArcSwap guard）
     let gateway_cfg = state.hot.load().gateway.clone();
     let default_proxy_id = state.hot.load().proxy.default_proxy_id.clone();
@@ -445,7 +745,10 @@ async fn run_gateway(
             let action = gemini_action.unwrap_or_default();
             match parse_gemini_action(&action) {
                 Some((m, s)) => (Some(m), Some(s)),
-                None => return error_resp(entry_protocol, &request_id, 400, "无效 Gemini action（应为 model:generateContent 或 model:streamGenerateContent）"),
+                None => {
+                    log_fail(&state, &tmpl, start, 400, "无效 Gemini action（应为 model:generateContent 或 model:streamGenerateContent）", 0);
+                    return error_resp(entry_protocol, &request_id, 400, "无效 Gemini action（应为 model:generateContent 或 model:streamGenerateContent）");
+                }
             }
         }
         _ => (None, None),
@@ -453,32 +756,46 @@ async fn run_gateway(
 
     let body_value: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return error_resp(entry_protocol, &request_id, 400, "请求体不是合法 JSON"),
+        Err(_) => {
+            log_fail(&state, &tmpl, start, 400, "请求体不是合法 JSON", 0);
+            return error_resp(entry_protocol, &request_id, 400, "请求体不是合法 JSON");
+        }
     };
 
     let model = match extract_model(entry, &body_value, gemini_model.as_deref()) {
         Ok(m) => m,
         Err(e) => {
             let msg = e.to_string();
+            log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
             return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
         }
     };
-
-    let stream = is_stream(&body_value, gemini_stream);
+    // 模型/stream 确定后填充模板与参数元数据
+    tmpl.model = model.clone();
+    tmpl.stream = is_stream(&body_value, gemini_stream);
+    let stream = tmpl.stream;
     let max_tokens = extract_max_tokens(&body_value);
+    params_meta = crate::upstream::usage::request_params_meta(entry_protocol, &body_value);
+    tmpl.usage_raw = Some(serde_json::json!({ "params": params_meta.clone() }));
+    if debug_active {
+        debug_req = Some(crate::logging::redact::redact_and_truncate(&body, crate::logging::DEBUG_MAX_BYTES));
+    }
 
     // 4. 模型白名单
     if !key.model_allowed(&model) {
+        log_fail(&state, &tmpl, start, 403, "禁止访问", 0);
         return error_resp(entry_protocol, &request_id, 403, "禁止访问");
     }
 
     // 5. 限流 + TPM 预检 + 配额
     if let Err(e) = state.limiter.check_rpm(&key, gateway_cfg.default_rate_limit_rpm) {
         let msg = e.to_string();
+        log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
         return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
     }
     if let Err(e) = limit::tpm_precheck(&key, max_tokens) {
         let msg = e.to_string();
+        log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
         return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
     }
     {
@@ -494,6 +811,7 @@ async fn run_gateway(
             }
         };
         if exceeded {
+            log_fail(&state, &tmpl, start, 429, "请求过于频繁，请稍后再试", 0);
             return error_resp(entry_protocol, &request_id, 429, "请求过于频繁，请稍后再试");
         }
     }
@@ -502,6 +820,7 @@ async fn run_gateway(
     let matched = routing::match_routes(&model, &snap.routes);
     if matched.is_empty() {
         let lbl = metrics_labels(&key, &model, entry, "");
+        log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
         return record(&state.metrics, &lbl, start, true, error_resp(entry_protocol, &request_id, 404, "模型未配置路由"));
     }
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -514,6 +833,7 @@ async fn run_gateway(
     }
     if candidates.is_empty() {
         let lbl = metrics_labels(&key, &model, entry, "");
+        log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
         return record(&state.metrics, &lbl, start, true, error_resp(entry_protocol, &request_id, 503, "无可用上游"));
     }
     let attempts: Vec<Attempt> = order_candidates(candidates)
@@ -522,12 +842,18 @@ async fn run_gateway(
         .collect();
     if attempts.is_empty() {
         let lbl = metrics_labels(&key, &model, entry, "");
+        log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
         return record(&state.metrics, &lbl, start, true, error_resp(entry_protocol, &request_id, 503, "无可用上游"));
     }
 
     // 7-10. 协议决策 → 请求构建 → 执行/重试/故障转移 → 响应
     let mut last_err: Option<Fail> = None;
     let mut last_upstream: Option<String> = None;
+    // retry_count 定义：本候选内重试次数 idx + 之前彻底失败的候选数。
+    let mut failed_candidates: u32 = 0;
+    let mut last_idx: u32 = 0;
+    let mut last_protocol_out: Option<String> = None;
+    let mut last_convert_mode: Option<String> = None;
     'outer: for attempt in &attempts {
         let route = &attempt.candidate.route;
         let upstream = &attempt.candidate.upstream;
@@ -552,10 +878,15 @@ async fn run_gateway(
                     // 该候选无法承接（转换失败且入口不受支持），转移到下一候选
                     last_upstream = Some(upstream.name.clone());
                     last_err = Some(Fail::Convert(cvt));
+                    failed_candidates += 1;
+                    last_idx = 0;
                     continue 'outer;
                 }
             }
         };
+        // 已决策出上游协议：记账时回填 protocol_out / convert_mode。
+        last_protocol_out = Some(outbound.protocol.as_str().to_string());
+        last_convert_mode = Some(mode_str(outbound.mode).to_string());
 
         let url = format!(
             "{}{}",
@@ -607,8 +938,50 @@ async fn run_gateway(
                 Ok(ExecOutcome::Json(json)) => {
                     state.breaker.on_success(&state.db, upstream).await;
                     let lbl = metrics_labels(&key, &model, entry, &upstream.name);
-                    let resp = nonstream_success(entry_protocol, outbound.mode, json, &model, &request_id);
-                    return record(&state.metrics, &lbl, start, false, resp);
+                    // 用上游原始 JSON 提取 usage（§12.2）；转换前后 usage 语义等价，取原始值最准。
+                    let usage = crate::upstream::usage::extract_json_usage(outbound.protocol, &json);
+                    let outcome = nonstream_success(entry_protocol, outbound.mode, json, &model, &request_id);
+                    let retry_count = (idx + failed_candidates) as i32;
+                    let mut ev = tmpl.clone();
+                    ev.upstream_id = Some(upstream.id);
+                    ev.protocol_out = outbound.protocol.as_str().to_string();
+                    ev.convert_mode = mode_str(outbound.mode).to_string();
+                    ev.latency_ms = Some(start.elapsed().as_millis() as i32);
+                    ev.retry_count = retry_count;
+                    ev.degraded = outcome.degraded;
+                    if outcome.status == 200 {
+                        ev.status = 200;
+                        ev.prompt_tokens = usage.prompt_tokens;
+                        ev.completion_tokens = usage.completion_tokens;
+                        ev.cache_write_tokens = usage.cache_write_tokens;
+                        ev.cache_read_tokens = usage.cache_read_tokens;
+                        ev.usage_raw = Some(serde_json::json!({
+                            "params": params_meta.clone(),
+                            "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
+                        }));
+                        let total = usage.prompt_tokens.unwrap_or(0).saturating_add(usage.completion_tokens.unwrap_or(0));
+                        if total > 0 {
+                            state.metrics.gateway_tokens.get_or_create(&lbl).inc_by(total.max(0) as u64);
+                        }
+                        if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(
+                            outcome.final_json.as_ref().unwrap_or(&serde_json::Value::Null),
+                        ).unwrap_or_default()) {
+                            ev.debug_payload = Some(payload);
+                        }
+                        state.log_sink.log(ev);
+                        return record(&state.metrics, &lbl, start, false, outcome.response);
+                    } else {
+                        // 转换失败（502）：记为失败事件（token 恒 None）。
+                        ev.status = outcome.status as i32;
+                        ev.error = outcome.error.clone();
+                        if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(
+                            outcome.final_json.as_ref().unwrap_or(&serde_json::Value::Null),
+                        ).unwrap_or_default()) {
+                            ev.debug_payload = Some(payload);
+                        }
+                        state.log_sink.log(ev);
+                        return record(&state.metrics, &lbl, start, true, outcome.response);
+                    }
                 }
                 Ok(ExecOutcome::Stream(resp)) => {
                     state.breaker.on_success(&state.db, upstream).await;
@@ -618,7 +991,26 @@ async fn run_gateway(
                     } else {
                         Body::from_stream(upstream::sse_passthrough_stream(resp, model.clone(), request_id.clone()))
                     };
-                    let resp = stream_rsp(&request_id, sbody);
+                    let mut ev = tmpl.clone();
+                    ev.upstream_id = Some(upstream.id);
+                    ev.protocol_out = outbound.protocol.as_str().to_string();
+                    ev.convert_mode = mode_str(outbound.mode).to_string();
+                    ev.degraded = false; // 流式转换的降级项在流内部处理，无法在此捕获，记为 false
+                    let collect = Arc::new(Mutex::new(StreamCollect { text: String::new(), ttfb_ms: None }));
+                    let retry_count = (idx + failed_candidates) as i32;
+                    let teed = tee_log_stream(
+                        sbody,
+                        state.clone(),
+                        ev,
+                        collect,
+                        start,
+                        entry_protocol,
+                        lbl.clone(),
+                        params_meta.clone(),
+                        debug_req.clone(),
+                        retry_count,
+                    );
+                    let resp = stream_rsp(&request_id, teed);
                     return record(&state.metrics, &lbl, start, false, resp);
                 }
                 Err(e) => {
@@ -635,6 +1027,8 @@ async fn run_gateway(
                         idx += 1;
                         continue;
                     }
+                    failed_candidates += 1;
+                    last_idx = idx;
                     if lock {
                         break 'outer;
                     }
@@ -646,13 +1040,24 @@ async fn run_gateway(
 
     // 全部候选失败
     let lbl = metrics_labels(&key, &model, entry, last_upstream.as_deref().unwrap_or(""));
-    let (status, jbody) = match last_err {
-        Some(f) => entry_error(entry_protocol, &f),
+    let (status, msg, jbody) = match &last_err {
+        Some(f) => {
+            let (s, body) = entry_error(entry_protocol, f);
+            (s, fail_message(f), body)
+        }
         None => (
             502,
+            "无可用上游".to_string(),
             error_from_ir(entry_protocol, &IrError { status: 502, message: "无可用上游".into(), ..Default::default() }),
         ),
     };
+    // 失败终点：protocol_out 已知则填，convert_mode 已决策则填，否则兜底（log_fail 内完成）。
+    // retry_count = 末候选内重试次数 last_idx + 之前彻底失败的候选数（failed_candidates 包含末候选，故减 1）。
+    let mut ev = tmpl.clone();
+    ev.protocol_out = last_protocol_out.unwrap_or_else(|| entry_protocol.as_str().to_string());
+    ev.convert_mode = last_convert_mode.unwrap_or_else(|| "none".into());
+    let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
+    log_fail(&state, &ev, start, status, &msg, retry_count);
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     let resp = json_rsp(code, &request_id, None, jbody);
     record(&state.metrics, &lbl, start, true, resp)
@@ -735,6 +1140,34 @@ mod tests {
     use axum::http::HeaderMap;
     use chrono::Utc;
     use serde_json::json;
+
+    /// tee 收集：验证逐 chunk 文本累积与 ttfb 记录（ctx=None 避免触发 finalize 的 DB 记账）。
+    #[tokio::test]
+    async fn tee_stream_collects_text_and_ttfb() {
+        use futures::StreamExt;
+        let inner = Body::from_stream(futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from_static(b"data: {\"a\":1}\n\n")),
+            Ok::<Bytes, std::io::Error>(Bytes::from_static(b"data: [DONE]\n\n")),
+        ]));
+        let start = Instant::now();
+        let collect = Arc::new(Mutex::new(StreamCollect { text: String::new(), ttfb_ms: None }));
+        let mut tee = TeeStream {
+            inner: inner.into_data_stream(),
+            collect: collect.clone(),
+            start,
+            ctx: None,
+            done: false,
+            finalized: false,
+        };
+        let mut n = 0;
+        while let Some(Ok(_)) = Pin::new(&mut tee).next().await {
+            n += 1;
+        }
+        assert_eq!(n, 2);
+        let c = collect.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(c.text, "data: {\"a\":1}\n\ndata: [DONE]\n\n");
+        assert!(c.ttfb_ms.is_some());
+    }
 
     fn make_upstream() -> UpstreamRow {
         UpstreamRow {

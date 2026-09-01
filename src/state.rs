@@ -37,6 +37,8 @@ pub struct AppState {
     pub crypto: Crypto,
     pub jwt: JwtService,
     pub metrics: Metrics,
+    /// M4 日志统计出口句柄（非阻塞记账）。
+    pub log_sink: crate::logging::LogSink,
     pub version: &'static str,
     pub started_at: chrono::DateTime<chrono::Utc>,
 }

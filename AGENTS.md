@@ -6,7 +6,7 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层、M3 网关核心已完成（2026-08）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.15，约 950 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
+**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.16，约 950 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
 
 M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
 
@@ -68,30 +68,37 @@ src/
 ├── seed.rs          # app_meta.seeded_at 标记 + admin/proxies/fx_rates 种子（argon2）
 ├── crypto.rs        # AES-256-GCM（NEXTAPI_SECRET_KEY，env-only）
 ├── error.rs         # ApiError 统一错误
-├── state.rs         # AppState（PgPool / ArcSwap<HotConfig> / SettingsEngine / Crypto / Jwt / Metrics）
-├── metrics.rs       # Prometheus /metrics
-├── entities.rs      # 业务实体行结构（api_keys/upstreams/model_routes/proxy_configs）
+├── state.rs         # AppState（PgPool / ArcSwap<HotConfig> / SettingsEngine / Crypto / Jwt / Metrics / LogSink）
+├── metrics.rs       # Prometheus /metrics（prometheus-client；requests/errors/latency/tokens + 日志队列深度/溢出）
+├── entities.rs      # 业务实体行结构（api_keys/upstreams/model_routes/proxy_configs/usage_logs/usage_hourly）
 ├── cache.rs         # 实体内存快照（RwLock<Arc<Snapshot>>，写路径失效刷新）
 ├── routing/mod.rs   # 模型通配匹配、优先级分组 + 加权随机、熔断状态机（含半开探活/指数退避）
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
-├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 5 个端点）
+├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
+├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 5 个端点）+ M4 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
+├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细）
+├── logging/         # M4 日志核心：LogSink（有界 mpsc + 满则写 WAL）、writer 批量写者（同事务
+│                    # usage_logs UNNEST 多行 + usage_hourly upsert + quota_usage tokens 累加 +
+│                    # last_used_at 批量更新）、wal（JSONL+CRC 滚动/重放/归档）、partition（30 天
+│                    # epoch 对齐分区 ensure/list/drop_covered）、redact（debug 脱敏 64KB 截断）
 ├── auth/mod.rs      # 单管理员 JWT + 登录防爆破（内存滑窗）+ require_admin 中间件 + 审计写入
 └── admin/
     ├── mod.rs       # /api 路由聚合
-    ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次）
+    ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
     ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持）
     ├── routes.rs    # /api/model-routes 批量替换
     ├── proxies.rs   # /api/proxies CRUD（密码加密、掩码回传=保持原值、test 桩 M3 启用）
     ├── settings_api.rs # /api/settings + /api/config(+reload)
+    ├── logs.rs      # /api/logs 查询（默认当天）/ {request_id} 详情 / cleanup 手动整分区 DROP / export.csv
+    ├── stats_api.rs # /api/stats/summary + /api/stats/series
     └── audit.rs     # /api/audit 分页查询
-migrations/          # 0001_init.sql（M1 表）+ 0002_gateway.sql（api_keys/upstreams/model_routes/quota_usage）
+migrations/          # 0001_init.sql（M1 表）+ 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
+contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考）
 tests/                    # 集成测试（后续里程碑）
 web/                      # Vue3 管理后台（M8）
 ```
-
-M3 及以后规划的模块（protocol/、routing/、upstream/、billing/、limit/、stats.rs、cache.rs）见 PLAN.md §14。
 
 ## 核心架构约定（开发时必须遵守）
 

@@ -1344,6 +1344,7 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
+ "crc32fast",
  "futures",
  "jsonwebtoken",
  "notify",
