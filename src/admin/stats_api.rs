@@ -48,8 +48,13 @@ async fn summary(
 ) -> ApiResult<Json<serde_json::Value>> {
     let tz = state.hot.load().gateway.billing_timezone.clone();
     let f = build_stats_filter(&q, &tz)?;
-    let s = stats::summary(&state.db, &f).await?;
-    Ok(Json(serde_json::json!(s)))
+    let currency = resolve_currency(&q, &state)?;
+    let s = stats::summary(&state.db, &f, &currency).await?;
+    // 展示层舍入：仅对 cost_* 字段做 round_dp（DB 原样存）。
+    let precision = state.hot.load().gateway.display_precision;
+    let mut v = serde_json::json!(s);
+    round_cost_value(&mut v, precision);
+    Ok(Json(v))
 }
 
 /// GET /api/stats/series。
@@ -63,8 +68,12 @@ async fn series(
     let granularity = resolve_granularity(&q, &f)?;
     let dimension = validate_dimension(q.dimension.as_deref())?;
     let currency = resolve_currency(&q, &state)?;
-    let points = stats::series(&state.db, &f, &granularity, dimension).await?;
-    Ok(Json(serde_json::json!({ "currency": currency, "points": points })))
+    let points = stats::series(&state.db, &f, &granularity, dimension, &currency).await?;
+    // 展示层舍入：仅对成本数值字段做 round_dp（DB 原样存）。
+    let precision = state.hot.load().gateway.display_precision;
+    let mut v = serde_json::json!({ "currency": currency, "points": points });
+    round_cost_value(&mut v, precision);
+    Ok(Json(v))
 }
 
 /// 解析查询参数为 StatsFilter（from_ts/to_ts 缺省 = billing_timezone 当天 00:00 → 现在）。
@@ -129,10 +138,46 @@ fn validate_dimension(d: Option<&str>) -> ApiResult<Option<&'static str>> {
 
 /// currency 校验：仅显式传入时校验（默认 display_currency 直接透传；M4 成本恒 NULL）。
 fn resolve_currency(q: &StatsQuery, state: &AppState) -> ApiResult<String> {
-    match q.currency.as_deref().filter(|s| !s.is_empty()) {
+    let default = state.hot.load().gateway.display_currency.clone();
+    resolve_currency_value(q.currency.as_deref(), &default)
+}
+
+/// currency 白名单校验（纯函数，可测）：合法 → 原字符串；缺省 → 默认值；非法 → BadRequest。
+fn resolve_currency_value(c: Option<&str>, default: &str) -> ApiResult<String> {
+    match c.map(str::trim).filter(|s| !s.is_empty()) {
         Some(c) if matches!(c, "CNY" | "USD") => Ok(c.to_string()),
         Some(c) => Err(ApiError::bad_request(format!("currency 必须为 CNY 或 USD: {c}"))),
-        None => Ok(state.hot.load().gateway.display_currency.clone()),
+        None => Ok(default.to_string()),
+    }
+}
+
+/// 展示层舍入：对响应中成本数值字段（cost_cny/cost_usd/cost_display）应用 round_dp(precision)。
+fn round_cost_value(v: &mut serde_json::Value, precision: u32) {
+    match v {
+        serde_json::Value::Object(obj) => {
+            for key in ["cost_cny", "cost_usd", "cost_display"] {
+                if let Some(val) = obj.get_mut(key) {
+                    if let Some(d) = json_to_decimal(val) {
+                        *val = serde_json::json!(d.round_dp(precision));
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                round_cost_value(item, precision);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// JSON 值 → Decimal：本代码库 Decimal 经 serde 序列化为字符串，故需同时支持 Number 与 String。
+fn json_to_decimal(v: &serde_json::Value) -> Option<rust_decimal::Decimal> {
+    match v {
+        serde_json::Value::Number(_) => rust_decimal::Decimal::from_str_exact(&v.to_string()).ok(),
+        serde_json::Value::String(s) => rust_decimal::Decimal::from_str_exact(s).ok(),
+        _ => None,
     }
 }
 
@@ -189,6 +234,19 @@ mod tests {
         assert_eq!(validate_dimension(Some("upstream")).unwrap(), Some("upstream"));
         assert_eq!(validate_dimension(Some("protocol")).unwrap(), Some("protocol"));
         assert!(matches!(validate_dimension(Some("bad")), Err(ApiError::BadRequest(_))));
+    }
+
+    #[test]
+    fn resolve_currency_value_whitelist() {
+        // 契约 §10：currency 白名单校验（CNY|USD）。
+        assert_eq!(resolve_currency_value(Some("CNY"), "USD").unwrap(), "CNY");
+        assert_eq!(resolve_currency_value(Some("USD"), "CNY").unwrap(), "USD");
+        assert_eq!(resolve_currency_value(Some(" USD "), "CNY").unwrap(), "USD");
+        // 缺省/空 → 使用默认值。
+        assert_eq!(resolve_currency_value(None, "CNY").unwrap(), "CNY");
+        assert_eq!(resolve_currency_value(Some(""), "USD").unwrap(), "USD");
+        // 非法 → BadRequest。
+        assert!(matches!(resolve_currency_value(Some("EUR"), "CNY"), Err(ApiError::BadRequest(_))));
     }
 
     #[test]

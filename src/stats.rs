@@ -14,7 +14,6 @@ use rust_decimal::Decimal;
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
-use crate::entities::HourlyAggRow;
 use crate::error::{ApiError, ApiResult};
 
 /// 统计过滤条件（含计费时区；from/to 为闭开区间 [from, to)）。
@@ -41,6 +40,10 @@ pub struct Summary {
     pub total_tokens: i64,
     pub cost_cny: Option<Decimal>,
     pub cost_usd: Option<Decimal>,
+    /// 展示币种（display_currency）下的合计成本；全 NULL → None。
+    pub cost_display: Option<Decimal>,
+    /// 有成本另一侧但展示币种列为 NULL 的行数（未计价混入）。
+    pub cost_na_count: i64,
     pub avg_latency_ms: Option<f64>,
     /// 仅 source=detail 时非空（percentile_cont 需要 latency_ms）
     pub p50_ms: Option<f64>,
@@ -60,6 +63,10 @@ pub struct SeriesPoint {
     pub completion_tokens: i64,
     pub cost_cny: Option<Decimal>,
     pub cost_usd: Option<Decimal>,
+    /// 展示币种（display_currency）下的合计成本；全 NULL → None。
+    pub cost_display: Option<Decimal>,
+    /// 有成本另一侧但展示币种列为 NULL 的行数（未计价混入）。
+    pub cost_na_count: i64,
 }
 
 /// 数据源选择（纯函数，可测）：
@@ -90,6 +97,8 @@ struct SummaryRow {
     total_tokens: i64,
     cost_cny: Option<Decimal>,
     cost_usd: Option<Decimal>,
+    cost_display: Option<Decimal>,
+    cost_na_count: i64,
     avg_latency_ms: Option<f64>,
     p50_ms: Option<f64>,
     p95_ms: Option<f64>,
@@ -107,6 +116,8 @@ struct SeriesRow {
     completion_tokens: i64,
     cost_cny: Option<Decimal>,
     cost_usd: Option<Decimal>,
+    cost_display: Option<Decimal>,
+    cost_na_count: i64,
 }
 
 impl From<SeriesRow> for SeriesPoint {
@@ -120,13 +131,26 @@ impl From<SeriesRow> for SeriesPoint {
             completion_tokens: r.completion_tokens,
             cost_cny: r.cost_cny,
             cost_usd: r.cost_usd,
+            cost_display: r.cost_display,
+            cost_na_count: r.cost_na_count,
         }
     }
 }
 
+/// 展示币种对应的成本列名（"CNY" → "cost_cny"，"USD" → "cost_usd"；调用方已校验白名单）。
+fn cost_col(display_currency: &str) -> &'static str {
+    if display_currency == "USD" {
+        "cost_usd"
+    } else {
+        "cost_cny"
+    }
+}
+
 /// 汇总：恒用明细源（usage_logs），需全维度过滤 + percentile_cont。
-pub async fn summary(pool: &PgPool, f: &StatsFilter) -> ApiResult<Summary> {
-    let mut qb = QueryBuilder::<Postgres>::new(
+pub async fn summary(pool: &PgPool, f: &StatsFilter, display_currency: &str) -> ApiResult<Summary> {
+    let cc = cost_col(display_currency);
+    // cost_display = 指定币种成本合计；cost_na_count = 有成本另一侧但指定币种列为 NULL 的行数。
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT count(*) AS requests, \
          count(*) FILTER (WHERE status >= 400) AS errors, \
          COALESCE(sum(prompt_tokens), 0)::bigint AS prompt_tokens, \
@@ -134,12 +158,14 @@ pub async fn summary(pool: &PgPool, f: &StatsFilter) -> ApiResult<Summary> {
          (COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0))::bigint AS total_tokens, \
          sum(cost_cny) AS cost_cny, \
          sum(cost_usd) AS cost_usd, \
+         sum({cc}) AS cost_display, \
+         count(*) FILTER (WHERE {cc} IS NULL AND (cost_cny IS NOT NULL OR cost_usd IS NOT NULL)) AS cost_na_count, \
          avg(latency_ms)::float8 AS avg_latency_ms, \
          percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50_ms, \
          percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_ms, \
          percentile_cont(0.99) WITHIN GROUP (ORDER BY latency_ms) AS p99_ms \
-         FROM usage_logs",
-    );
+         FROM usage_logs"
+    ));
     push_stats_where(&mut qb, f);
 
     let row: SummaryRow = qb.build_query_as().fetch_one(pool).await?;
@@ -161,6 +187,8 @@ pub async fn summary(pool: &PgPool, f: &StatsFilter) -> ApiResult<Summary> {
         total_tokens: row.total_tokens,
         cost_cny: row.cost_cny,
         cost_usd: row.cost_usd,
+        cost_display: row.cost_display,
+        cost_na_count: row.cost_na_count,
         avg_latency_ms: row.avg_latency_ms,
         p50_ms: row.p50_ms,
         p95_ms: row.p95_ms,
@@ -176,6 +204,7 @@ pub async fn series(
     f: &StatsFilter,
     granularity: &str,
     dimension: Option<&str>,
+    display_currency: &str,
 ) -> ApiResult<Vec<SeriesPoint>> {
     let g = match granularity {
         "hour" => "hour",
@@ -193,9 +222,9 @@ pub async fn series(
     }
 
     if src == "hourly" {
-        series_hourly(pool, f, g).await
+        series_hourly(pool, f, g, display_currency).await
     } else {
-        series_detail(pool, f, g, dimension).await
+        series_detail(pool, f, g, dimension, display_currency).await
     }
 }
 
@@ -204,16 +233,24 @@ fn non_empty(s: Option<&str>) -> bool {
 }
 
 /// 汇总源序列：usage_hourly 聚合，bucket = date_trunc(granularity, hour)，dimension 恒 model。
-async fn series_hourly(pool: &PgPool, f: &StatsFilter, g: &str) -> ApiResult<Vec<SeriesPoint>> {
+async fn series_hourly(
+    pool: &PgPool,
+    f: &StatsFilter,
+    g: &str,
+    display_currency: &str,
+) -> ApiResult<Vec<SeriesPoint>> {
+    let cc = cost_col(display_currency);
     let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT date_trunc('{g}', hour) AS hour, \
-         model, \
+         model AS dimension, \
          sum(requests)::bigint AS requests, \
          sum(errors)::bigint AS errors, \
          sum(prompt_tokens)::bigint AS prompt_tokens, \
          sum(completion_tokens)::bigint AS completion_tokens, \
          sum(cost_cny) AS cost_cny, \
-         sum(cost_usd) AS cost_usd \
+         sum(cost_usd) AS cost_usd, \
+         sum({cc}) AS cost_display, \
+         count(*) FILTER (WHERE {cc} IS NULL AND (cost_cny IS NOT NULL OR cost_usd IS NOT NULL)) AS cost_na_count \
          FROM usage_hourly"
     ));
     qb.push(" WHERE hour >= ").push_bind(f.from_ts);
@@ -224,20 +261,8 @@ async fn series_hourly(pool: &PgPool, f: &StatsFilter, g: &str) -> ApiResult<Vec
     // GROUP BY 用实际表达式避免 `hour` 别名与输入列名歧义；ORDER BY 用序号引用输出列。
     qb.push(&format!(" GROUP BY date_trunc('{g}', hour), model ORDER BY 1, 2"));
 
-    let rows: Vec<HourlyAggRow> = qb.build_query_as().fetch_all(pool).await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| SeriesPoint {
-            bucket: r.hour,
-            dimension: r.model,
-            requests: r.requests,
-            errors: r.errors,
-            prompt_tokens: r.prompt_tokens,
-            completion_tokens: r.completion_tokens,
-            cost_cny: r.cost_cny,
-            cost_usd: r.cost_usd,
-        })
-        .collect())
+    let rows: Vec<SeriesRow> = qb.build_query_as().fetch_all(pool).await?;
+    Ok(rows.into_iter().map(SeriesPoint::from).collect())
 }
 
 /// 明细源序列：bucket = date_trunc(granularity, ts AT TIME ZONE $tz) AT TIME ZONE $tz
@@ -248,7 +273,9 @@ async fn series_detail(
     f: &StatsFilter,
     g: &str,
     dimension: Option<&str>,
+    display_currency: &str,
 ) -> ApiResult<Vec<SeriesPoint>> {
+    let cc = cost_col(display_currency);
     let dim_expr = match dimension {
         None => "",
         Some("model") => "model",
@@ -273,13 +300,17 @@ async fn series_detail(
         qb.push(dim_expr);
         qb.push(" AS dimension, ");
     }
-    qb.push("count(*) AS requests, \
+    qb.push(format!(
+        "count(*) AS requests, \
          count(*) FILTER (WHERE status >= 400) AS errors, \
          COALESCE(sum(prompt_tokens), 0)::bigint AS prompt_tokens, \
          COALESCE(sum(completion_tokens), 0)::bigint AS completion_tokens, \
          sum(cost_cny) AS cost_cny, \
-         sum(cost_usd) AS cost_usd \
-         FROM usage_logs");
+         sum(cost_usd) AS cost_usd, \
+         sum({cc}) AS cost_display, \
+         count(*) FILTER (WHERE {cc} IS NULL AND (cost_cny IS NOT NULL OR cost_usd IS NOT NULL)) AS cost_na_count \
+         FROM usage_logs"
+    ));
     push_stats_where(&mut qb, f);
     qb.push(" GROUP BY bucket");
     if !dim_expr.is_empty() {
@@ -378,5 +409,14 @@ mod tests {
         assert!(!non_empty(None));
         assert!(!non_empty(Some("")));
         assert!(non_empty(Some("x")));
+    }
+
+    #[test]
+    fn cost_col_maps_display_currency() {
+        // 展示币种白名单已由调用方校验（CNY|USD）；此处仅验证列名映射。
+        assert_eq!(cost_col("CNY"), "cost_cny");
+        assert_eq!(cost_col("USD"), "cost_usd");
+        // 非白名单值默认回退 cost_cny（防御性，正常路径不会出现）。
+        assert_eq!(cost_col("EUR"), "cost_cny");
     }
 }

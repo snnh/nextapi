@@ -6,8 +6,10 @@ use std::sync::Arc;
 use crate::state::AppState;
 
 pub mod audit;
+pub mod fx;
 pub mod keys;
 pub mod logs;
+pub mod pricing;
 pub mod proxies;
 pub mod routes;
 pub mod settings_api;
@@ -25,4 +27,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .nest("/audit", audit::router())
         .nest("/logs", logs::router())
         .nest("/stats", stats_api::router())
+        .nest("/pricing", pricing::router())
+        .nest("/fx", fx::router())
 }

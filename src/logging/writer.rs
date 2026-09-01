@@ -31,8 +31,11 @@ async fn flush(
     if batch.is_empty() {
         return;
     }
-    let billing_tz = hot.load().gateway.billing_timezone.clone();
-    match insert_batch(pool, batch, &billing_tz).await {
+    // billing_tz 与 fx_stale_max_minutes 每次从 hot 热读（契约 §5：run_writer 签名不变）。
+    let gw = hot.load().gateway.clone();
+    let billing_tz = gw.billing_timezone.clone();
+    let fx_stale_max_minutes = gw.fx_stale_max_minutes;
+    match insert_batch(pool, batch, &billing_tz, fx_stale_max_minutes).await {
         Ok(_) => {
             batch.clear();
             *backoff = 1;

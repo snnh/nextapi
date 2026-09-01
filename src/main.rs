@@ -2,12 +2,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use uuid::Uuid;
+
 use arc_swap::ArcSwap;
 use axum::{middleware, routing::get, Router};
 use tracing::{error, info, warn};
 
 mod admin;
 mod auth;
+mod billing;
 mod cache;
 mod config;
 mod crypto;
@@ -82,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.min(1_000_000).max(16));
     let wal = logging::wal::WalWriter::new(gw.log_wal_dir.clone().into(), gw.log_wal_file_max_mb);
     // 启动即重放 WAL（失败只 warn）
-    if let Err(e) = logging::wal::replay_and_archive(wal.dir(), &pool, &gw.billing_timezone).await {
+    if let Err(e) = logging::wal::replay_and_archive(wal.dir(), &pool, &gw.billing_timezone, gw.fx_stale_max_minutes).await {
         warn!("WAL 启动重放失败（忽略，继续启动）: {e}");
     }
     // 预热 usage_logs 分区（失败只 warn）
@@ -99,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
         metrics.log_overflows.clone(),
         metrics.log_queue_depth.clone(),
         gw.billing_timezone.clone(),
+        gw.fx_stale_max_minutes,
     );
 
     let state = Arc::new(AppState {
@@ -145,12 +149,13 @@ async fn main() -> anyhow::Result<()> {
     let wal_dir = wal.dir().to_path_buf();
     let tz = gw.billing_timezone.clone();
     let part_days = gw.log_partition_days;
+    let fx_stale = gw.fx_stale_max_minutes;
     let pool_replay = pool.clone();
     let pool_part = pool.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            if let Err(e) = logging::wal::replay_and_archive(&wal_dir, &pool_replay, &tz).await {
+            if let Err(e) = logging::wal::replay_and_archive(&wal_dir, &pool_replay, &tz, fx_stale).await {
                 warn!("WAL 周期重放失败: {e}");
             }
         }
@@ -163,6 +168,28 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // M5：fx 自动刷新（enabled 且 refresh_interval_minutes>0 才启动；interval=0 仅手动 refresh）。
+    // 每 interval 分钟按代理矩阵构建 client → billing::fx::fetch_and_store；失败 warn 且保留旧值（降级链）。
+    {
+        let hot = state.hot.load();
+        let fx_cfg = hot.fx_auto_fetch.clone();
+        drop(hot);
+        let interval_minutes = fx_cfg.refresh_interval_minutes;
+        if fx_cfg.enabled && interval_minutes > 0 {
+            let state_fx = state.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(interval_minutes * 60)).await;
+                    let cfg = state_fx.hot.load().fx_auto_fetch.clone();
+                    let client = build_fx_client(&state_fx, &cfg);
+                    if let Err(e) = billing::fx::fetch_and_store(&state_fx.db, &client, &cfg).await {
+                        warn!("fx 自动刷新失败（保留旧值）: {e}");
+                    }
+                }
+            });
+        }
+    }
 
     // 6. 配置文件热加载监听（仅 hot 类生效；不覆盖 UI 保存值与 DB 业务实体）
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -221,6 +248,60 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
     }
     Ok(())
+}
+
+/// fx 拉取端点 URL（与 billing::fx::fetch_and_store 内部一致，用于 no_proxy 命中判定）。
+fn fx_fetch_url(cfg: &crate::config::FxAutoFetchCfg) -> String {
+    match cfg.provider.as_str() {
+        "ecb" => "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml".into(),
+        "custom" => format!("https://{}", cfg.base),
+        _ => format!(
+            "https://api.frankfurter.app/latest?base={}&symbols={}",
+            cfg.base,
+            cfg.symbols.join(",")
+        ),
+    }
+}
+
+/// 构建 fx 拉取 client：按 fx_auto_fetch.use_proxy/proxy_id（空则跟随 proxy.default_proxy_id）
+/// + 全局 no_proxy 并集命中直连（参照 gateway.rs 的 client 选择写法）。
+fn build_fx_client(state: &Arc<AppState>, cfg: &crate::config::FxAutoFetchCfg) -> reqwest::Client {
+    let hot = state.hot.load();
+    let snap = state.cache.snapshot();
+    let url = fx_fetch_url(cfg);
+    let mut lists = vec![hot.proxy.no_proxy.clone()];
+    let eff_proxy_id = if cfg.use_proxy {
+        Uuid::parse_str(&cfg.proxy_id)
+            .ok()
+            .or_else(|| Uuid::parse_str(&hot.proxy.default_proxy_id).ok())
+    } else {
+        None
+    };
+    if let Some(pid) = eff_proxy_id {
+        if let Some(p) = snap.proxies.get(&pid) {
+            lists.push(p.no_proxy.clone());
+        }
+    }
+    let use_proxy = cfg.use_proxy && !crate::upstream::no_proxy_match(&lists, &url);
+    if use_proxy {
+        if let Some(pid) = eff_proxy_id {
+            if let Some(p) = snap.proxies.get(&pid) {
+                if let Some(client) = build_proxy_client(p) {
+                    return client;
+                }
+            }
+        }
+    }
+    state.client_pools.direct_client()
+}
+
+/// 由代理行构建 reqwest client；不可用/禁用 → None（回退直连）。
+fn build_proxy_client(p: &crate::entities::ProxyRow) -> Option<reqwest::Client> {
+    if !p.enabled {
+        return None;
+    }
+    let proxy = reqwest::Proxy::all(p.proxy_url()).ok()?;
+    reqwest::Client::builder().proxy(proxy).build().ok()
 }
 
 async fn healthz() -> axum::Json<serde_json::Value> {

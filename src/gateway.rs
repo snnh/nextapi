@@ -729,6 +729,12 @@ async fn run_gateway(
         degraded: false,
         usage_raw: None,
         debug_payload: None,
+        // M5 计价字段：网关主链路恒 None，由 writer 侧 insert_batch 计价回填。
+        cost_cny: None,
+        cost_usd: None,
+        pricing_source: None,
+        price_used: None,
+        fx_snapshot: None,
     };
     let debug_active = key.debug_active();
     // params_meta 在 body 解析后计算（早退路径不引用，故延迟初始化）。

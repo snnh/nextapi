@@ -220,6 +220,7 @@ pub async fn replay_and_archive(
     dir: &Path,
     pool: &sqlx::PgPool,
     billing_tz: &str,
+    fx_stale_max_minutes: u64,
 ) -> ApiResult<(u64, u64)> {
     let mut files = list_wal_files(dir)?;
     if files.is_empty() {
@@ -249,7 +250,7 @@ pub async fn replay_and_archive(
         }
         let mut ok = true;
         for chunk in events.chunks(BATCH_MAX) {
-            match crate::logging::insert_batch(pool, chunk, billing_tz).await {
+            match crate::logging::insert_batch(pool, chunk, billing_tz, fx_stale_max_minutes).await {
                 Ok(_) => replayed += chunk.len() as u64,
                 Err(e) => {
                     // 写库失败：保留该文件，留待下次重放；不中断其余文件。
@@ -300,6 +301,12 @@ mod tests {
             degraded: false,
             usage_raw: None,
             debug_payload: None,
+            // M5 计价字段（测试里恒 None）。
+            cost_cny: None,
+            cost_usd: None,
+            pricing_source: None,
+            price_used: None,
+            fx_snapshot: None,
         }
     }
 

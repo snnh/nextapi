@@ -6,7 +6,7 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.16，约 950 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
+**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.17，约 960 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
 
 M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
 
@@ -78,7 +78,11 @@ src/
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 5 个端点）+ M4 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
-├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细）
+├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细；
+│                    # cost_display 展示币种合计 + cost_na_count 缺失计数）
+├── billing/         # M5 计价引擎（只统计不扣费）：mod（规则匹配/分段命中/成本计算/price_batch 回填）、
+│                    # fx（manual 优先 + auto stale + 逆汇率 + frankfurter/ecb/custom 拉取）、
+│                    # transfer（价格表 XML/JSON 导入导出）
 ├── logging/         # M4 日志核心：LogSink（有界 mpsc + 满则写 WAL）、writer 批量写者（同事务
 │                    # usage_logs UNNEST 多行 + usage_hourly upsert + quota_usage tokens 累加 +
 │                    # last_used_at 批量更新）、wal（JSONL+CRC 滚动/重放/归档）、partition（30 天
@@ -93,8 +97,11 @@ src/
     ├── settings_api.rs # /api/settings + /api/config(+reload)
     ├── logs.rs      # /api/logs 查询（默认当天）/ {request_id} 详情 / cleanup 手动整分区 DROP / export.csv
     ├── stats_api.rs # /api/stats/summary + /api/stats/series
+    ├── pricing.rs   # /api/pricing CRUD + preview + suggest + unpriced + export/import（XML/JSON）
+    ├── fx.rs        # /api/fx 查询/手动 upsert/refresh（代理矩阵）
     └── audit.rs     # /api/audit 分页查询
 migrations/          # 0001_init.sql（M1 表）+ 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
+                     # + 0004_pricing.sql（price_rules）
 contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考）
 tests/                    # 集成测试（后续里程碑）
 web/                      # Vue3 管理后台（M8）

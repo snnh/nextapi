@@ -227,3 +227,37 @@ pub struct HourlyAggRow {
     pub cost_cny: Option<Decimal>,
     pub cost_usd: Option<Decimal>,
 }
+
+/// price_rules 行（M5；PLAN §6。dimension_key 为 dimensions 归一化串，参与唯一键）。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PriceRuleRow {
+    pub id: Uuid,
+    pub upstream_id: Uuid,
+    pub model_id: String,
+    pub unit: String,
+    pub currency: String,
+    pub base_price: Decimal,
+    pub source: String,
+    pub dimensions: Option<serde_json::Value>,
+    pub dimension_key: String,
+    pub segments: Option<serde_json::Value>,
+    pub context_basis: String,
+    pub effective_from: Option<chrono::DateTime<chrono::Utc>>,
+    pub effective_to: Option<chrono::DateTime<chrono::Utc>>,
+    pub priority: i32,
+    pub sort_order: i32,
+    pub enabled: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// fx_rates 行（manual/auto 分行独立存储，主键含 source）。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct FxRateRow {
+    pub currency_from: String,
+    pub currency_to: String,
+    pub rate: Decimal,
+    pub source: String,
+    pub fetched_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}

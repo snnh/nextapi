@@ -48,6 +48,21 @@ pub struct LogEvent {
     pub usage_raw: Option<serde_json::Value>,
     /// {"request":...,"response":...,"truncated":bool}
     pub debug_payload: Option<serde_json::Value>,
+    /// 计价成本（CNY）。M5 计价引擎回填；未计价 = None（不填 0）。旧 WAL 行缺此字段 → None。
+    #[serde(default)]
+    pub cost_cny: Option<Decimal>,
+    /// 计价成本（USD）。M5 计价引擎回填；未计价 = None。
+    #[serde(default)]
+    pub cost_usd: Option<Decimal>,
+    /// 计价来源（'bound' 表示命中了价格规则）。未计价 = None。
+    #[serde(default)]
+    pub pricing_source: Option<String>,
+    /// 命中的价格规则明细（[{rule_id,unit,currency,base_price,matched_segment,price,effective_at}]）。
+    #[serde(default)]
+    pub price_used: Option<serde_json::Value>,
+    /// 本次计价实际用到的汇率快照（[{from,to,rate,source,at,inverse}]）。
+    #[serde(default)]
+    pub fx_snapshot: Option<serde_json::Value>,
 }
 
 pub const BATCH_MAX: usize = 500;
@@ -63,6 +78,8 @@ pub struct LogSink {
     overflows: prometheus_client::metrics::counter::Counter,
     depth: prometheus_client::metrics::gauge::Gauge,
     billing_tz: String,
+    /// 最近成功汇率在超过该分钟数视为过期不可用（M5 计价；writer 直写分支透传）。
+    fx_stale_max_minutes: u64,
 }
 
 impl LogSink {
@@ -73,6 +90,7 @@ impl LogSink {
         overflows: prometheus_client::metrics::counter::Counter,
         depth: prometheus_client::metrics::gauge::Gauge,
         billing_tz: String,
+        fx_stale_max_minutes: u64,
     ) -> Self {
         Self {
             queue: Arc::new(Mutex::new(queue)),
@@ -81,6 +99,7 @@ impl LogSink {
             overflows,
             depth,
             billing_tz,
+            fx_stale_max_minutes,
         }
     }
 
@@ -115,9 +134,10 @@ impl LogSink {
                 let pool = self.pool.clone();
                 let wal = self.wal.clone();
                 let billing_tz = self.billing_tz.clone();
+                let fx_stale_max_minutes = self.fx_stale_max_minutes;
                 tokio::spawn(async move {
                     let batch = [ev];
-                    if let Err(e) = insert_batch(&pool, &batch, &billing_tz).await {
+                    if let Err(e) = insert_batch(&pool, &batch, &billing_tz, fx_stale_max_minutes).await {
                         tracing::warn!("直写日志失败，写 WAL 兜底: {e}");
                         if let Err(we) = wal.append(&batch).await {
                             tracing::error!("直写兜底 WAL 追加失败，数据丢弃: {we}");
@@ -142,7 +162,7 @@ impl LogSink {
 // ---------------------------------------------------------------------------
 
 /// 直接来自 LogEvent 的列（顺序固定，与数组类型一一对应）。
-const LOG_COLS: [&str; 21] = [
+const LOG_COLS: [&str; 26] = [
     "request_id",
     "ts",
     "key_id",
@@ -164,10 +184,15 @@ const LOG_COLS: [&str; 21] = [
     "degraded",
     "usage_raw",
     "debug_payload",
+    "cost_cny",
+    "cost_usd",
+    "pricing_source",
+    "price_used",
+    "fx_snapshot",
 ];
 
 /// 对应列的 Postgres 数组类型（与 LOG_COLS 同序）。
-const LOG_ARRAY_TYPES: [&str; 21] = [
+const LOG_ARRAY_TYPES: [&str; 26] = [
     "text[]",
     "timestamptz[]",
     "uuid[]",
@@ -189,6 +214,11 @@ const LOG_ARRAY_TYPES: [&str; 21] = [
     "bool[]",
     "jsonb[]",
     "jsonb[]",
+    "numeric[]",
+    "numeric[]",
+    "text[]",
+    "jsonb[]",
+    "jsonb[]",
 ];
 
 /// 构造 UNNEST 多行 SELECT 片段：`SELECT * FROM UNNEST($1::t, $2::t, ...)`。纯函数，供测试。
@@ -208,6 +238,25 @@ fn usage_logs_insert_sql() -> String {
     format!("INSERT INTO usage_logs ({cols}) {unnest} ON CONFLICT (request_id, ts) DO NOTHING")
 }
 
+/// usage_hourly 单桶聚合累计（含成本可选累加）。
+#[derive(Default)]
+struct HourlyAcc {
+    requests: i64,
+    errors: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cost_cny: Option<Decimal>,
+    cost_usd: Option<Decimal>,
+}
+
+/// 可选成本累加：仅当 v 非 NULL 才累加（全 NULL 时保持 None，即「全 NULL 保持 NULL」）。
+/// 纯函数，供测试。PLAN v1.10：未定价事件 cost=None 不计入成本聚合。
+fn add_opt_sum(acc: &mut Option<Decimal>, v: Option<Decimal>) {
+    if let Some(x) = v {
+        *acc = Some(acc.unwrap_or(Decimal::ZERO) + x);
+    }
+}
+
 /// 将事件的时间桶到小时（UTC），供 usage_hourly 聚合。纯函数，可测。
 fn hour_bucket(ts: DateTime<Utc>) -> DateTime<Utc> {
     let secs = ts.timestamp().div_euclid(3600) * 3600;
@@ -215,17 +264,30 @@ fn hour_bucket(ts: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// 批量落库（单事务）：usage_logs UNNEST 多行（ON CONFLICT (request_id,ts) DO NOTHING）
-/// + usage_hourly upsert + quota_usage tokens 累加 + last_used_at 批量更新。
+/// + usage_hourly upsert + quota_usage tokens/cost 累加 + last_used_at 批量更新。
 /// 任何一步失败 → 整事务回滚，由调用方写 WAL 兜底。返回实际插入 usage_logs 行数。
-pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) -> ApiResult<u64> {
+///
+/// 步骤 0：克隆事件为可变副本 → `billing::price_batch` 回填计价字段（cost_cny/cost_usd/
+/// pricing_source/price_used/fx_snapshot）。计价失败 = DB 故障级，按整批失败返回 Err，
+/// 由调用方（writer/flush）走既有 WAL 兜底路径，不特殊处理。
+pub async fn insert_batch(
+    pool: &PgPool,
+    events: &[LogEvent],
+    billing_tz: &str,
+    fx_stale_max_minutes: u64,
+) -> ApiResult<u64> {
     if events.is_empty() {
         return Ok(0);
     }
 
+    // 步骤 0：克隆为可变副本并计价回填（M5 计价引擎只统计成本、不阻断明细落库）。
+    let mut priced: Vec<LogEvent> = events.to_vec();
+    crate::billing::price_batch(pool, &mut priced, billing_tz, fx_stale_max_minutes).await?;
+
     let mut tx = pool.begin().await?;
 
     // ---- 1) usage_logs UNNEST 多行 INSERT ----
-    let n = events.len();
+    let n = priced.len();
     let mut request_ids = Vec::with_capacity(n);
     let mut ts_col = Vec::with_capacity(n);
     let mut key_ids = Vec::with_capacity(n);
@@ -247,8 +309,13 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
     let mut degraded = Vec::with_capacity(n);
     let mut usage_raw = Vec::with_capacity(n);
     let mut debug_payload = Vec::with_capacity(n);
+    let mut cost_cny = Vec::with_capacity(n);
+    let mut cost_usd = Vec::with_capacity(n);
+    let mut pricing_source = Vec::with_capacity(n);
+    let mut price_used = Vec::with_capacity(n);
+    let mut fx_snapshot = Vec::with_capacity(n);
 
-    for ev in events {
+    for ev in &priced {
         request_ids.push(ev.request_id.clone());
         ts_col.push(ev.ts);
         key_ids.push(ev.key_id);
@@ -270,6 +337,11 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
         degraded.push(ev.degraded);
         usage_raw.push(ev.usage_raw.clone());
         debug_payload.push(ev.debug_payload.clone());
+        cost_cny.push(ev.cost_cny);
+        cost_usd.push(ev.cost_usd);
+        pricing_source.push(ev.pricing_source.clone());
+        price_used.push(ev.price_used.clone());
+        fx_snapshot.push(ev.fx_snapshot.clone());
     }
 
     let inserted = sqlx::query(&usage_logs_insert_sql())
@@ -294,24 +366,31 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
         .bind(&degraded)
         .bind(&usage_raw)
         .bind(&debug_payload)
+        .bind(&cost_cny)
+        .bind(&cost_usd)
+        .bind(&pricing_source)
+        .bind(&price_used)
+        .bind(&fx_snapshot)
         .execute(&mut *tx)
         .await?
         .rows_affected();
 
     // ---- 2) usage_hourly 聚合 upsert（小时桶 + model 维度）----
-    // 聚合项: (requests, errors, prompt_tokens, completion_tokens)
-    let mut hourly: HashMap<(DateTime<Utc>, String), (i64, i64, i64, i64)> = HashMap::new();
-    for ev in events {
+    // 聚合项: (requests, errors, prompt_tokens, completion_tokens, cost_cny, cost_usd)
+    let mut hourly: HashMap<(DateTime<Utc>, String), HourlyAcc> = HashMap::new();
+    for ev in &priced {
         let bucket = hour_bucket(ev.ts);
-        let agg = hourly.entry((bucket, ev.model.clone())).or_insert((0, 0, 0, 0));
-        agg.0 += 1; // requests
+        let agg = hourly.entry((bucket, ev.model.clone())).or_default();
+        agg.requests += 1;
         if ev.status >= 400 {
-            agg.1 += 1; // errors（≥400 视为错误）
+            agg.errors += 1; // errors（≥400 视为错误）
         }
-        agg.2 += ev.prompt_tokens.unwrap_or(0);
-        agg.3 += ev.completion_tokens.unwrap_or(0);
+        agg.prompt_tokens += ev.prompt_tokens.unwrap_or(0);
+        agg.completion_tokens += ev.completion_tokens.unwrap_or(0);
+        add_opt_sum(&mut agg.cost_cny, ev.cost_cny);
+        add_opt_sum(&mut agg.cost_usd, ev.cost_usd);
     }
-    for ((hour, model), (requests, errors, pr_tok, comp_tok)) in hourly {
+    for ((hour, model), agg) in hourly {
         sqlx::query(
             "INSERT INTO usage_hourly \
              (hour, model, requests, errors, prompt_tokens, completion_tokens, cost_cny, cost_usd) \
@@ -321,17 +400,19 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
                errors = usage_hourly.errors + EXCLUDED.errors, \
                prompt_tokens = usage_hourly.prompt_tokens + EXCLUDED.prompt_tokens, \
                completion_tokens = usage_hourly.completion_tokens + EXCLUDED.completion_tokens, \
-               cost_cny = COALESCE(usage_hourly.cost_cny, 0) + COALESCE(EXCLUDED.cost_cny, 0), \
-               cost_usd = COALESCE(usage_hourly.cost_usd, 0) + COALESCE(EXCLUDED.cost_usd, 0)",
+               cost_cny = CASE WHEN EXCLUDED.cost_cny IS NULL THEN usage_hourly.cost_cny \
+                               ELSE COALESCE(usage_hourly.cost_cny, 0) + EXCLUDED.cost_cny END, \
+               cost_usd = CASE WHEN EXCLUDED.cost_usd IS NULL THEN usage_hourly.cost_usd \
+                               ELSE COALESCE(usage_hourly.cost_usd, 0) + EXCLUDED.cost_usd END",
         )
         .bind(hour)
         .bind(&model)
-        .bind(requests)
-        .bind(errors)
-        .bind(pr_tok)
-        .bind(comp_tok)
-        .bind(None::<Decimal>)
-        .bind(None::<Decimal>)
+        .bind(agg.requests)
+        .bind(agg.errors)
+        .bind(agg.prompt_tokens)
+        .bind(agg.completion_tokens)
+        .bind(agg.cost_cny)
+        .bind(agg.cost_usd)
         .execute(&mut *tx)
         .await?;
     }
@@ -339,7 +420,7 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
     // ---- 3) token 配额累加（仅 quota_unit='tokens'）----
     let distinct_keys: Vec<Uuid> = {
         let mut seen = std::collections::HashSet::new();
-        events
+        priced
             .iter()
             .filter_map(|e| e.key_id)
             .filter(|k| seen.insert(*k))
@@ -362,7 +443,7 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
     // 按 (key_id, window, period_start) 聚合 tokens 用量（仅 quota_unit='tokens' 累加）。
     // 若 key 未配置 quota_window，按 window_start 对未知 window 的语义退回 'total'（epoch 起点）。
     let mut quota_tokens: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
-    for ev in events {
+    for ev in &priced {
         let Some(key_id) = ev.key_id else { continue };
         let Some((unit, window)) = key_quota.get(&key_id) else { continue };
         if unit.as_deref() != Some("tokens") {
@@ -396,9 +477,67 @@ pub async fn insert_batch(pool: &PgPool, events: &[LogEvent], billing_tz: &str) 
         .await?;
     }
 
+    // ---- 3b) 成本配额累加（仅 quota_unit='cost_cny'/'cost_usd'）----
+    // PLAN v1.10：未定价事件 cost=None → 不计入成本配额（但 token 配额照常，见上）。
+    let mut quota_cost_cny: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
+    let mut quota_cost_usd: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
+    for ev in &priced {
+        let Some(key_id) = ev.key_id else { continue };
+        let Some((unit, window)) = key_quota.get(&key_id) else { continue };
+        let window = window.as_deref().unwrap_or("total");
+        let period_start = window_start(window, billing_tz, ev.ts);
+        match unit.as_deref() {
+            Some("cost_cny") => {
+                if let Some(c) = ev.cost_cny {
+                    let entry = quota_cost_cny
+                        .entry((key_id, window.to_string(), period_start))
+                        .or_insert(Decimal::ZERO);
+                    *entry += c;
+                }
+            }
+            Some("cost_usd") => {
+                if let Some(c) = ev.cost_usd {
+                    let entry = quota_cost_usd
+                        .entry((key_id, window.to_string(), period_start))
+                        .or_insert(Decimal::ZERO);
+                    *entry += c;
+                }
+            }
+            _ => {}
+        }
+    }
+    for ((key_id, window, period_start), value) in quota_cost_cny {
+        sqlx::query(
+            "INSERT INTO quota_usage (key_id, unit, window, period_start, value, updated_at) \
+             VALUES ($1,'cost_cny',$2,$3,$4, now()) \
+             ON CONFLICT (key_id, unit, window, period_start) DO UPDATE \
+             SET value = quota_usage.value + EXCLUDED.value, updated_at = now()",
+        )
+        .bind(key_id)
+        .bind(&window)
+        .bind(period_start)
+        .bind(value)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for ((key_id, window, period_start), value) in quota_cost_usd {
+        sqlx::query(
+            "INSERT INTO quota_usage (key_id, unit, window, period_start, value, updated_at) \
+             VALUES ($1,'cost_usd',$2,$3,$4, now()) \
+             ON CONFLICT (key_id, unit, window, period_start) DO UPDATE \
+             SET value = quota_usage.value + EXCLUDED.value, updated_at = now()",
+        )
+        .bind(key_id)
+        .bind(&window)
+        .bind(period_start)
+        .bind(value)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     // ---- 4) last_used_at 批量更新（批内按 key 取 max ts）----
     let mut last_used: HashMap<Uuid, DateTime<Utc>> = HashMap::new();
-    for ev in events {
+    for ev in &priced {
         if let Some(key_id) = ev.key_id {
             let e = last_used.entry(key_id).or_insert(ev.ts);
             if ev.ts > *e {
@@ -446,8 +585,12 @@ mod tests {
         assert!(sql.starts_with("INSERT INTO usage_logs ("));
         assert!(sql.contains("$1::text[]"));
         assert!(sql.contains("$21::jsonb[]"));
+        assert!(sql.contains("$22::numeric[]"));
+        assert!(sql.contains("$26::jsonb[]"));
         assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
         assert!(sql.contains("usage_logs (request_id, ts, key_id, model,"));
+        // M5：新增 5 个计价列进入 INSERT 列清单
+        assert!(sql.contains("cost_cny, cost_usd, pricing_source, price_used, fx_snapshot"));
     }
 
     #[test]
@@ -463,5 +606,68 @@ mod tests {
         // 这里无法真正连接 DB，仅验证空批次短路逻辑分支逻辑。
         assert!(BATCH_MAX > 0);
         assert!(DEBUG_MAX_BYTES == 64 * 1024);
+    }
+
+    #[test]
+    fn old_wal_line_without_cost_fields_deserializes() {
+        // 契约 §10：旧 WAL 行（M4）不含 M5 的 5 个新字段，靠 #[serde(default)] 兼容 → 全 None。
+        let json = r#"{
+            "request_id":"r1","ts":"2024-01-01T00:00:00Z","key_id":null,
+            "model":"gpt-4","upstream_id":null,"protocol_in":"openai_chat","protocol_out":"openai_chat",
+            "convert_mode":"passthrough","stream":false,"status":200,"error":null,
+            "prompt_tokens":10,"completion_tokens":5,"cache_write_tokens":null,"cache_read_tokens":null,
+            "latency_ms":42,"retry_count":0,"ttfb_ms":null,"degraded":false,
+            "usage_raw":null,"debug_payload":null
+        }"#;
+        let ev: LogEvent = serde_json::from_str(json).expect("旧格式应可反序列化");
+        assert_eq!(ev.cost_cny, None);
+        assert_eq!(ev.cost_usd, None);
+        assert_eq!(ev.pricing_source, None);
+        assert_eq!(ev.price_used, None);
+        assert_eq!(ev.fx_snapshot, None);
+    }
+
+    #[test]
+    fn new_wal_line_with_cost_fields_roundtrip() {
+        // 新格式：5 个计价字段正常序列化/反序列化。
+        let mut ev = serde_json::from_str::<LogEvent>(r#"{
+            "request_id":"r2","ts":"2024-01-01T00:00:00Z","key_id":null,
+            "model":"deepseek-chat","upstream_id":null,"protocol_in":"openai_chat","protocol_out":"openai_chat",
+            "convert_mode":"passthrough","stream":false,"status":200,"error":null,
+            "prompt_tokens":10,"completion_tokens":5,"cache_write_tokens":null,"cache_read_tokens":null,
+            "latency_ms":42,"retry_count":0,"ttfb_ms":null,"degraded":false,
+            "usage_raw":null,"debug_payload":null,
+            "cost_cny":"0.001028","cost_usd":null,"pricing_source":"bound",
+            "price_used":[{"unit":"token_in"}],"fx_snapshot":[]
+        }"#)
+        .expect("新格式应可反序列化");
+        assert_eq!(ev.cost_cny, Some(Decimal::new(1028, 6)));
+        assert_eq!(ev.pricing_source.as_deref(), Some("bound"));
+        assert!(ev.price_used.as_ref().is_some());
+        assert!(ev.fx_snapshot.as_ref().is_some());
+        // 序列化再反序列化（WAL 行往返）。
+        let line = serde_json::to_string(&ev).expect("应可序列化");
+        let back: LogEvent = serde_json::from_str(&line).expect("应可反序列化");
+        assert_eq!(back.cost_cny, ev.cost_cny);
+        assert_eq!(back.pricing_source, ev.pricing_source);
+    }
+
+    #[test]
+    fn add_opt_sum_accumulates_only_non_null() {
+        // 契约 §5：成本累加仅当 EXCLUDED 非 NULL；全 NULL 时保持 None。
+        let mut acc: Option<Decimal> = None;
+        add_opt_sum(&mut acc, Some(Decimal::from(2)));
+        add_opt_sum(&mut acc, None);
+        add_opt_sum(&mut acc, Some(Decimal::from(3)));
+        assert_eq!(acc, Some(Decimal::from(5)));
+        // 全 NULL → None
+        let mut acc2: Option<Decimal> = None;
+        add_opt_sum(&mut acc2, None);
+        add_opt_sum(&mut acc2, None);
+        assert_eq!(acc2, None);
+        // 单值从 None 起步
+        let mut acc3: Option<Decimal> = None;
+        add_opt_sum(&mut acc3, Some(Decimal::from(1)));
+        assert_eq!(acc3, Some(Decimal::from(1)));
     }
 }
