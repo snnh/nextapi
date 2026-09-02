@@ -23,6 +23,7 @@ mod logging;
 mod media;
 mod metrics;
 mod protocol;
+mod presets;
 mod routing;
 mod seed;
 mod settings;

@@ -6,7 +6,7 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎、M6 图片通道（视频占位）已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.18，约 970 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
+**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎、M6 图片通道（视频占位）、M7 供应商预设已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.18，约 970 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
 
 M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
 
@@ -79,6 +79,7 @@ src/
 ├── media/           # M6 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
+├── presets.rs       # M7 供应商预设（8 个内置预设 + 一键接入 provision + media_base_url 处理）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/images/* + 视频 501 占位）
 │                    # + M4 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集

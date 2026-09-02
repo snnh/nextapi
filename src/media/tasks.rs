@@ -244,7 +244,7 @@ async fn process_task(
     // 查询上游任务状态（失败 → warn 后留待下轮，不改动任务状态）。
     let st = match media::fetch_task_status(
         &client,
-        &up.base_url,
+        crate::presets::media_base_url(up),
         provider_task_id,
         up.api_key_plain.as_deref(),
         up.timeout_ms,

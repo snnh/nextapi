@@ -1301,7 +1301,11 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
         let (path, mut req_body) = media::build_image_request(image_api, &up_model, &ir);
         // 请求体 add/set 覆盖（不重写 model——Gemini 的 model 在 URL 中，OpenAI 已内建于 body）
         upstream::rewrite_body(&mut req_body, None, overrides.as_ref());
-        let url = format!("{}{}", upstream.base_url.trim_end_matches('/'), path);
+        let url = format!(
+            "{}{}",
+            crate::presets::media_base_url(upstream).trim_end_matches('/'),
+            path
+        );
 
         // 请求头：content-type + 鉴权 + 异步头 + 覆盖
         let mut req_headers = reqwest::header::HeaderMap::new();

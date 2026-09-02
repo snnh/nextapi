@@ -9,6 +9,7 @@ pub mod audit;
 pub mod fx;
 pub mod keys;
 pub mod logs;
+pub mod presets;
 pub mod pricing;
 pub mod proxies;
 pub mod routes;
@@ -29,4 +30,5 @@ pub fn router() -> Router<Arc<AppState>> {
         .nest("/stats", stats_api::router())
         .nest("/pricing", pricing::router())
         .nest("/fx", fx::router())
+        .nest("/presets", presets::router())
 }
