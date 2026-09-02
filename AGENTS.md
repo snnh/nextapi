@@ -4,22 +4,15 @@
 
 ## 项目概述
 
-**NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
+**NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 管理后台 API，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎、M6 图片通道（视频占位）、M7 供应商预设已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.18，约 970 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
-
-M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
-
-M2 已交付：协议层 `src/protocol/`——IR（OpenAI Chat 为枢轴 + ext 扩展字段）+ 四协议适配器（chat/responses/anthropic/gemini，非流式 + SSE 流式双向）、错误体翻译、SSE 行解析器、降级收集（`ConvCtx` → `X-NextAPI-Degraded`）、转换矩阵文档（`docs/protocol-matrix.md`）。转换逻辑为纯函数。
-
-M3 已交付：网关核心——网关 Key 鉴权（sk-nx-，SHA-256 哈希 + 前缀）、RPM 滑窗/TPM 预检/用量上限（quota_usage + 判定缓存）、模型白名单；渠道化路由（通配匹配、优先级分组 + 加权随机、熔断自动禁用 + 冷却 + 半开探活、lock_upstream）；透传（模型名重写、鉴权头替换、请求头/体 add/set 嵌套覆盖、SSE 逐行改写 model/id）与转换决策（per-upstream 协议优先级、转换失败回退透传）；SSE 首字节边界语义；reqwest 按代理/直连分池 + no_proxy 并集直连；管理 API `/api/keys`、`/api/upstreams`（含真实连通性测试）、`/api/model-routes`（批量替换）；实体快照缓存 `src/cache.rs`（写路径失效刷新）。usage 旁路记账在 M4 接入。
+仓库为 Rust + axum 工程，**后端功能已全部完成**（2026-09）：工程骨架（配置热加载/设置优先级/种子）、协议层（4 协议互转）、网关核心（鉴权/限流/路由/熔断/透传与转换决策）、日志统计（分区/WAL/聚合）、计价引擎（分段计价/双币种/导入导出）、图片通道（4 种上游形状适配 + 异步任务计费闭环）、供应商预设（8 个内置 + 一键接入）。管理后台前端（web/）尚未开始。
 
 其他文件说明：
 
 - `.owc/memory.md` — AI 代理的会话记忆（非项目文档）。
 - `.owc/venv/` — AI 代理工具链的 Python venv，与项目无关，勿动。
 - 根目录有一个 0 字节的乱码文件名（`:\x1a@=...`），疑似误建，与本项目无关。
-- 尚未 git init。
 
 ### 明确不做（硬约束）
 
@@ -29,14 +22,14 @@ M3 已交付：网关核心——网关 Key 鉴权（sk-nx-，SHA-256 哈希 + �
 - v1 不做 Embeddings / Rerank / Audio / Moderation / Fine-tuning 端点；
 - 价格只按「供应商 + 模型 ID」绑定存储，未设价格即不计价（记 NULL + 提示）。
 
-## 技术栈（规划）
+## 技术栈
 
 | 层 | 选型 |
 |----|------|
 | 后端语言 | Rust (stable) + tokio (multi-thread) |
 | Web 框架 | axum 0.8 |
 | HTTP 客户端 | reqwest (rustls)，按代理/直连分池 |
-| 数据库 | PostgreSQL 15+，sqlx（编译期校验，rustls）|
+| 数据库 | PostgreSQL 15+，sqlx（运行时校验，rustls）|
 | 配置 | YAML（serde_yaml）+ ArcSwap 热加载 |
 | 精度 | 计价全程 `rust_decimal`（DB `NUMERIC(20,10)`）|
 | 观测 | tracing；Prometheus `/metrics` |
@@ -48,16 +41,14 @@ M3 已交付：网关核心——网关 Key 鉴权（sk-nx-，SHA-256 哈希 + �
 ## 构建与测试命令
 
 - 构建：`cargo build`；检查：`cargo check`；运行：`cargo run`（需要 PostgreSQL：本机 PG 或 `docker-compose up postgres`）
-- 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试规划在 `tests/`，需 docker-compose 起 PG + mock 上游）
-- 前端（M8 才存在）：`cd web && npm install && npm run build`（产物经 rust-embed 嵌入）
+- 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试在 `tests/`，需 docker-compose 起 PG + mock 上游）
+- 前端（web/ 尚未存在时跳过）：`cd web && npm install && npm run build`（产物经 rust-embed 嵌入）
 - 部署：`docker-compose up -d`（`nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`）
-- M9 加入 `cargo audit` / `cargo deny` 依赖审计
+- 发布前加入 `cargo audit` / `cargo deny` 依赖审计
 
 **注意**：所有 SQL 用 sqlx **运行时校验**（`sqlx::query`，禁用 `query!` 宏），保证无数据库环境也能 `cargo check`。沙盒无 docker 守护进程时，DB 相关逻辑只能编译验证，无法集成测试。
 
 ## 代码组织
-
-M1 实际结构（PLAN.md §14 的后续模块将在对应里程碑补充）：
 
 ```
 src/
@@ -76,19 +67,19 @@ src/
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
-├── media/           # M6 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
+├── media/           # 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
-├── presets.rs       # M7 供应商预设（8 个内置预设 + 一键接入 provision + media_base_url 处理）
+├── presets.rs       # 供应商预设（8 个内置预设 + 一键接入 provision + media_base_url 处理）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/images/* + 视频 501 占位）
-│                    # + M4 打点（tee 收集/失败记账）
+│                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
 ├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细；
 │                    # cost_display 展示币种合计 + cost_na_count 缺失计数）
-├── billing/         # M5 计价引擎（只统计不扣费）：mod（规则匹配/分段命中/成本计算/price_batch 回填）、
+├── billing/         # 计价引擎（只统计不扣费）：mod（规则匹配/分段命中/成本计算/price_batch 回填）、
 │                    # fx（manual 优先 + auto stale + 逆汇率 + frankfurter/ecb/custom 拉取）、
 │                    # transfer（价格表 XML/JSON 导入导出）
-├── logging/         # M4 日志核心：LogSink（有界 mpsc + 满则写 WAL）、writer 批量写者（同事务
+├── logging/         # 日志核心：LogSink（有界 mpsc + 满则写 WAL）、writer 批量写者（同事务
 │                    # usage_logs UNNEST 多行 + usage_hourly upsert + quota_usage tokens 累加 +
 │                    # last_used_at 批量更新）、wal（JSONL+CRC 滚动/重放/归档）、partition（30 天
 │                    # epoch 对齐分区 ensure/list/drop_covered）、redact（debug 脱敏 64KB 截断）
@@ -98,18 +89,19 @@ src/
     ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
     ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持）
     ├── routes.rs    # /api/model-routes 批量替换
-    ├── proxies.rs   # /api/proxies CRUD（密码加密、掩码回传=保持原值、test 桩 M3 启用）
+    ├── proxies.rs   # /api/proxies CRUD（密码加密、掩码回传=保持原值、连通性测试）
     ├── settings_api.rs # /api/settings + /api/config(+reload)
     ├── logs.rs      # /api/logs 查询（默认当天）/ {request_id} 详情 / cleanup 手动整分区 DROP / export.csv
     ├── stats_api.rs # /api/stats/summary + /api/stats/series
     ├── pricing.rs   # /api/pricing CRUD + preview + suggest + unpriced + export/import（XML/JSON）
     ├── fx.rs        # /api/fx 查询/手动 upsert/refresh（代理矩阵）
+    ├── presets.rs   # /api/presets 列表 + /{name}/provision 一键接入
     └── audit.rs     # /api/audit 分页查询
-migrations/          # 0001_init.sql（M1 表）+ 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
+migrations/          # 0001_init.sql + 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
                      # + 0004_pricing.sql（price_rules）+ 0005_media.sql（media_tasks）
-contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考）
-tests/                    # 集成测试（后续里程碑）
-web/                      # Vue3 管理后台（M8）
+contracts/           # 实现契约（多子代理并行时的冻结接口；仅本地参考，不进版本库）
+tests/               # 集成测试
+web/                 # Vue3 管理后台（尚未开始）
 ```
 
 ## 核心架构约定（开发时必须遵守）
@@ -121,18 +113,12 @@ web/                      # Vue3 管理后台（M8）
 - **计价**：`cost = matched_price × quantity`；分段有序第一命中（时间 ∧ 上下文长度条件），无命中回落 `base_price`；CNY/USD 双币种快照 + `price_used`/`fx_snapshot` 入账；展示统一舍入 6 位小数；视频秒数向上取整至少 1 秒。
 - **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。
 
-## 开发流程与里程碑
+## 工作约定
 
-M0 计划确认 → M1 工程骨架 → M2 协议层 → M3 网关核心 → M4 日志统计 → M5 计价引擎 → M6 图片（视频仅占位 501，v1.18 起）→ M7 供应商预设 → M8 管理后台 → M9 测试与发布。每阶段交付物/验收标准见 PLAN.md §9。
+- 文档与注释使用**中文**。
+- 实现与设计文档冲突时先确认是改文档还是改实现，不擅自扩散改动范围。
 
-**工作约定**：
-
-- 文档与注释使用**中文**（PLAN.md 全部为中文）。
-- PLAN.md 采用版本化变更说明（v1.1 … v1.15），修改设计决策时按此惯例追加版本变更段落。
-- 风险表（§13）中 License 默认 Apache-2.0 但仍标注"待最终确认"，发布前需关闭。
-- 所有设计细节（字段、API 路径、SQL schema、默认值）以 PLAN.md 为准；实现与文档冲突时先确认是改文档还是改实现。
-
-## 测试策略（PLAN.md §10 摘要）
+## 测试约定
 
 - **单元测试**：协议转换（每对协议 × 文本/图片/工具/流式）、透传/转换决策、计价引擎（分段边界、双币种换算、维度回落）、限流/熔断状态机、quota_usage 幂等。
 - **集成测试**：docker-compose 起 PG，mock 上游（wiremock 风格）验证透传/转换/记账；日志分区/手动清理/WAL 重放；配置热加载与 UI/YAML/env 优先级；代理矩阵。
