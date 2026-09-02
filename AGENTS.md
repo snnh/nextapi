@@ -6,7 +6,7 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.17，约 960 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
+**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.18，约 970 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
 
 M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
 
@@ -118,7 +118,7 @@ web/                      # Vue3 管理后台（M8）
 
 ## 开发流程与里程碑
 
-M0 计划确认 → M1 工程骨架 → M2 协议层 → M3 网关核心 → M4 日志统计 → M5 计价引擎 → M6 图片/视频 → M7 供应商预设 → M8 管理后台 → M9 测试与发布。每阶段交付物/验收标准见 PLAN.md §9。
+M0 计划确认 → M1 工程骨架 → M2 协议层 → M3 网关核心 → M4 日志统计 → M5 计价引擎 → M6 图片（视频仅占位 501，v1.18 起）→ M7 供应商预设 → M8 管理后台 → M9 测试与发布。每阶段交付物/验收标准见 PLAN.md §9。
 
 **工作约定**：
 
