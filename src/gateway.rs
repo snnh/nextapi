@@ -26,6 +26,7 @@ use crate::logging::LogEvent;
 use crate::entities::{ApiKeyRow, ModelRouteRow, UpstreamRow};
 use crate::error::ApiError;
 use crate::limit;
+use crate::media::{self, ImageApi, ImageOutcome};
 use crate::metrics::RequestLabels;
 use crate::protocol;
 use crate::protocol::ir::Protocol;
@@ -326,6 +327,32 @@ fn hash_key(key: &str) -> String {
     let mut h = Sha256::new();
     h.update(key.as_bytes());
     format!("{:x}", h.finalize())
+}
+
+/// 网关 Key 鉴权（媒体端点与主链路复用；契约 m6 §4）。
+///
+/// 以 OpenAI Chat 头序提取网关 Key → sha256 → 内存快照命中 → is_usable()。
+/// 任一环节失败返回 401（OpenAI 协议错误体）。request_id 在函数内自产（契约签名
+/// 冻结为 (state, headers)；主链路/媒体端点各自已有独立 request_id，鉴权失败的
+/// 401 仅在 X-Request-Id 头中出现，无需与请求日志一致）。
+///
+/// 媒体端点（images/videos）统一走此函数；run_gateway 步骤 2 亦改用它，行为不变。
+pub(crate) fn authenticate_gateway_key(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<ApiKeyRow, Response> {
+    let request_id = Uuid::new_v4().to_string();
+    let Some(raw_key) = extract_api_key(headers, Entry::OpenaiChat) else {
+        return Err(error_resp(Protocol::OpenaiChat, &request_id, 401, "未授权"));
+    };
+    let snap = state.cache.snapshot();
+    let Some(key) = snap.api_keys.get(&hash_key(&raw_key)).cloned() else {
+        return Err(error_resp(Protocol::OpenaiChat, &request_id, 401, "未授权"));
+    };
+    if !key.is_usable() {
+        return Err(error_resp(Protocol::OpenaiChat, &request_id, 401, "未授权"));
+    }
+    Ok(key)
 }
 
 /// 解析 Gemini action 路径：`model:generateContent` / `model:streamGenerateContent`。
@@ -693,17 +720,12 @@ async fn run_gateway(
     let start = Instant::now();
     let entry_protocol = entry.protocol();
 
-    // 2. Key 鉴权
-    let Some(raw_key) = extract_api_key(&headers, entry) else {
-        return error_resp(entry_protocol, &request_id, 401, "未授权");
+    // 2. Key 鉴权（复用 authenticate_gateway_key；媒体端点亦走此函数）
+    let key = match authenticate_gateway_key(&state, &headers) {
+        Ok(k) => k,
+        Err(resp) => return resp,
     };
     let snap = state.cache.snapshot();
-    let Some(key) = snap.api_keys.get(&hash_key(&raw_key)).cloned() else {
-        return error_resp(entry_protocol, &request_id, 401, "未授权");
-    };
-    if !key.is_usable() {
-        return error_resp(entry_protocol, &request_id, 401, "未授权");
-    }
 
     // 鉴权通过后创建记账事件模板（contract §12.1；鉴权前的 401 不记账，避免刷库）。
     // model/stream/params 在解析后填充；上游相关字段（upstream_id/protocol_out/convert_mode）按候选填充。
@@ -735,6 +757,12 @@ async fn run_gateway(
         pricing_source: None,
         price_used: None,
         fx_snapshot: None,
+        // M6 媒体字段：网关主链路（chat/responses/messages/gemini）恒 None，图片端点由 B 填充。
+        images: None,
+        image_size: None,
+        video_seconds: None,
+        video_resolution: None,
+        video_task_type: None,
     };
     let debug_active = key.debug_active();
     // params_meta 在 body 解析后计算（早退路径不引用，故延迟初始化）。
@@ -1089,6 +1117,410 @@ async fn gemini(State(state): State<Arc<AppState>>, Path(action): Path<String>, 
     run_gateway(state, Entry::Gemini, headers, body, Some(action)).await
 }
 
+// ---------------------------------------------------------------------------
+// 图片通道（契约 m6-media §4）：图片生成 + 视频占位 + 图片任务查询转发
+// ---------------------------------------------------------------------------
+
+/// 图片 API 形状 → 上游协议名（用于 protocol_out / 日志）。
+fn image_api_name(api: ImageApi) -> &'static str {
+    match api {
+        ImageApi::Openai => "images_openai",
+        ImageApi::Gemini => "images_gemini",
+        ImageApi::DashscopeSync => "images_dashscope_sync",
+        ImageApi::DashscopeAsync => "images_dashscope_async",
+    }
+}
+
+/// 图片请求的指标标签：protocol 维度用 "openai_image"（无 token 语义，不打 gateway_tokens）。
+fn image_metrics_labels(key: &ApiKeyRow, model: &str, upstream: &str) -> RequestLabels {
+    RequestLabels {
+        key_prefix: key.prefix.clone(),
+        model: model.to_string(),
+        upstream: upstream.to_string(),
+        protocol: "openai_image".to_string(),
+    }
+}
+
+/// POST /v1/images/generations：图片生成入口（统一 OpenAI 语义，契约 m6 §4）。
+///
+/// 与 run_gateway 同款鉴权/限流/候选循环/打点，但差异点：
+/// - 无 token、无流式（恒非流式）；
+/// - 候选须 `media::image_api_of(up).is_some()`；
+/// - tpm_precheck 跳过（图片无 max_tokens 语义）；
+/// - 响应/记账含媒体维度（images/image_size）。
+async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let start = Instant::now();
+
+    // 1. Key 鉴权（媒体端点走网关 Key，同主链路）
+    let key = match authenticate_gateway_key(&state, &headers) {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+    let snap = state.cache.snapshot();
+    let debug_active = key.debug_active();
+
+    // 2. 记账事件模板（鉴权通过后建立；媒体字段在成功路径回填）
+    let mut tmpl = LogEvent {
+        request_id: request_id.clone(),
+        ts: chrono::Utc::now(),
+        key_id: Some(key.id),
+        model: String::new(),
+        upstream_id: None,
+        protocol_in: "openai_image".to_string(),
+        protocol_out: String::new(),
+        convert_mode: "none".into(),
+        stream: false,
+        status: 0,
+        error: None,
+        prompt_tokens: None,
+        completion_tokens: None,
+        cache_write_tokens: None,
+        cache_read_tokens: None,
+        latency_ms: None,
+        retry_count: 0,
+        ttfb_ms: None,
+        degraded: false,
+        usage_raw: None,
+        debug_payload: None,
+        cost_cny: None,
+        cost_usd: None,
+        pricing_source: None,
+        price_used: None,
+        fx_snapshot: None,
+        images: None,
+        image_size: None,
+        video_seconds: None,
+        video_resolution: None,
+        video_task_type: None,
+    };
+    let mut debug_req: Option<(serde_json::Value, bool)> = None;
+
+    // 预取热配置（避免跨 await 持有 ArcSwap guard）
+    let gateway_cfg = state.hot.load().gateway.clone();
+    let default_proxy_id = state.hot.load().proxy.default_proxy_id.clone();
+
+    // 3. body 解析 + 统一图片请求 + 模型提取
+    let body_value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            log_fail(&state, &tmpl, start, 400, "请求体不是合法 JSON", 0);
+            return error_resp(Protocol::OpenaiChat, &request_id, 400, "请求体不是合法 JSON");
+        }
+    };
+    let ir = match media::parse_image_request(&body_value) {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = e.to_string();
+            log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
+            return error_resp(Protocol::OpenaiChat, &request_id, e.status().as_u16(), &msg);
+        }
+    };
+    let model = match body_value["model"].as_str() {
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => {
+            log_fail(&state, &tmpl, start, 400, "model 缺失", 0);
+            return error_resp(Protocol::OpenaiChat, &request_id, 400, "model 缺失");
+        }
+    };
+    tmpl.model = model.clone();
+    if debug_active {
+        debug_req = Some(crate::logging::redact::redact_and_truncate(&body, crate::logging::DEBUG_MAX_BYTES));
+    }
+
+    // 4. 模型白名单 + RPM + 配额（跳过 tpm_precheck——图片无 max_tokens 语义）
+    if !key.model_allowed(&model) {
+        log_fail(&state, &tmpl, start, 403, "禁止访问", 0);
+        return error_resp(Protocol::OpenaiChat, &request_id, 403, "禁止访问");
+    }
+    if let Err(e) = state.limiter.check_rpm(&key, gateway_cfg.default_rate_limit_rpm) {
+        let msg = e.to_string();
+        log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
+        return error_resp(Protocol::OpenaiChat, &request_id, e.status().as_u16(), &msg);
+    }
+    {
+        let exceeded = match state.quota_cache.get(key.id, gateway_cfg.quota_check_cache_secs) {
+            Some(v) => v,
+            None => {
+                let v = matches!(
+                    limit::check_quota(&state.db, &key, &gateway_cfg.billing_timezone, &gateway_cfg.quota_exceed_action).await,
+                    Err(ApiError::RateLimited)
+                );
+                state.quota_cache.put(key.id, v);
+                v
+            }
+        };
+        if exceeded {
+            log_fail(&state, &tmpl, start, 429, "请求过于频繁，请稍后再试", 0);
+            return error_resp(Protocol::OpenaiChat, &request_id, 429, "请求过于频繁，请稍后再试");
+        }
+    }
+
+    // 5. 路由匹配 + 候选收集（候选须具备 image_api 形状，否则跳过）
+    let matched = routing::match_routes(&model, &snap.routes);
+    if matched.is_empty() {
+        let lbl = image_metrics_labels(&key, &model, "");
+        log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
+        return record(&state.metrics, &lbl, start, true, error_resp(Protocol::OpenaiChat, &request_id, 404, "模型未配置路由"));
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for route in matched {
+        if let Some(up) = snap.upstreams.get(&route.upstream_id).cloned() {
+            if up.enabled && media::image_api_of(&up).is_some() && state.breaker.allow(&up) {
+                candidates.push(Candidate { route, upstream: up });
+            }
+        }
+    }
+    if candidates.is_empty() {
+        let lbl = image_metrics_labels(&key, &model, "");
+        log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
+        return record(&state.metrics, &lbl, start, true, error_resp(Protocol::OpenaiChat, &request_id, 503, "无可用上游"));
+    }
+    let ordered = order_candidates(candidates);
+
+    // 6-7. 执行/重试/故障转移 → 响应（图片恒非流式）
+    let mut last_err: Option<UpstreamError> = None;
+    let mut last_upstream: Option<String> = None;
+    let mut last_idx: u32 = 0;
+    let mut failed_candidates: u32 = 0;
+    let mut last_protocol_out: Option<String> = None;
+    let mut last_convert_mode: Option<String> = None;
+    'outer: for cand in &ordered {
+        let route = &cand.route;
+        let upstream = &cand.upstream;
+        // 候选收集时已核实 image_api_of 为 Some，此处再取避免 unwrap
+        let Some(image_api) = media::image_api_of(upstream) else { continue 'outer; };
+        let up_model = route
+            .override_model
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| model.clone());
+        let overrides = upstream.overrides();
+
+        // 构建上游请求：url_path + body（model 已用 override_model 替换）
+        let (path, mut req_body) = media::build_image_request(image_api, &up_model, &ir);
+        // 请求体 add/set 覆盖（不重写 model——Gemini 的 model 在 URL 中，OpenAI 已内建于 body）
+        upstream::rewrite_body(&mut req_body, None, overrides.as_ref());
+        let url = format!("{}{}", upstream.base_url.trim_end_matches('/'), path);
+
+        // 请求头：content-type + 鉴权 + 异步头 + 覆盖
+        let mut req_headers = reqwest::header::HeaderMap::new();
+        req_headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        match image_api {
+            ImageApi::Openai | ImageApi::DashscopeSync | ImageApi::DashscopeAsync => {
+                // OpenAI / 阿里系鉴权：Authorization Bearer（apply_auth 的 OpenaiChat 形态即 Bearer）
+                upstream::apply_auth(&mut req_headers, Protocol::OpenaiChat, upstream.api_key_plain.as_deref());
+            }
+            ImageApi::Gemini => {
+                // Gemini 鉴权：x-goog-api-key
+                upstream::apply_auth(&mut req_headers, Protocol::Gemini, upstream.api_key_plain.as_deref());
+            }
+        }
+        if media::needs_async_header(image_api) {
+            req_headers.insert("x-dashscope-async", "enable".parse().unwrap());
+        }
+        upstream::apply_header_overrides(&mut req_headers, overrides.as_ref());
+
+        // 客户端：no_proxy 并集（全局 + 所选代理）+ client_for（同 run_gateway 写法）
+        let client = {
+            let mut lists: Vec<Vec<String>> = vec![state.hot.load().proxy.no_proxy.clone()];
+            let eff_proxy_id = if upstream.use_proxy {
+                upstream.proxy_id.or_else(|| uuid::Uuid::parse_str(&default_proxy_id).ok())
+            } else {
+                None
+            };
+            if let Some(pid) = eff_proxy_id {
+                if let Some(p) = snap.proxies.get(&pid) {
+                    lists.push(p.no_proxy.clone());
+                }
+            }
+            if upstream.use_proxy && upstream::no_proxy_match(&lists, &url) {
+                state.client_pools.direct_client()
+            } else {
+                state.client_pools.client_for(upstream, &snap, &default_proxy_id)
+            }
+        };
+
+        // 记录候选对应的协议/转换模式（供失败兜底记账回填）
+        last_protocol_out = Some(image_api_name(image_api).to_string());
+        last_convert_mode = Some(
+            if image_api == ImageApi::Openai { "media_passthrough" } else { "media_adapt" }.into(),
+        );
+
+        let lock = route.lock_upstream;
+        let retry_limit = if lock { 0 } else { route.retries.max(0) as u32 };
+        let mut idx: u32 = 0;
+        loop {
+            let exec = upstream::execute_nonstream(&client, &url, req_headers.clone(), &req_body, upstream.timeout_ms).await;
+            match exec {
+                Ok(json) => {
+                    state.breaker.on_success(&state.db, upstream).await;
+                    match media::parse_image_response(image_api, ir.size.as_deref(), &json) {
+                        Ok(ImageOutcome::Created { images, image_count, image_size, .. }) => {
+                            // 同步创建 → 200 {created, data, usage:{image_count}}
+                            let data: Vec<serde_json::Value> = images
+                                .iter()
+                                .map(|img| {
+                                    let mut m = serde_json::Map::new();
+                                    if let Some(u) = &img.url {
+                                        m.insert("url".to_string(), serde_json::Value::String(u.clone()));
+                                    }
+                                    if let Some(b) = &img.b64_json {
+                                        m.insert("b64_json".to_string(), serde_json::Value::String(b.clone()));
+                                    }
+                                    serde_json::Value::Object(m)
+                                })
+                                .collect();
+                            let body_json = serde_json::json!({
+                                "created": chrono::Utc::now().timestamp(),
+                                "data": data,
+                                "usage": { "image_count": image_count },
+                            });
+                            let mut ev = tmpl.clone();
+                            ev.upstream_id = Some(upstream.id);
+                            ev.protocol_out = image_api_name(image_api).to_string();
+                            ev.convert_mode = if image_api == ImageApi::Openai { "media_passthrough" } else { "media_adapt" }.into();
+                            ev.latency_ms = Some(start.elapsed().as_millis() as i32);
+                            ev.retry_count = (idx + failed_candidates) as i32;
+                            ev.status = 200;
+                            ev.images = Some(image_count);
+                            ev.image_size = image_size.clone();
+                            if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(&body_json).unwrap_or_default()) {
+                                ev.debug_payload = Some(payload);
+                            }
+                            state.log_sink.log(ev);
+                            let lbl = image_metrics_labels(&key, &model, &upstream.name);
+                            return record(&state.metrics, &lbl, start, false, json_rsp(StatusCode::OK, &request_id, None, body_json));
+                        }
+                        Ok(ImageOutcome::Task { provider_task_id }) => {
+                            // 异步任务 → 202，插入 media_tasks 供 M6-C 闭环
+                            let billing_key = format!("{}:{}", upstream.id, provider_task_id);
+                            // billing_key 唯一约束兜底防重：冲突则返回已存在任务行 id
+                            let task_id: Uuid =
+                                match sqlx::query_scalar(
+                                    "INSERT INTO media_tasks \
+                                     (id, media_type, gateway_key_id, model, upstream_id, provider_task_id, status, billing_key, raw, request_id) \
+                                     VALUES ($1, 'image', $2, $3, $4, $5, 'pending', $6, $7, $8) \
+                                     ON CONFLICT (billing_key) DO NOTHING RETURNING id",
+                                )
+                                .bind(Uuid::new_v4())
+                                .bind(key.id)
+                                .bind(&model)
+                                .bind(upstream.id)
+                                .bind(&provider_task_id)
+                                .bind(&billing_key)
+                                .bind(json.clone())
+                                .bind(&request_id)
+                                .fetch_optional(&state.db)
+                                .await
+                                {
+                                    Ok(Some(id)) => id,
+                                    Ok(None) => match sqlx::query_scalar::<_, Uuid>(
+                                        "SELECT id FROM media_tasks WHERE billing_key = $1",
+                                    )
+                                    .bind(&billing_key)
+                                    .fetch_optional(&state.db)
+                                    .await
+                                    {
+                                        Ok(Some(id)) => id,
+                                        Ok(None) => {
+                                            let msg = "写入媒体任务失败：billing_key 冲突但未找到任务行".to_string();
+                                            log_fail(&state, &tmpl, start, 500, &msg, (idx + failed_candidates) as i32);
+                                            return error_resp(Protocol::OpenaiChat, &request_id, 500, &msg);
+                                        }
+                                        Err(e) => {
+                                            log_fail(&state, &tmpl, start, 500, &format!("写入媒体任务失败: {e}"), (idx + failed_candidates) as i32);
+                                            return error_resp(Protocol::OpenaiChat, &request_id, 500, "写入媒体任务失败");
+                                        }
+                                    },
+                                    Err(e) => {
+                                        log_fail(&state, &tmpl, start, 500, &format!("写入媒体任务失败: {e}"), (idx + failed_candidates) as i32);
+                                        return error_resp(Protocol::OpenaiChat, &request_id, 500, "写入媒体任务失败");
+                                    }
+                                };
+                            let body_json = serde_json::json!({ "task_id": task_id });
+                            let mut ev = tmpl.clone();
+                            ev.upstream_id = Some(upstream.id);
+                            ev.protocol_out = image_api_name(image_api).to_string();
+                            ev.convert_mode = "media_adapt".into();
+                            ev.latency_ms = Some(start.elapsed().as_millis() as i32);
+                            ev.retry_count = (idx + failed_candidates) as i32;
+                            ev.status = 202;
+                            // 异步任务无即时图片：images/image_size 保持 NULL
+                            if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(&body_json).unwrap_or_default()) {
+                                ev.debug_payload = Some(payload);
+                            }
+                            state.log_sink.log(ev);
+                            let lbl = image_metrics_labels(&key, &model, &upstream.name);
+                            return record(&state.metrics, &lbl, start, false, json_rsp(StatusCode::ACCEPTED, &request_id, None, body_json));
+                        }
+                        Err(e) => {
+                            // 上游响应虽 2xx 但结构不符合预期：视为该候选失败（BodyRead 不可重试）
+                            last_upstream = Some(upstream.name.clone());
+                            last_err = Some(e);
+                            failed_candidates += 1;
+                            last_idx = idx;
+                            if lock { break 'outer; }
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let retryable = e.retryable(&route.retry_status_codes);
+                    if retryable {
+                        state.breaker.on_failure(&state.db, upstream).await;
+                    }
+                    last_upstream = Some(upstream.name.clone());
+                    last_err = Some(e);
+                    let can_retry = retryable && !lock && idx < retry_limit;
+                    if can_retry {
+                        tokio::time::sleep(Duration::from_millis(100u64 << idx.min(30))).await;
+                        idx += 1;
+                        continue;
+                    }
+                    failed_candidates += 1;
+                    last_idx = idx;
+                    if lock { break 'outer; }
+                    break;
+                }
+            }
+        }
+    }
+
+    // 全部候选失败：log_fail 记账 + OpenAI 错误体
+    let lbl = image_metrics_labels(&key, &model, last_upstream.as_deref().unwrap_or(""));
+    let (status, msg): (u16, String) = match &last_err {
+        Some(UpstreamError::Status(s, body)) => (*s, body.clone()),
+        Some(other) => (502, other.to_string()),
+        None => (502, "无可用上游".to_string()),
+    };
+    let mut ev = tmpl.clone();
+    ev.protocol_out = last_protocol_out.unwrap_or_else(|| "openai_image".into());
+    ev.convert_mode = last_convert_mode.unwrap_or_else(|| "none".into());
+    let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
+    log_fail(&state, &ev, start, status, &msg, retry_count);
+    let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let body = error_from_ir(Protocol::OpenaiChat, &IrError { status, message: msg, ..Default::default() });
+    let resp = json_rsp(code, &request_id, None, body);
+    record(&state.metrics, &lbl, start, true, resp)
+}
+
+/// POST /v1/videos/generations：视频占位（v1.18 未接入）。不做鉴权/记账，恒 501。
+async fn video_generations_placeholder() -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    json_rsp(StatusCode::NOT_IMPLEMENTED, &request_id, None, serde_json::json!({
+        "error": { "message": "视频生成暂未接入（占位）", "type": "not_implemented" }
+    }))
+}
+
+/// GET /v1/videos/tasks/{*task_id}：视频任务占位，恒 501。
+async fn video_tasks_placeholder(_task_id: Path<String>) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    json_rsp(StatusCode::NOT_IMPLEMENTED, &request_id, None, serde_json::json!({
+        "error": { "message": "视频生成暂未接入（占位）", "type": "not_implemented" }
+    }))
+}
+
 /// GET /v1/models：网关可用模型列表（OpenAI 格式）。
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {
     let request_id = Uuid::new_v4().to_string();
@@ -1127,6 +1559,10 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
 /// - GET  /v1/models                  → 网关可用模型列表（OpenAI 格式）
 /// - POST /v1beta/models/{*action}    → Gemini（action 形如 "model:generateContent"
 ///   或 "model:streamGenerateContent"，手动解析冒号）
+/// - POST /v1/images/generations      → 图片生成（统一 OpenAI 语义，契约 m6 §4）
+/// - GET  /v1/images/tasks/{task_id}  → 异步图片任务查询（M6-C）
+/// - POST /v1/videos/generations      → 视频占位（501，v1.18 未接入）
+/// - GET  /v1/videos/tasks/{*task_id} → 视频任务占位（501）
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/chat/completions", post(openai_chat))
@@ -1134,6 +1570,12 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/messages", post(anthropic))
         .route("/v1/models", get(list_models))
         .route("/v1beta/models/{*action}", post(gemini))
+        // 图片通道（契约 m6 §4）
+        .route("/v1/images/generations", post(images_generations))
+        .route("/v1/images/tasks/{task_id}", get(media::tasks::get_image_task))
+        // 视频占位（v1.18 未接入，恒 501）
+        .route("/v1/videos/generations", post(video_generations_placeholder))
+        .route("/v1/videos/tasks/{*task_id}", get(video_tasks_placeholder))
 }
 
 // ---------------------------------------------------------------------------
@@ -1273,6 +1715,32 @@ mod tests {
     fn router_builds_without_panic() {
         // 验证通配符路由模式合法（matchit 于构建时校验）
         let _ = router();
+    }
+
+    #[tokio::test]
+    async fn video_placeholder_returns_501() {
+        // 契约 m6 §7-B：视频占位恒 501（不做鉴权/记账）
+        let resp = video_generations_placeholder().await;
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["type"], "not_implemented");
+        assert_eq!(v["error"]["message"], "视频生成暂未接入（占位）");
+
+        // 视频任务占位同样 501
+        let tasks_resp = video_tasks_placeholder(Path("task-abc".to_string())).await;
+        assert_eq!(tasks_resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let tbytes = axum::body::to_bytes(tasks_resp.into_body(), usize::MAX).await.unwrap();
+        let tv: serde_json::Value = serde_json::from_slice(&tbytes).unwrap();
+        assert_eq!(tv["error"]["type"], "not_implemented");
+    }
+
+    #[test]
+    fn image_api_name_maps_variants() {
+        assert_eq!(image_api_name(ImageApi::Openai), "images_openai");
+        assert_eq!(image_api_name(ImageApi::Gemini), "images_gemini");
+        assert_eq!(image_api_name(ImageApi::DashscopeSync), "images_dashscope_sync");
+        assert_eq!(image_api_name(ImageApi::DashscopeAsync), "images_dashscope_async");
     }
 
     #[test]

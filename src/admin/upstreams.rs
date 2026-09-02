@@ -375,7 +375,12 @@ async fn test_upstream(
     }
 }
 
-/// 校验上游：名称/地址非空、协议可解析、超时/熔断阈值 > 0。
+/// 图片上游协议值（契约 m6：upstreams.protocols 新增四个 images_* 值，其余校验不变）。
+fn is_images_protocol(p: &str) -> bool {
+    matches!(p, "images_openai" | "images_gemini" | "images_dashscope_sync" | "images_dashscope_async")
+}
+
+/// 校验上游：名称/地址非空、协议可解析（或属于图片协议白名单）、超时/熔断阈值 > 0。
 fn validate_upstream(
     name: &str,
     base_url: &str,
@@ -391,7 +396,7 @@ fn validate_upstream(
     }
     if let Some(ps) = protocols {
         for p in ps {
-            if p.parse::<Protocol>().is_err() {
+            if p.parse::<Protocol>().is_err() && !is_images_protocol(p) {
                 return Err(ApiError::bad_request(format!("protocols 包含非法协议: {p}")));
             }
         }
@@ -473,5 +478,24 @@ mod tests {
         assert!(validate_upstream("u", "https://x.com", Some(&["bad_proto".into()]), None, None).is_err());
         assert!(validate_upstream("u", "https://x.com", None, Some(0), None).is_err());
         assert!(validate_upstream("u", "https://x.com", None, None, Some(-1)).is_err());
+    }
+
+    #[test]
+    fn validate_upstream_accepts_images_protocols() {
+        // 契约 m6：新增四个 images_* 协议值放行
+        for p in ["images_openai", "images_gemini", "images_dashscope_sync", "images_dashscope_async"] {
+            assert!(validate_upstream("u", "https://x.com", Some(&[p.into()]), None, None).is_ok(), "应放行 {p}");
+        }
+        // 常规协议 + 图片协议混合放行
+        assert!(validate_upstream(
+            "u",
+            "https://x.com",
+            Some(&["openai_chat".into(), "images_gemini".into()]),
+            None,
+            None,
+        )
+        .is_ok());
+        // 仍拒绝非法协议（图片协议拼错）
+        assert!(validate_upstream("u", "https://x.com", Some(&["images_bad".into()]), None, None).is_err());
     }
 }

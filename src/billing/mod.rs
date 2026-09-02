@@ -413,15 +413,17 @@ pub fn price_with_rules(
     }
 }
 
-/// 事件是否含计价用量（token 类；image/video 由 M5-C 的媒体任务另走）。
+/// 事件是否含计价用量（token 类 + 图片/视频维度）。M6：media 维度纳入判定。
 fn has_usage(ev: &crate::logging::LogEvent) -> bool {
     ev.prompt_tokens.unwrap_or(0) > 0
         || ev.completion_tokens.unwrap_or(0) > 0
         || ev.cache_write_tokens.unwrap_or(0) > 0
         || ev.cache_read_tokens.unwrap_or(0) > 0
+        || ev.images.unwrap_or(0) > 0
+        || ev.video_seconds.is_some()
 }
 
-/// 从事件构造计价输入。
+/// 从事件构造计价输入。M6：填入图片/视频维度（media_tasks 已完成计价的事件由 price_batch 跳过）。
 fn input_from_event(ev: &crate::logging::LogEvent) -> PricingInput {
     PricingInput {
         at: ev.ts,
@@ -429,7 +431,11 @@ fn input_from_event(ev: &crate::logging::LogEvent) -> PricingInput {
         completion_tokens: ev.completion_tokens,
         cache_write_tokens: ev.cache_write_tokens,
         cache_read_tokens: ev.cache_read_tokens,
-        ..Default::default()
+        images: ev.images,
+        image_size: ev.image_size.clone(),
+        video_seconds: ev.video_seconds,
+        video_resolution: ev.video_resolution.clone(),
+        video_task_type: ev.video_task_type.clone(),
     }
 }
 
@@ -450,7 +456,8 @@ pub async fn price_batch(
     let mut pairs: Vec<(Uuid, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for ev in events.iter() {
-        if ev.status >= 400 || !has_usage(ev) {
+        // M6：media_tasks 由 poller 直接计价并落 usage_logs（pricing_source 已填），跳过防重复。
+        if ev.status >= 400 || ev.pricing_source.is_some() || !has_usage(ev) {
             continue;
         }
         let Some(up_id) = ev.upstream_id else { continue };
@@ -487,7 +494,8 @@ pub async fn price_batch(
 
     let mut unpriced = 0u64;
     for ev in events.iter_mut() {
-        if ev.status >= 400 || !has_usage(ev) {
+        // M6：media_tasks 已计价事件（pricing_source 已填）跳过，防重复计价。
+        if ev.status >= 400 || ev.pricing_source.is_some() || !has_usage(ev) {
             continue;
         }
         let Some(up_id) = ev.upstream_id else { continue };

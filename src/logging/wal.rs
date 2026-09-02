@@ -307,6 +307,12 @@ mod tests {
             pricing_source: None,
             price_used: None,
             fx_snapshot: None,
+            // M6 媒体字段（测试里恒 None）。
+            images: None,
+            image_size: None,
+            video_seconds: None,
+            video_resolution: None,
+            video_task_type: None,
         }
     }
 

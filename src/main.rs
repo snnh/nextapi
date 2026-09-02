@@ -20,6 +20,7 @@ mod error;
 mod gateway;
 mod limit;
 mod logging;
+mod media;
 mod metrics;
 mod protocol;
 mod routing;
@@ -188,6 +189,16 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             });
+        }
+    }
+
+    // M6：媒体任务轮询（图片异步任务闭环计费）。media_poller.interval_secs=0 时不启动
+    // （poller 内部也会在读到 0 时自行退出，此处显式判断避免空转任务）。
+    {
+        let interval_secs = state.hot.load().media_poller.interval_secs;
+        if interval_secs > 0 {
+            let state_poller = state.clone();
+            tokio::spawn(media::tasks::run_media_poller(state_poller));
         }
     }
 

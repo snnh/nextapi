@@ -6,7 +6,7 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片/视频生成透传 + 管理后台，定位为「面向团队/应用的工具型网关」。
 
-**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.18，约 970 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
+**当前状态：M1 工程骨架、M2 协议层、M3 网关核心、M4 日志统计、M5 计价引擎、M6 图片通道（视频占位）已完成（2026-09）。** 仓库为 Rust + axum 工程，设计文档 `PLAN.md`（当前 v1.18，约 970 行中文，**仅本地、不进版本库**）仍是**唯一事实源**，里程碑验收以此为准。做任何开发前先读它。
 
 M1 已交付：Cargo 工程、配置加载 + hot/seed/derived 分类热加载（`src/config.rs`）、`system_settings` UI 持久化与优先级（hot：UI > YAML；启动类：env > UI > YAML，`src/settings.rs`）、`proxy_configs` 基础表 + CRUD API、单管理员 JWT 登录（防爆破）、axum 服务、`/healthz`、`/metrics`、Dockerfile、docker-compose（含 PG）、`config.example.yaml`。
 
@@ -76,7 +76,11 @@ src/
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
-├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 5 个端点）+ M4 打点（tee 收集/失败记账）
+├── media/           # M6 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
+│                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
+│                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
+├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/images/* + 视频 501 占位）
+│                    # + M4 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
 ├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细；
 │                    # cost_display 展示币种合计 + cost_na_count 缺失计数）
@@ -101,7 +105,7 @@ src/
     ├── fx.rs        # /api/fx 查询/手动 upsert/refresh（代理矩阵）
     └── audit.rs     # /api/audit 分页查询
 migrations/          # 0001_init.sql（M1 表）+ 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
-                     # + 0004_pricing.sql（price_rules）
+                     # + 0004_pricing.sql（price_rules）+ 0005_media.sql（media_tasks）
 contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考）
 tests/                    # 集成测试（后续里程碑）
 web/                      # Vue3 管理后台（M8）

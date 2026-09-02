@@ -261,3 +261,29 @@ pub struct FxRateRow {
     pub fetched_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
+
+/// media_tasks 行（M6；PLAN §6。异步图片任务 + 计费幂等）。
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct MediaTaskRow {
+    pub id: Uuid,
+    pub media_type: String,
+    pub gateway_key_id: Uuid,
+    pub model: String,
+    pub upstream_id: Uuid,
+    pub provider_task_id: Option<String>,
+    pub status: String,
+    pub resolution: Option<String>,
+    pub duration_seconds: Option<Decimal>,
+    pub task_type: Option<String>,
+    pub image_count: Option<i32>,
+    pub image_size: Option<String>,
+    pub cost_cny: Option<Decimal>,
+    pub cost_usd: Option<Decimal>,
+    pub billing_key: Option<String>,
+    pub error: Option<String>,
+    pub raw: Option<serde_json::Value>,
+    pub request_id: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+}

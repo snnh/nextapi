@@ -40,6 +40,17 @@ pub struct LogEvent {
     pub completion_tokens: Option<i64>,
     pub cache_write_tokens: Option<i64>,
     pub cache_read_tokens: Option<i64>,
+    /// 媒体维度（M6；旧 WAL 行缺省可反序列化 → None）。图片结构化计费维度。
+    #[serde(default)]
+    pub images: Option<i64>,
+    #[serde(default)]
+    pub image_size: Option<String>,
+    #[serde(default)]
+    pub video_seconds: Option<Decimal>,
+    #[serde(default)]
+    pub video_resolution: Option<String>,
+    #[serde(default)]
+    pub video_task_type: Option<String>,
     pub latency_ms: Option<i32>,
     pub retry_count: i32,
     pub ttfb_ms: Option<i32>,
@@ -162,7 +173,7 @@ impl LogSink {
 // ---------------------------------------------------------------------------
 
 /// 直接来自 LogEvent 的列（顺序固定，与数组类型一一对应）。
-const LOG_COLS: [&str; 26] = [
+const LOG_COLS: [&str; 31] = [
     "request_id",
     "ts",
     "key_id",
@@ -176,6 +187,11 @@ const LOG_COLS: [&str; 26] = [
     "completion_tokens",
     "cache_write_tokens",
     "cache_read_tokens",
+    "images",
+    "image_size",
+    "video_seconds",
+    "video_resolution",
+    "video_task_type",
     "latency_ms",
     "status",
     "error",
@@ -192,7 +208,7 @@ const LOG_COLS: [&str; 26] = [
 ];
 
 /// 对应列的 Postgres 数组类型（与 LOG_COLS 同序）。
-const LOG_ARRAY_TYPES: [&str; 26] = [
+const LOG_ARRAY_TYPES: [&str; 31] = [
     "text[]",
     "timestamptz[]",
     "uuid[]",
@@ -206,6 +222,11 @@ const LOG_ARRAY_TYPES: [&str; 26] = [
     "bigint[]",
     "bigint[]",
     "bigint[]",
+    "int[]",
+    "text[]",
+    "numeric[]",
+    "text[]",
+    "text[]",
     "int[]",
     "int[]",
     "text[]",
@@ -301,6 +322,11 @@ pub async fn insert_batch(
     let mut completion_tokens = Vec::with_capacity(n);
     let mut cache_write = Vec::with_capacity(n);
     let mut cache_read = Vec::with_capacity(n);
+    let mut images_col = Vec::with_capacity(n);
+    let mut image_size_col = Vec::with_capacity(n);
+    let mut video_seconds_col = Vec::with_capacity(n);
+    let mut video_resolution_col = Vec::with_capacity(n);
+    let mut video_task_type_col = Vec::with_capacity(n);
     let mut latencies = Vec::with_capacity(n);
     let mut statuses = Vec::with_capacity(n);
     let mut error_msgs = Vec::with_capacity(n);
@@ -329,6 +355,12 @@ pub async fn insert_batch(
         completion_tokens.push(ev.completion_tokens);
         cache_write.push(ev.cache_write_tokens);
         cache_read.push(ev.cache_read_tokens);
+        // usage_logs.images 为 INT 列，LogEvent.images 为 i64，绑定 int[] 需收敛到 i32。
+        images_col.push(ev.images.map(|v| v as i32));
+        image_size_col.push(ev.image_size.clone());
+        video_seconds_col.push(ev.video_seconds);
+        video_resolution_col.push(ev.video_resolution.clone());
+        video_task_type_col.push(ev.video_task_type.clone());
         latencies.push(ev.latency_ms);
         statuses.push(ev.status);
         error_msgs.push(ev.error.clone());
@@ -358,6 +390,11 @@ pub async fn insert_batch(
         .bind(&completion_tokens)
         .bind(&cache_write)
         .bind(&cache_read)
+        .bind(&images_col)
+        .bind(&image_size_col)
+        .bind(&video_seconds_col)
+        .bind(&video_resolution_col)
+        .bind(&video_task_type_col)
         .bind(&latencies)
         .bind(&statuses)
         .bind(&error_msgs)
@@ -584,13 +621,17 @@ mod tests {
         let sql = usage_logs_insert_sql();
         assert!(sql.starts_with("INSERT INTO usage_logs ("));
         assert!(sql.contains("$1::text[]"));
-        assert!(sql.contains("$21::jsonb[]"));
-        assert!(sql.contains("$22::numeric[]"));
-        assert!(sql.contains("$26::jsonb[]"));
-        assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
-        assert!(sql.contains("usage_logs (request_id, ts, key_id, model,"));
         // M5：新增 5 个计价列进入 INSERT 列清单
         assert!(sql.contains("cost_cny, cost_usd, pricing_source, price_used, fx_snapshot"));
+        // M6：新增 5 个媒体列进入 INSERT 列清单（数值型/文本型/数值型/文本型/文本型）
+        assert!(sql.contains("cache_read_tokens, images, image_size, video_seconds, video_resolution, video_task_type"));
+        // 数组位次：usage_raw=$25::jsonb[]、video_seconds=$16::numeric[]、cost_cny=$27::numeric[]、fx_snapshot=$31::jsonb[]
+        assert!(sql.contains("$16::numeric[]"));
+        assert!(sql.contains("$25::jsonb[]"));
+        assert!(sql.contains("$27::numeric[]"));
+        assert!(sql.contains("$31::jsonb[]"));
+        assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
+        assert!(sql.contains("usage_logs (request_id, ts, key_id, model,"));
     }
 
     #[test]
@@ -625,6 +666,12 @@ mod tests {
         assert_eq!(ev.pricing_source, None);
         assert_eq!(ev.price_used, None);
         assert_eq!(ev.fx_snapshot, None);
+        // M6：旧 WAL 行（M4/M5）不含 5 个媒体字段，靠 #[serde(default)] 兼容 → None
+        assert_eq!(ev.images, None);
+        assert_eq!(ev.image_size, None);
+        assert_eq!(ev.video_seconds, None);
+        assert_eq!(ev.video_resolution, None);
+        assert_eq!(ev.video_task_type, None);
     }
 
     #[test]
@@ -650,6 +697,30 @@ mod tests {
         let back: LogEvent = serde_json::from_str(&line).expect("应可反序列化");
         assert_eq!(back.cost_cny, ev.cost_cny);
         assert_eq!(back.pricing_source, ev.pricing_source);
+    }
+
+    #[test]
+    fn new_wal_line_with_media_fields_roundtrip() {
+        // M6：新版 WAL 行携带 5 个媒体字段，序列化后再反序列化应无损往返。
+        let json = r#"{
+            "request_id":"r3","ts":"2024-01-01T00:00:00Z","key_id":null,
+            "model":"qwen-image-2.0-pro","upstream_id":null,"protocol_in":"openai_image","protocol_out":"images_dashscope_async",
+            "convert_mode":"media_task","stream":false,"status":200,"error":null,
+            "prompt_tokens":null,"completion_tokens":null,"cache_write_tokens":null,"cache_read_tokens":null,
+            "latency_ms":null,"retry_count":0,"ttfb_ms":null,"degraded":false,
+            "usage_raw":null,"debug_payload":null,
+            "cost_cny":"0.001","cost_usd":null,"pricing_source":"bound","price_used":[],"fx_snapshot":[],
+            "images":2,"image_size":"1024x1024","video_seconds":null,"video_resolution":null,"video_task_type":null
+        }"#;
+        let ev: LogEvent = serde_json::from_str(json).expect("含媒体字段应可反序列化");
+        assert_eq!(ev.images, Some(2));
+        assert_eq!(ev.image_size.as_deref(), Some("1024x1024"));
+        assert_eq!(ev.video_seconds, None);
+        let line = serde_json::to_string(&ev).expect("应可序列化");
+        let back: LogEvent = serde_json::from_str(&line).expect("应可反序列化");
+        assert_eq!(back.images, ev.images);
+        assert_eq!(back.image_size, ev.image_size);
+        assert_eq!(back.video_seconds, ev.video_seconds);
     }
 
     #[test]
