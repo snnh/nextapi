@@ -226,50 +226,65 @@ pub async fn replay_and_archive(
     if files.is_empty() {
         return Ok((0, 0));
     }
-    // 简化：跳过 mtime 最新的 wal-*.jsonl（视为活跃尾巴），其余重放后归档。
-    let _active = files.pop();
+    // 末尾为 mtime 最新（活跃尾巴：本进程正在 append 的文件）。改进（review P1-#11）：
+    // 活跃文件同样参与重放（失败批次/溢出事件常滞留其中，跳过会导致永不落库），
+    // 但不归档（进程仍持有写句柄）；insert_batch 的明细幂等守卫保证重复重放安全。
+    let active = files.pop();
     let mut replayed = 0u64;
     let mut archived = 0u64;
 
     for f in &files {
-        let events = match decode_file(f) {
-            Ok(ev) => ev,
-            Err(e) => {
-                tracing::warn!(path = %f.display(), "WAL 读取失败，跳过: {e}");
-                continue;
-            }
-        };
-        if events.is_empty() {
-            // 空文件仍可归档（无数据可回放）。
-            if let Err(e) = std::fs::rename(f, f.with_extension("archived")) {
-                tracing::warn!(path = %f.display(), "WAL 归档失败: {e}");
-            } else {
-                archived += 1;
-            }
-            continue;
-        }
-        let mut ok = true;
-        for chunk in events.chunks(BATCH_MAX) {
-            match crate::logging::insert_batch(pool, chunk, billing_tz, fx_stale_max_minutes).await {
-                Ok(_) => replayed += chunk.len() as u64,
-                Err(e) => {
-                    // 写库失败：保留该文件，留待下次重放；不中断其余文件。
-                    tracing::warn!(path = %f.display(), "WAL 重放写库失败，保留文件: {e}");
-                    ok = false;
-                    break;
-                }
-            }
-        }
+        let (n, ok) = replay_wal_file(pool, f, billing_tz, fx_stale_max_minutes).await?;
+        replayed += n;
         if ok {
+            // 重放成功（含空文件）→ 归档
             match std::fs::rename(f, f.with_extension("archived")) {
                 Ok(()) => archived += 1,
                 Err(e) => tracing::warn!(path = %f.display(), "WAL 归档失败: {e}"),
             }
         }
     }
+    if let Some(f) = &active {
+        let (n, ok) = replay_wal_file(pool, f, billing_tz, fx_stale_max_minutes).await?;
+        replayed += n;
+        if !ok {
+            tracing::warn!(path = %f.display(), "活跃 WAL 重放失败，留待下次");
+        }
+    }
 
     cleanup_archived(dir);
     Ok((replayed, archived))
+}
+
+/// 重放单个 WAL 文件：逐批 insert_batch。返回 (成功重放事件数, 是否全部成功)。
+/// 写库失败 → ok=false（文件保留留待下次）；坏行跳过 + warn 视为成功。
+async fn replay_wal_file(
+    pool: &sqlx::PgPool,
+    f: &std::path::Path,
+    billing_tz: &str,
+    fx_stale_max_minutes: u64,
+) -> ApiResult<(u64, bool)> {
+    let events = match decode_file(f) {
+        Ok(ev) => ev,
+        Err(e) => {
+            tracing::warn!(path = %f.display(), "WAL 读取失败，跳过: {e}");
+            return Ok((0, false));
+        }
+    };
+    if events.is_empty() {
+        return Ok((0, true));
+    }
+    let mut replayed = 0u64;
+    for chunk in events.chunks(BATCH_MAX) {
+        match crate::logging::insert_batch(pool, chunk, billing_tz, fx_stale_max_minutes).await {
+            Ok(_) => replayed += chunk.len() as u64,
+            Err(e) => {
+                tracing::warn!(path = %f.display(), "WAL 重放写库失败，保留文件: {e}");
+                return Ok((replayed, false));
+            }
+        }
+    }
+    Ok((replayed, true))
 }
 
 #[cfg(test)]

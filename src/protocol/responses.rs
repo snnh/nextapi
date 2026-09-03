@@ -894,6 +894,8 @@ pub struct StreamState {
     // —— 入站 (chunk_to_ir) ——
     /// function_call item_id → IR 内工具序号（index，供聚合器对齐）
     item_to_index: HashMap<String, u32>,
+    /// IR 工具序号 → (call_id, name)（function_call item 元数据，跨协议工具链必需）
+    fn_meta: HashMap<u32, (String, String)>,
     /// 已分配的工具序号计数
     fn_index_counter: u32,
 
@@ -947,16 +949,44 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
         "response.output_item.added" => {
             let item = &v["item"];
             if item["type"].as_str() == Some("function_call") {
-                // 记录 item_id → index（按出现顺序分配）
+                // 记录 item_id → index（按出现顺序分配），并保存 call_id/name 元数据：
+                // 后续 function_call_arguments.delta 只带 item_id 与参数增量，
+                // 若无此处记录，聚合出的 IrToolCall 将丢失 name/id（review P1-#9）。
                 let item_id = item["id"].as_str().unwrap_or_default().to_string();
                 let idx = st.fn_index_counter;
                 st.fn_index_counter += 1;
-                st.item_to_index.insert(item_id, idx);
+                st.item_to_index.insert(item_id.clone(), idx);
+                let call_id = item["call_id"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| item["id"].as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let name = item["name"].as_str().unwrap_or_default().to_string();
+                st.fn_meta.insert(idx, (call_id, name));
             }
             Ok(None)
         }
         "response.output_item.done" => {
-            // function_call 完成帧可跳过（聚合器已完成累积）
+            // function_call 完成帧：若 added 帧未带 name（部分实现延迟到 done），补记元数据
+            let item = &v["item"];
+            if item["type"].as_str() == Some("function_call") {
+                let item_id = item["id"].as_str().unwrap_or_default();
+                if let Some(&idx) = st.item_to_index.get(item_id) {
+                    let entry = st.fn_meta.entry(idx).or_default();
+                    if entry.0.is_empty() {
+                        entry.0 = item["call_id"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| item["id"].as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                    }
+                    if entry.1.is_empty() {
+                        entry.1 = item["name"].as_str().unwrap_or_default().to_string();
+                    }
+                }
+            }
             Ok(None)
         }
         "response.output_text.delta" => {
@@ -998,14 +1028,15 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
                 return Ok(None);
             }
             let index = st.item_to_index.get(&item_id).copied().unwrap_or(0);
+            let (call_id, name) = st.fn_meta.get(&index).cloned().unwrap_or_default();
             let mut chunk = base_chunk(st);
             chunk.choices.push(IrChunkChoice {
                 index: 0,
                 delta: IrDelta {
                     tool_calls: vec![IrToolCallDelta {
                         index,
-                        id: None,
-                        name: None,
+                        id: if call_id.is_empty() { None } else { Some(call_id) },
+                        name: if name.is_empty() { None } else { Some(name) },
                         arguments: Some(text.to_string()),
                     }],
                     ..Default::default()
@@ -1668,5 +1699,60 @@ mod tests {
         assert_eq!(resp.len(), 1);
         let ev = serde_json::from_str::<Value>(&resp[0]).unwrap();
         assert_eq!(ev["type"], "response.completed");
+    }
+
+    /// 入站工具链（review P1-#9）：output_item.added 后随 arguments delta，
+    /// 聚合出的 IR delta 必须携带 name 与 call_id。
+    #[test]
+    fn inbound_function_call_keeps_name_and_id() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+
+        // added 帧：item 带 id/call_id/name（OpenAI Responses 实际形状）
+        let added = serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_abc",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": ""
+            }
+        });
+        let r1 = chunk_to_ir(&added.to_string(), &mut st, &mut c).unwrap();
+        assert!(r1.is_none());
+
+        // 参数增量帧：只带 item_id + delta
+        let delta = serde_json::json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_abc",
+            "output_index": 1,
+            "delta": "{\"city\":\"bj\"}"
+        });
+        let r2 = chunk_to_ir(&delta.to_string(), &mut st, &mut c).unwrap();
+        let ch = r2.expect("参数增量应产出 IR chunk");
+        let tc = &ch.choices[0].delta.tool_calls[0];
+        assert_eq!(tc.index, 0);
+        assert_eq!(tc.id.as_deref(), Some("call_1"));
+        assert_eq!(tc.name.as_deref(), Some("get_weather"));
+        assert_eq!(tc.arguments.as_deref(), Some("{\"city\":\"bj\"}"));
+
+        // call_id 缺省时回退 item.id
+        let mut st2 = StreamState::default();
+        let added2 = serde_json::json!({
+            "type": "response.output_item.added",
+            "item": { "type": "function_call", "id": "fc_x", "name": "lookup" }
+        });
+        chunk_to_ir(&added2.to_string(), &mut st2, &mut c).unwrap();
+        let delta2 = serde_json::json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_x",
+            "delta": "{}"
+        });
+        let ch2 = chunk_to_ir(&delta2.to_string(), &mut st2, &mut c).unwrap().unwrap();
+        let tc2 = &ch2.choices[0].delta.tool_calls[0];
+        assert_eq!(tc2.id.as_deref(), Some("fc_x"));
+        assert_eq!(tc2.name.as_deref(), Some("lookup"));
     }
 }

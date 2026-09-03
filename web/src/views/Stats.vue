@@ -355,8 +355,11 @@ const chartOption = computed<EChartsOption>(() => {
 
 // —— CSV 导出 ——
 function csvCell(v: unknown): string {
-  if (v === null || v === undefined) return ''
-  return `"${String(v).replace(/"/g, '""')}"`
+  if (v === null || v === undefined) return '""'
+  let s = String(v)
+  // 公式注入中和（CWE-1236）：= + - @ 及制表符开头前置单引号
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
+  return `"${s.replace(/"/g, '""')}"`
 }
 
 function exportCsv() {

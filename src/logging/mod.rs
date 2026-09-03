@@ -412,6 +412,16 @@ pub async fn insert_batch(
         .await?
         .rows_affected();
 
+    // 幂等守卫（review P1-#10）：明细 ON CONFLICT DO NOTHING 若 0 行受影响，
+    // 说明本批此前已提交成功（歧义提交后 WAL 重放场景——明细与聚合同事务，
+    // 明细在则聚合/配额/last_used 必已做过）。此时若继续执行下方 usage_hourly /
+    // quota_usage 的 +EXCLUDED 累加会造成重复计数（配额虚增、统计失真），
+    // 因此整批跳过聚合段直接提交返回。
+    if inserted == 0 {
+        tx.commit().await?;
+        return Ok(0);
+    }
+
     // ---- 2) usage_hourly 聚合 upsert（小时桶 + model 维度）----
     // 聚合项: (requests, errors, prompt_tokens, completion_tokens, cost_cny, cost_usd)
     let mut hourly: HashMap<(DateTime<Utc>, String), HourlyAcc> = HashMap::new();

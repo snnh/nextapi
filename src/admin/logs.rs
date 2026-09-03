@@ -346,11 +346,21 @@ fn opt_i32(v: Option<i32>) -> String {
 }
 
 /// 手写 CSV 转义：`"` → `""`；含 `,` / `"` / 换行时整体加引号。
+/// CSV 单元格转义：引号/逗号/换行 + 公式注入前缀中和（= + - @ 开头前置单引号，CWE-1236）。
 fn csv_escape(s: &str) -> String {
+    let s = match s.chars().next() {
+        Some(c) if matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r') => {
+            let mut t = String::with_capacity(s.len() + 1);
+            t.push('\'');
+            t.push_str(s);
+            t
+        }
+        _ => s.to_string(),
+    };
     if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
-        s.to_string()
+        s
     }
 }
 
@@ -396,6 +406,19 @@ mod tests {
     #[test]
     fn csv_escape_quotes_on_newline() {
         assert_eq!(csv_escape("a\nb"), "\"a\nb\"");
+    }
+
+    #[test]
+    fn csv_escape_neutralizes_formula_prefix() {
+        // 公式注入（CWE-1236）：= + - @ 及制表符/回车开头前置单引号
+        assert_eq!(csv_escape("=cmd|' /C calc'!A0"), "'=cmd|' /C calc'!A0");
+        assert_eq!(csv_escape("+SUM(A1)"), "'+SUM(A1)");
+        assert_eq!(csv_escape("-1+2"), "'-1+2");
+        assert_eq!(csv_escape("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(csv_escape("\t=1"), "'\t=1");
+        // 常规字段不受影响
+        assert_eq!(csv_escape("gpt-4o"), "gpt-4o");
+        assert_eq!(csv_escape("abc"), "abc");
     }
 
     #[test]

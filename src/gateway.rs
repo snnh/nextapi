@@ -125,17 +125,31 @@ struct StreamCollect {
 /// 单次流式响应的收集上限（字节）。
 const STREAM_TEXT_MAX: usize = 256 * 1024;
 
-/// 把字节以 UTF-8 安全方式追加到收集缓冲（不切断多字节字符；超限截断）。
+/// 把字节以 UTF-8 安全方式追加到收集缓冲，超限时丢弃**头部**保留**尾部**。
+///
+/// 设计依据（review P1-#4）：usage 提取只关心流尾的 usage 帧
+/// （OpenAI include_usage 尾帧 / Anthropic message_delta / Gemini usageMetadata），
+/// 原「头部截断」会在长流（>256KB）时把这些帧全部丢弃导致计量漏记；
+/// 改为尾部滑动保留后，长流的 usage/quota/成本计量不再失真。
 fn append_chunk(collect: &Mutex<StreamCollect>, bytes: &[u8], start: Instant) {
     let mut c = collect.lock().unwrap_or_else(|p| p.into_inner());
-    if c.text.len() < STREAM_TEXT_MAX {
-        let remain = STREAM_TEXT_MAX - c.text.len();
-        let mut take = bytes.len().min(remain);
-        // 裁剪到字符边界，避免把多字节字符截断
-        while take > 0 && std::str::from_utf8(&bytes[..take]).is_err() {
-            take -= 1;
+    if bytes.is_empty() {
+        if c.ttfb_ms.is_none() {
+            c.ttfb_ms = Some(start.elapsed().as_millis() as i32);
         }
-        c.text.push_str(&String::from_utf8_lossy(&bytes[..take]));
+        return;
+    }
+    // lossy 追加：跨 chunk 的多字节字符边界以 U+FFFD 替换（只影响个别文本字符，
+    // usage 帧为 ASCII 结构不受影响；不切断 JSON 结构字符）。
+    c.text.push_str(&String::from_utf8_lossy(bytes));
+    if c.text.len() > STREAM_TEXT_MAX {
+        let excess = c.text.len() - STREAM_TEXT_MAX;
+        // 从头部按字符边界移除（drain 需在 char 边界，向前找到第一个边界）
+        let mut cut = excess;
+        while cut < c.text.len() && !c.text.is_char_boundary(cut) {
+            cut += 1;
+        }
+        c.text.drain(..cut);
     }
     if c.ttfb_ms.is_none() {
         c.ttfb_ms = Some(start.elapsed().as_millis() as i32);
@@ -956,10 +970,20 @@ async fn run_gateway(
 
         let lock = route.lock_upstream;
         let retry_limit = if lock { 0 } else { route.retries.max(0) as u32 };
+        // 流式总超时取 gateway.stream_timeout_secs（默认 600s，0=不设）；
+        // 非流式仍用 per-upstream timeout_ms（review P1-#7：此前流式误用 timeout_ms 且该配置无人引用）。
+        let stream_timeout_ms: i32 = {
+            let secs = state.hot.load().gateway.stream_timeout_secs;
+            if secs == 0 {
+                0
+            } else {
+                (secs.saturating_mul(1000)).min(i32::MAX as u64) as i32
+            }
+        };
         let mut idx: u32 = 0;
         loop {
             let exec_res: Result<ExecOutcome, UpstreamError> = if stream {
-                upstream::execute_stream(&client, &url, req_headers.clone(), &outbound.body, upstream.timeout_ms)
+                upstream::execute_stream(&client, &url, req_headers.clone(), &outbound.body, stream_timeout_ms)
                     .await
                     .map(ExecOutcome::Stream)
             } else {

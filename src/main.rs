@@ -83,8 +83,9 @@ async fn main() -> anyhow::Result<()> {
     info!(%listen, listen_src, jwt_src, "启动类参数解析完成");
 
     // 5.5 日志统计接线（M4-C）：WAL / 有界队列 / 分区预热。失败只 warn，不阻塞启动。
-    let cfg_hot = cfg.hot();
-    let gw = &cfg_hot.gateway;
+    // 注意：这里必须取「引擎合并后」的 hot（UI > YAML），不能读原始 cfg.hot()，
+    // 否则 log_wal_dir/log_queue_capacity/log_async 等 UI 覆盖重启后失效（review P1-#5）。
+    let gw = hot.load().gateway.clone();
     let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.min(1_000_000).max(16));
     let wal = logging::wal::WalWriter::new(gw.log_wal_dir.clone().into(), gw.log_wal_file_max_mb);
     // 启动即重放 WAL（失败只 warn）
@@ -326,7 +327,27 @@ async fn healthz() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({ "status": "ok" }))
 }
 
+/// 优雅关闭：监听 SIGINT（Ctrl+C）与 SIGTERM（容器/K8s 默认停止信号），任一触发即关闭。
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!("SIGTERM 监听不可用: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
     info!("收到退出信号，正在优雅关闭");
 }

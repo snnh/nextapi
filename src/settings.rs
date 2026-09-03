@@ -176,9 +176,19 @@ impl SettingsEngine {
 
         // 启动类键：env > UI > YAML，secret 项掩码
         for &key in crate::config::RESTART_REQUIRED_KEYS {
-            let yaml_value = self.startup_yaml_value(key).unwrap_or_default();
-            let (value, source) = self.effective_startup(key, &yaml_value).await?;
             let secret = key_is_secret(key);
+            // database.url 特判：UI 覆盖永不生效（自举矛盾，见 is_writable_key），
+            // 只读展示 env DATABASE_URL 优先、否则 YAML 值，来源如实标注。
+            let (value, source) = if key == "database.url" {
+                let env_val = std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty());
+                match env_val {
+                    Some(v) => (v, "env"),
+                    None => (self.startup_yaml_value(key).unwrap_or_default(), "file"),
+                }
+            } else {
+                let yaml_value = self.startup_yaml_value(key).unwrap_or_default();
+                self.effective_startup(key, &yaml_value).await?
+            };
             let non_empty = !value.is_empty();
             let mut value = serde_json::Value::String(value);
             if secret && non_empty {
@@ -351,6 +361,11 @@ fn startup_yaml_map(cfg: &ConfigFile) -> HashMap<String, String> {
 
 /// 判断键是否可写：属于 hot 键空间或启动类键集合。
 fn is_writable_key(key: &str, hot_keys: &std::collections::HashSet<String>) -> bool {
+    if key == "database.url" {
+        // 自举矛盾：DB 连接串必须在设置引擎（落库）之前读取，
+        // UI 保存值永远不会生效——禁止写入（review P1-#6）。
+        return false;
+    }
     hot_keys.contains(key) || crate::config::RESTART_REQUIRED_KEYS.contains(&key)
 }
 
@@ -379,11 +394,11 @@ mod tests {
         let hot_keys: std::collections::HashSet<String> =
             flat.into_iter().map(|(k, _)| k).collect();
 
-        // 合法：hot 键与启动类键
+        // 合法：hot 键与启动类键（database.url 除外——自举矛盾禁写）
         assert!(is_writable_key("gateway.display_currency", &hot_keys));
         assert!(is_writable_key("proxy.no_proxy", &hot_keys));
         assert!(is_writable_key("server.listen", &hot_keys));
-        assert!(is_writable_key("database.url", &hot_keys));
+        assert!(!is_writable_key("database.url", &hot_keys));
         assert!(is_writable_key("server.admin_jwt_secret", &hot_keys));
 
         // 非法：seed 类（admin.*）、业务实体字段、未知键
