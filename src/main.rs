@@ -15,6 +15,7 @@ mod cache;
 mod config;
 mod crypto;
 mod db;
+mod embed;
 mod entities;
 mod error;
 mod gateway;
@@ -203,6 +204,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // M8：定时更新检查（内部按 update_check.enabled/interval_hours/repo 条件执行）。
+    admin::system::spawn_scheduled_check(state.clone());
+
     // 6. 配置文件热加载监听（仅 hot 类生效；不覆盖 UI 保存值与 DB 业务实体）
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
     match config::watch(&config_path, tx) {
@@ -245,6 +249,8 @@ async fn main() -> anyhow::Result<()> {
             )),
         )
         .merge(gateway::router())
+        // M8：管理后台静态资源（web/dist 内嵌；SPA fallback）
+        .fallback(embed::spa_fallback)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 

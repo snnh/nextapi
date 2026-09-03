@@ -7,7 +7,8 @@
 //!     - 空串 `""` → 清除密码；
 //!     - 其他 → 视为新明文，加密更新；
 //!   `NEXTAPI_SECRET_KEY` 未设置时禁止设置密码（返回 BadRequest）；
-//! - POST /{id}/test：M1 桩——校验存在且 enabled，返回未实现提示（真实连通性测试 M3 启用）；
+//! - POST /{id}/test：真实连通性测试——经代理请求 `proxy.probe_url` 白名单探测地址，
+//!   返回可达性（ok/status/latency_ms/error，对齐 /api/upstreams/{id}/test）；
 //! - 所有写操作写 admin_audit_logs（action 如 proxy.create/update/delete）。
 //!
 //! 全部 SQL 使用运行时校验（sqlx::query/keyword QueryBuilder），不使用 query! 宏。
@@ -21,6 +22,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::auth::{self, AdminUsername};
@@ -262,22 +264,57 @@ async fn delete_proxy(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-/// POST /{id}/test：M1 桩——校验存在且 enabled，返回未实现提示。
+/// POST /{id}/test：真实连通性测试——经代理请求 `proxy.probe_url` 白名单探测地址。
+/// 返回形状与 /api/upstreams/{id}/test 一致（ok/status?/error?/latency_ms）。
 async fn test_proxy(
     State(state): State<Arc<AppState>>,
     _admin: AdminUsername,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let row = fetch_proxy(&state, id).await?;
+    // 从内存快照取行（含解密后的 password_plain；proxy_url() 已带凭据），不存在 → 404。
+    let snap = state.cache.snapshot();
+    let row = snap.proxies.get(&id).cloned().ok_or(ApiError::NotFound)?;
     if !row.enabled {
         return Err(ApiError::bad_request("代理已禁用，无法测试"));
     }
+
     let probe_url = state.hot.load().proxy.probe_url.clone();
-    Ok(Json(serde_json::json!({
-        "ok": false,
-        "note": "连通性测试将在 M3（HTTP 客户端接入后）启用",
-        "probe_url": probe_url,
-    })))
+
+    // 代理 URL 解析失败 / Client 构建失败 → ok:false + error（不发探测请求）。
+    let proxy = match reqwest::Proxy::all(row.proxy_url()) {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(Json(serde_json::json!({
+                "ok": false,
+                "latency_ms": 0u64,
+                "error": e.to_string(),
+            })));
+        }
+    };
+    let client = match reqwest::Client::builder().proxy(proxy).build() {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(Json(serde_json::json!({
+                "ok": false,
+                "latency_ms": 0u64,
+                "error": e.to_string(),
+            })));
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let resp = client.get(&probe_url).timeout(Duration::from_secs(10)).send().await;
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    match resp {
+        Ok(r) => {
+            let status = r.status().as_u16();
+            Ok(Json(serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms })))
+        }
+        Err(e) => {
+            Ok(Json(serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })))
+        }
+    }
 }
 
 /// 校验代理字段：类型、端口、名称/主机。
@@ -364,5 +401,38 @@ mod tests {
         assert!(validate_proxy("p", "ftp", "127.0.0.1", 8080).is_err());
         assert!(validate_proxy("p", "socks5", "127.0.0.1", 0).is_err());
         assert!(validate_proxy("p", "https", "", 80).is_err());
+    }
+
+    #[test]
+    fn proxy_url_builds_with_credentials() {
+        // test_proxy 依赖内存快照中 entities::ProxyRow 的 proxy_url()（含解密后凭据）。
+        let row = crate::entities::ProxyRow {
+            id: uuid::Uuid::new_v4(),
+            name: "p".into(),
+            kind: "http".into(),
+            host: "proxy.example.com".into(),
+            port: 8080,
+            username: Some("user".into()),
+            password_enc: None,
+            password_plain: Some("pass".into()),
+            no_proxy: Vec::new(),
+            enabled: true,
+        };
+        assert_eq!(row.proxy_url(), "http://user:pass@proxy.example.com:8080");
+
+        // 无凭据 + socks5 类型
+        let row2 = crate::entities::ProxyRow {
+            id: uuid::Uuid::new_v4(),
+            name: "s".into(),
+            kind: "socks5".into(),
+            host: "10.0.0.1".into(),
+            port: 1080,
+            username: None,
+            password_enc: None,
+            password_plain: None,
+            no_proxy: Vec::new(),
+            enabled: true,
+        };
+        assert_eq!(row2.proxy_url(), "socks5://10.0.0.1:1080");
     }
 }

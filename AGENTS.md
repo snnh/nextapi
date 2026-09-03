@@ -6,7 +6,7 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 管理后台 API，定位为「面向团队/应用的工具型网关」。
 
-仓库为 Rust + axum 工程，**后端功能已全部完成**（2026-09）：工程骨架（配置热加载/设置优先级/种子）、协议层（4 协议互转）、网关核心（鉴权/限流/路由/熔断/透传与转换决策）、日志统计（分区/WAL/聚合）、计价引擎（分段计价/双币种/导入导出）、图片通道（4 种上游形状适配 + 异步任务计费闭环）、供应商预设（8 个内置 + 一键接入）。管理后台前端（web/）尚未开始。
+仓库为 Rust + axum 工程，**后端功能已全部完成**（2026-09）：工程骨架（配置热加载/设置优先级/种子）、协议层（4 协议互转）、网关核心（鉴权/限流/路由/熔断/透传与转换决策）、日志统计（分区/WAL/聚合）、计价引擎（分段计价/双币种/导入导出）、图片通道（4 种上游形状适配 + 异步任务计费闭环）、供应商预设（8 个内置 + 一键接入）、更新检查（GitHub 手动/定时）。**管理后台前端（web/，Vue 3）已完成**（2026-09）：登录/仪表盘/密钥/上游/路由/价格/日志/统计/系统设置 9 页面，构建产物经 rust-embed 内嵌进二进制（Docker 多阶段自动构建）。
 
 其他文件说明：
 
@@ -41,8 +41,9 @@
 ## 构建与测试命令
 
 - 构建：`cargo build`；检查：`cargo check`；运行：`cargo run`（需要 PostgreSQL：本机 PG 或 `docker-compose up postgres`）
+- **前端（web/ 已存在）**：`cd web && npm install && npm run build`（产物 `web/dist`，经 rust-embed 编译进二进制）。**注意：`cargo build/test` 编译期读取 `web/dist`，目录缺失会编译失败**——本地改完前端后先 `npm run build` 再 cargo；Docker 多阶段已自动保证顺序（rust-embed 内嵌，运行期无需 dist）。
 - 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试在 `tests/`，需 docker-compose 起 PG + mock 上游）
-- 前端（web/ 尚未存在时跳过）：`cd web && npm install && npm run build`（产物经 rust-embed 嵌入）
+- 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:8080，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
 - 部署：`docker-compose up -d`（`nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`）
 - 发布前加入 `cargo audit` / `cargo deny` 依赖审计
 
@@ -71,6 +72,7 @@ src/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
 ├── presets.rs       # 供应商预设（8 个内置预设 + 一键接入 provision + media_base_url 处理）
+├── embed.rs         # M8：前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/images/* + 视频 501 占位）
 │                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
@@ -96,12 +98,15 @@ src/
     ├── pricing.rs   # /api/pricing CRUD + preview + suggest + unpriced + export/import（XML/JSON）
     ├── fx.rs        # /api/fx 查询/手动 upsert/refresh（代理矩阵）
     ├── presets.rs   # /api/presets 列表 + /{name}/provision 一键接入
+    ├── system.rs    # /api/system/version + check-update（GitHub Releases，代理矩阵）+ 定时检查任务
     └── audit.rs     # /api/audit 分页查询
 migrations/          # 0001_init.sql + 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
                      # + 0004_pricing.sql（price_rules）+ 0005_media.sql（media_tasks）
-contracts/           # 实现契约（多子代理并行时的冻结接口；仅本地参考，不进版本库）
+contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考，不进版本库）
 tests/               # 集成测试
-web/                 # Vue3 管理后台（尚未开始）
+web/                 # Vue3 管理后台（M8 完成）：src/views 9 页面 + components/{pricing,settings,upstreams,stats}/
+                     # 页面私有组件 + api/（types.ts 接口类型唯一事实源、index.ts 分组函数、http.ts 401 拦截）
+                     # dist/ 构建产物 rust-embed 内嵌（gitignore，先 npm run build 再 cargo）
 ```
 
 ## 核心架构约定（开发时必须遵守）

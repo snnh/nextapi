@@ -20,6 +20,9 @@ pub enum ApiError {
     Conflict(String),
     #[error("请求过于频繁，请稍后再试")]
     RateLimited,
+    /// 网关/上游错误（如 GitHub 更新检查联不通），映射 HTTP 502。
+    #[error("网关错误: {0}")]
+    BadGateway(String),
     #[error("内部错误: {0}")]
     Internal(String),
 }
@@ -43,6 +46,7 @@ impl ApiError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

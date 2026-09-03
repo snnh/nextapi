@@ -1,0 +1,75 @@
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', Arial, sans-serif;
+  background: #f0f2f5;
+  color: #303133;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 通用页面容器：白底卡片 + 内边距 */
+.page {
+  padding: 16px;
+}
+
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+/* 说明性灰色小字 */
+.hint {
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mono {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  word-break: break-all;
+}
+
+/* 金额/数字右对齐列 */
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 表格内 tag 组间距 */
+.tag-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 通用弹窗宽度 */
+.dlg {
+  width: 640px;
+  max-width: 92vw;
+}
+
+.dlg-wide {
+  width: 860px;
+  max-width: 96vw;
+}

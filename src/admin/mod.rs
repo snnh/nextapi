@@ -15,6 +15,7 @@ pub mod proxies;
 pub mod routes;
 pub mod settings_api;
 pub mod stats_api;
+pub mod system;
 pub mod upstreams;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -31,4 +32,5 @@ pub fn router() -> Router<Arc<AppState>> {
         .nest("/pricing", pricing::router())
         .nest("/fx", fx::router())
         .nest("/presets", presets::router())
+        .nest("/system", system::router())
 }
