@@ -60,7 +60,7 @@ export const authApi = {
   login: (body: LoginReq) => http.post<LoginResp>('/api/auth/login', body).then((r) => r.data),
   me: () => http.get<MeResp>('/api/auth/me').then((r) => r.data),
   changePassword: (body: ChangePasswordReq) =>
-    http.post<OkResp>('/api/auth/password', body).then((r) => r.data),
+    http.put<OkResp>('/api/auth/password', body).then((r) => r.data),
 }
 
 // ---------------------------------------------------------------------------

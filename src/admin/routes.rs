@@ -104,13 +104,14 @@ async fn replace_routes(
         }
     }
 
-    // 2. 校验所有 upstream_id 存在（去重后一次性查）
+    // 2. 校验所有 upstream_id 存在（多条路由可指向同一上游，故先去重再比对）
     let ids: Vec<Uuid> = routes.iter().map(|r| r.upstream_id).collect();
+    let unique_count = ids.iter().collect::<std::collections::HashSet<_>>().len();
     let found: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM upstreams WHERE id = ANY($1)")
         .bind(&ids)
         .fetch_all(&state.db)
         .await?;
-    if found.len() != ids.len() {
+    if found.len() != unique_count {
         return Err(ApiError::bad_request("存在无效的 upstream_id"));
     }
 

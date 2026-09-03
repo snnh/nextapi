@@ -156,6 +156,9 @@ async fn create_proxy(
     .fetch_one(&state.db)
     .await?;
 
+    // 刷新内存快照（写路径失效刷新，网关/外联 client 从快照取代理行）
+    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+
     auth::audit(
         &state,
         &admin.0,
@@ -221,6 +224,9 @@ async fn update_proxy(
     .execute(&state.db)
     .await?;
 
+    // 刷新内存快照（写路径失效刷新）
+    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+
     auth::audit(
         &state,
         &admin.0,
@@ -249,6 +255,9 @@ async fn delete_proxy(
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
+
+    // 刷新内存快照（写路径失效刷新，避免已删代理仍被路由使用）
+    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
 
     auth::audit(
         &state,
