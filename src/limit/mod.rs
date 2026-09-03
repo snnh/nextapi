@@ -54,6 +54,11 @@ impl RateLimiter {
             Err(ApiError::RateLimited)
         }
     }
+
+    /// 移除某 Key 的滑动窗口（删除 Key 时调用，防残留，review P3）。
+    pub fn remove_key(&self, key_id: Uuid) {
+        self.windows.lock().expect("RPM 窗口锁中毒").remove(&key_id);
+    }
 }
 
 /// 滑动窗口纯逻辑（60s）：先剔除过期事件，再判断能否容纳新事件。
@@ -202,6 +207,11 @@ impl QuotaCache {
             .lock()
             .expect("QuotaCache 锁中毒")
             .insert(key_id, (exceeded, Instant::now()));
+    }
+
+    /// 移除某 Key 的判定缓存（删除 Key 时调用，防残留，review P3）。
+    pub fn remove(&self, key_id: Uuid) {
+        self.inner.lock().expect("QuotaCache 锁中毒").remove(&key_id);
     }
 }
 

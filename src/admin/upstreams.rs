@@ -337,6 +337,9 @@ async fn delete_upstream(
         return Err(ApiError::NotFound);
     }
 
+    // 清理熔断状态（删除上游后不再保留冷却/半开残留，review P3）
+    state.breaker.reset(id);
+
     state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
     auth::audit(&state, &admin.0, "upstream.delete", "upstream", Some(&id.to_string()), serde_json::json!({}), None).await?;
     Ok(Json(serde_json::json!({ "ok": true })))

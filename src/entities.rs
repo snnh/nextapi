@@ -58,8 +58,6 @@ pub struct UpstreamRow {
     pub name: String,
     pub kind: String,
     pub base_url: String,
-    #[serde(skip)]
-    pub api_key_enc: Option<String>,
     /// 内存快照中持有的解密后 api_key（不落库、不出 API；由 cache 加载时解密填充）
     #[serde(skip)]
     pub api_key_plain: Option<String>,
@@ -213,19 +211,6 @@ pub struct UsageLogRow {
     pub fx_snapshot: Option<serde_json::Value>,
     pub usage_raw: Option<serde_json::Value>,
     pub debug_payload: Option<serde_json::Value>,
-}
-
-/// usage_hourly 汇总行（hour, model 为复合主键；cost 列可空）。
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct HourlyAggRow {
-    pub hour: chrono::DateTime<chrono::Utc>,
-    pub model: String,
-    pub requests: i64,
-    pub errors: i64,
-    pub prompt_tokens: i64,
-    pub completion_tokens: i64,
-    pub cost_cny: Option<Decimal>,
-    pub cost_usd: Option<Decimal>,
 }
 
 /// price_rules 行（M5；PLAN §6。dimension_key 为 dimensions 归一化串，参与唯一键）。

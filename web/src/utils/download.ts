@@ -13,7 +13,3 @@ export function downloadBlob(blob: Blob, filename: string) {
 export function downloadText(text: string, filename: string, mime = 'text/plain;charset=utf-8') {
   downloadBlob(new Blob([text], { type: mime }), filename)
 }
-
-export function downloadJsonText(obj: unknown, filename: string) {
-  downloadText(JSON.stringify(obj, null, 2), filename, 'application/json;charset=utf-8')
-}

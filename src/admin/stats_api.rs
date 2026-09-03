@@ -87,6 +87,10 @@ fn build_stats_filter(q: &StatsQuery, tz: &str) -> ApiResult<StatsFilter> {
         Some(s) => parse_rfc3339(s)?,
         None => now,
     };
+    // 区间倒置（from > to）直接 400（review P3）
+    if from_ts > to_ts {
+        return Err(ApiError::bad_request("from_ts 不能晚于 to_ts"));
+    }
     let key_id = q.key_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
     let upstream_id = q.upstream_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
 

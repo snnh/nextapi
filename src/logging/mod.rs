@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn new_wal_line_with_cost_fields_roundtrip() {
         // 新格式：5 个计价字段正常序列化/反序列化。
-        let mut ev = serde_json::from_str::<LogEvent>(r#"{
+        let ev = serde_json::from_str::<LogEvent>(r#"{
             "request_id":"r2","ts":"2024-01-01T00:00:00Z","key_id":null,
             "model":"deepseek-chat","upstream_id":null,"protocol_in":"openai_chat","protocol_out":"openai_chat",
             "convert_mode":"passthrough","stream":false,"status":200,"error":null,

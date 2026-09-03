@@ -128,7 +128,10 @@ impl ClientPools {
     /// 直连池客户端（no_proxy 命中时使用）。
     pub fn direct_client(&self) -> reqwest::Client {
         let mut g = self.inner.lock().unwrap();
-        g.entry("direct".to_string()).or_insert_with(reqwest::Client::new).clone()
+        // 与 client_for("direct") 同配置（pool_max_idle_per_host/keepalive），避免池参数分裂（review P3）
+        g.entry("direct".to_string())
+            .or_insert_with(|| Self::build_client(None))
+            .clone()
     }
 }
 
@@ -216,13 +219,32 @@ pub fn endpoint_path(p: Protocol, model: &str, stream: bool) -> String {
         Protocol::OpenaiResponses => "/responses".to_string(),
         Protocol::Anthropic => "/messages".to_string(),
         Protocol::Gemini => {
+            // 模型名作路径段需 URL 编码，防自定义模型名含 ?/&/# 污染查询串（review P3）
+            let enc = encode_path_segment(model);
             if stream {
-                format!("/models/{model}:streamGenerateContent?alt=sse")
+                format!("/models/{enc}:streamGenerateContent?alt=sse")
             } else {
-                format!("/models/{model}:generateContent")
+                format!("/models/{enc}:generateContent")
             }
         }
     }
+}
+
+/// URL 路径段百分号编码：保留 unreserved 与安全字符，其余 %XX。
+fn encode_path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                out.push_str(&format!("{b:02X}"));
+            }
+        }
+    }
+    out
 }
 
 /// 应用协议鉴权头：
@@ -802,7 +824,6 @@ mod tests {
             name: "up".into(),
             kind: "openai".into(),
             base_url: "http://127.0.0.1".into(),
-            api_key_enc: None,
             api_key_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,

@@ -40,18 +40,7 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import {
-  ArrowDown,
-  Coin,
-  Connection,
-  DataAnalysis,
-  Document,
-  Key,
-  Monitor,
-  Operation,
-  Setting,
-  UserFilled,
-} from '@element-plus/icons-vue'
+import { ArrowDown, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 
@@ -59,16 +48,17 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const menus = [
-  { path: '/dashboard', title: '仪表盘', icon: Monitor },
-  { path: '/keys', title: 'API 密钥', icon: Key },
-  { path: '/upstreams', title: '上游供应商', icon: Connection },
-  { path: '/routes', title: '模型路由', icon: Operation },
-  { path: '/pricing', title: '价格管理', icon: Coin },
-  { path: '/logs', title: '请求日志', icon: Document },
-  { path: '/stats', title: '统计报表', icon: DataAnalysis },
-  { path: '/settings', title: '系统设置', icon: Setting },
-]
+// 菜单从路由表派生（单源：router/index.ts 的 meta.title/meta.icon，review P3）
+const menus = computed(() => {
+  const root = router.options.routes.find((r) => r.path === '/')
+  return (root?.children ?? [])
+    .filter((c) => typeof c.path === 'string' && c.meta?.title)
+    .map((c) => ({
+      path: `/${c.path}`,
+      title: c.meta!.title as string,
+      icon: (c.meta!.icon as string) ?? 'Menu',
+    }))
+})
 
 const active = computed(() => route.path)
 const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()

@@ -166,7 +166,8 @@
               <el-input v-model="previewForm.image_size" placeholder="如 1024x1024" clearable style="width: 300px" />
             </el-form-item>
             <el-form-item label="视频秒数">
-              <el-input v-model="previewForm.video_seconds" placeholder="如 10" clearable style="width: 300px" />
+              <el-input-number v-model="previewForm.video_seconds" :min="0" :max="86400" :precision="3"
+                :controls="false" placeholder="如 10（支持小数）" style="width: 300px" />
             </el-form-item>
             <el-form-item label="视频分辨率">
               <el-input v-model="previewForm.video_resolution" placeholder="如 1080p" clearable style="width: 300px" />
@@ -379,7 +380,7 @@ const previewForm = reactive({
   cache_read_tokens: null as number | null,
   images: null as number | null,
   image_size: '',
-  video_seconds: '',
+  video_seconds: null as number | null,
   video_resolution: '',
   video_task_type: '',
 })
@@ -397,7 +398,11 @@ function buildPreviewReq(): PreviewReq {
     const v = previewForm[k]
     if (v !== null && v !== undefined) body[k] = v
   }
-  const strKeys = ['image_size', 'video_seconds', 'video_resolution', 'video_task_type'] as const
+  // 视频秒数：数字输入，非空时转 Decimal 字符串提交（后端按秒计价，支持小数）
+  if (previewForm.video_seconds !== null && previewForm.video_seconds !== undefined) {
+    body.video_seconds = String(previewForm.video_seconds)
+  }
+  const strKeys = ['image_size', 'video_resolution', 'video_task_type'] as const
   for (const k of strKeys) {
     const v = previewForm[k]
     if (v && v.trim()) body[k] = v.trim()
@@ -434,7 +439,7 @@ function resetPreview() {
   previewForm.cache_read_tokens = null
   previewForm.images = null
   previewForm.image_size = ''
-  previewForm.video_seconds = ''
+  previewForm.video_seconds = null
   previewForm.video_resolution = ''
   previewForm.video_task_type = ''
   previewResp.value = null

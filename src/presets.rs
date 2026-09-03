@@ -252,7 +252,6 @@ mod tests {
             name: "up".into(),
             kind: "openai".into(),
             base_url: "https://up.example.com/base".into(),
-            api_key_enc: None,
             api_key_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,

@@ -53,7 +53,6 @@ pub enum ImageOutcome {
         images: Vec<ImageData>,
         image_count: i64,
         image_size: Option<String>,
-        actual_prompt: Option<String>,
     },
     Task {
         provider_task_id: String,
@@ -231,7 +230,6 @@ pub fn parse_image_response(
                 image_count: data.len() as i64,
                 images,
                 image_size: req_size.map(|s| s.to_string()),
-                actual_prompt: None,
             })
         }
         ImageApi::Gemini => {
@@ -252,7 +250,6 @@ pub fn parse_image_response(
                 image_count: images.len() as i64,
                 images,
                 image_size: None,
-                actual_prompt: None,
             })
         }
         ImageApi::DashscopeSync => {
@@ -284,7 +281,6 @@ pub fn parse_image_response(
                 image_count,
                 images,
                 image_size,
-                actual_prompt: None,
             })
         }
         ImageApi::DashscopeAsync => {
@@ -358,7 +354,6 @@ pub async fn fetch_task_status(
 pub struct TaskStatus {
     /// pending|processing|succeeded|failed（canceled 归一到 failed）
     pub status: String,
-    pub images: Vec<ImageData>,
     pub image_count: Option<i64>,
     pub image_size: Option<String>,
     pub error: Option<String>,
@@ -371,15 +366,6 @@ fn parse_task_status(json: serde_json::Value) -> TaskStatus {
     let status = normalize_task_status(
         json.pointer("/output/task_status").and_then(|v| v.as_str()).unwrap_or(""),
     );
-
-    let mut images = Vec::new();
-    if let Some(results) = json.pointer("/output/results").and_then(|v| v.as_array()) {
-        for item in results {
-            if let Some(url) = item.get("url").and_then(|v| v.as_str()) {
-                images.push(ImageData { url: Some(url.to_string()), b64_json: None });
-            }
-        }
-    }
 
     let image_count = json.pointer("/usage/image_count").and_then(|v| v.as_i64());
     // 异步查询响应无尺寸信息 → None
@@ -399,7 +385,7 @@ fn parse_task_status(json: serde_json::Value) -> TaskStatus {
         None
     };
 
-    TaskStatus { status, images, image_count, image_size, error, raw }
+    TaskStatus { status, image_count, image_size, error, raw }
 }
 
 /// 归一化任务状态：PENDING/RUNNING/SUCCEEDED/FAILED/CANCELED/UNKNOWN
@@ -508,7 +494,6 @@ mod tests {
             name: "up".into(),
             kind: "openai".into(),
             base_url: "http://127.0.0.1".into(),
-            api_key_enc: None,
             api_key_plain: None,
             protocols: protocols.into_iter().map(String::from).collect(),
             enabled: true,
@@ -745,10 +730,9 @@ mod tests {
         });
         let out = parse_image_response(ImageApi::Openai, Some("1024x1024"), &json).unwrap();
         match out {
-            ImageOutcome::Created { images, image_count, image_size, actual_prompt } => {
+            ImageOutcome::Created { images, image_count, image_size } => {
                 assert_eq!(image_count, 2);
                 assert_eq!(image_size.as_deref(), Some("1024x1024"));
-                assert!(actual_prompt.is_none());
                 assert_eq!(images[0].url.as_deref(), Some("https://cdn/u1.png"));
                 assert!(images[0].b64_json.is_none());
                 assert_eq!(images[1].b64_json.as_deref(), Some("aGVsbG8="));
@@ -841,8 +825,6 @@ mod tests {
         let ts = parse_task_status(json);
         assert_eq!(ts.status, "succeeded");
         assert_eq!(ts.image_count, Some(1));
-        assert_eq!(ts.images.len(), 1);
-        assert_eq!(ts.images[0].url.as_deref(), Some("https://r/1.png"));
         assert!(ts.error.is_none());
     }
 

@@ -99,7 +99,6 @@ impl EntityCache {
                 name: u.name,
                 kind: u.kind,
                 base_url: u.base_url,
-                api_key_enc: u.api_key_enc,
                 api_key_plain,
                 protocols: u.protocols,
                 enabled: u.enabled,

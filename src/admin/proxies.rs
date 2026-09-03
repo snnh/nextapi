@@ -140,6 +140,13 @@ async fn create_proxy(
 
     // 密码：非空则加密；密钥缺失 → BadRequest
     let password_enc = encrypt_password_option(&state, body.password.as_deref())?;
+    // 用户名：空白视为未设置（与 update 语义一致）
+    let username = body
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO proxy_configs (name, kind, host, port, username, password_enc, no_proxy, enabled) \
@@ -149,7 +156,7 @@ async fn create_proxy(
     .bind(&body.kind)
     .bind(&body.host)
     .bind(body.port as i32)
-    .bind(&body.username)
+    .bind(&username)
     .bind(&password_enc)
     .bind(body.no_proxy.as_deref().unwrap_or(&[]))
     .bind(body.enabled.unwrap_or(true))
@@ -190,7 +197,12 @@ async fn update_proxy(
     let port = body.port.unwrap_or(row.port as u16);
     validate_proxy(&name, &kind, &host, port)?;
 
-    let username = body.username.or(row.username.clone());
+    let username = match body.username {
+        // 显式空串 = 清空用户名；None = 保持原值（review P3：原实现无法清空）
+        Some(ref u) if u.trim().is_empty() => None,
+        Some(u) => Some(u.trim().to_string()),
+        None => row.username.clone(),
+    };
     let no_proxy = body.no_proxy.unwrap_or_else(|| row.no_proxy.clone());
     let enabled = body.enabled.unwrap_or(row.enabled);
 

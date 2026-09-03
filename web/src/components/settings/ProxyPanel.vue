@@ -70,7 +70,7 @@
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-tooltip :content="`探测地址：${probeMap[row.id] || '见运行参数 proxy.probe_url'}`" placement="top">
+            <el-tooltip content="探测地址为运行参数 proxy.probe_url（系统设置-运行参数-代理）" placement="top">
               <el-button size="small" :loading="testing.has(row.id)" @click="test(row)">测试</el-button>
             </el-tooltip>
             <el-button size="small" @click="openEdit(row)">编辑</el-button>
@@ -160,7 +160,6 @@ const loading = ref(false)
 const saving = ref(false)
 const toggling = reactive(new Set<string>())
 const testing = reactive(new Set<string>())
-const probeMap = reactive<Record<string, string>>({})
 
 const formRef = ref<FormInstance>()
 
@@ -221,16 +220,12 @@ async function test(row: ProxyOut) {
   testing.add(row.id)
   try {
     const r = await proxyApi.test(row.id)
-    if (r.note) {
-      ElMessage.info(r.note)
-    } else if (r.ok) {
+    if (r.ok) {
       const st = r.status != null ? `HTTP ${r.status}` : 'HTTP OK'
       const lat = r.latency_ms != null ? ` · ${r.latency_ms} ms` : ''
       ElMessage.success(`连通正常 ${st}${lat}`)
-      if (r.probe_url) probeMap[row.id] = r.probe_url
     } else {
       ElMessage.error(r.error || '测试失败')
-      if (r.probe_url) probeMap[row.id] = r.probe_url
     }
   } catch (e) {
     ElMessage.error(errMsg(e))

@@ -191,6 +191,10 @@ async fn cleanup_logs(
     Json(req): Json<CleanupReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let before = parse_rfc3339(&req.before)?;
+    // 防误删当前/未来分区：before 晚于现在时仅按时间也必然覆盖当前分区（review P3）
+    if before > chrono::Utc::now() {
+        return Err(ApiError::bad_request("before 不能晚于当前时间"));
+    }
     let days = state.hot.load().gateway.log_partition_days;
     let dropped = partition::drop_covered(&state.db, before, days, req.dry_run).await?;
 
@@ -381,7 +385,6 @@ fn csv_response(body: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     fn utc(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)

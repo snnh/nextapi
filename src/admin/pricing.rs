@@ -631,7 +631,9 @@ fn build_export_items(
             }
         }
     }
-    map.into_values()
+    // 确定性输出：按 (upstream, model_id, currency) 排序（review P3：HashMap 顺序不稳定）
+    let mut items: Vec<PriceExportItem> = map
+        .into_values()
         .map(|agg| PriceExportItem {
             model_id: agg.model_id,
             upstream: agg.upstream,
@@ -648,7 +650,14 @@ fn build_export_items(
             image: if agg.image.is_empty() { None } else { Some(serde_json::Value::Array(agg.image)) },
             video: if agg.video.is_empty() { None } else { Some(serde_json::Value::Array(agg.video)) },
         })
-        .collect()
+        .collect();
+    items.sort_by(|a, b| {
+        a.upstream
+            .cmp(&b.upstream)
+            .then_with(|| a.model_id.cmp(&b.model_id))
+            .then_with(|| a.currency.cmp(&b.currency))
+    });
+    items
 }
 
 /// 图片/视频规则的导出值（base_price + dimension_key + dimensions + segments?）。

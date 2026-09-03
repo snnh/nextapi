@@ -260,6 +260,10 @@ async fn delete_key(
         return Err(ApiError::NotFound);
     }
 
+    // 清理内存中该 Key 的限流窗口与用量判定缓存（review P3）
+    state.limiter.remove_key(id);
+    state.quota_cache.remove(id);
+
     state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
     auth::audit(&state, &admin.0, "key.delete", "key", Some(&id.to_string()), serde_json::json!({}), None).await?;
     Ok(Json(serde_json::json!({ "ok": true })))

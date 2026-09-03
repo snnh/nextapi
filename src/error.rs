@@ -34,9 +34,6 @@ impl ApiError {
     pub fn bad_request<S: Into<String>>(s: S) -> Self {
         Self::BadRequest(s.into())
     }
-    pub fn conflict<S: Into<String>>(s: S) -> Self {
-        Self::Conflict(s.into())
-    }
 
     pub fn status(&self) -> StatusCode {
         match self {
@@ -68,6 +65,10 @@ impl From<sqlx::Error> for ApiError {
             sqlx::Error::RowNotFound => Self::NotFound,
             sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
                 Self::Conflict("唯一键冲突".into())
+            }
+            // 外键违反（如引用不存在的 upstream）→ 400 参数错误而非 500（review P3）
+            sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+                Self::bad_request("引用的资源不存在")
             }
             other => Self::internal(other),
         }

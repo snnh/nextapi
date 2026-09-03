@@ -214,6 +214,20 @@ impl Stream for TeeStream {
     }
 }
 
+/// 客户端提前断开（Body 被 drop 而流未到尾）时补记账（review P3）：
+/// 正常走完的流在 poll 中已 finalize（finalized=true 或 ctx 已取走），此处仅补漏。
+impl Drop for TeeStream {
+    fn drop(&mut self) {
+        if self.finalized || self.ctx.is_none() {
+            return;
+        }
+        self.finalized = true;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            finalize_stream(self);
+        }
+    }
+}
+
 /// 流结束（含 Err）：取收集文本，按入口协议提取 usage，组装 LogEvent 并 sink.log
 /// （status=200 —— HTTP 响应头已发，即使中途断流，客户端看到的仍是 200）。
 fn finalize_stream(stream: &mut TeeStream) {
@@ -321,11 +335,11 @@ fn clean_auth_value(name: &str, raw: &str) -> Option<String> {
         return None;
     }
     if name.eq_ignore_ascii_case("authorization") {
-        let val = t
-            .strip_prefix("Bearer ")
-            .or_else(|| t.strip_prefix("bearer "))
-            .unwrap_or(t)
-            .trim();
+        // scheme 大小写不敏感（Bearer/bearer/BEARER 均接受，review P3）
+        let val = match t.split_once(char::is_whitespace) {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("bearer") => rest.trim(),
+            _ => t,
+        };
         if !val.is_empty() {
             Some(val.to_string())
         } else {
@@ -1651,7 +1665,6 @@ mod tests {
             name: "up".into(),
             kind: "openai".into(),
             base_url: "http://localhost".into(),
-            api_key_enc: None,
             api_key_plain: Some("sk-up".into()),
             protocols: vec!["openai_chat".into()],
             enabled: true,

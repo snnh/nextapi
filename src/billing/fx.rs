@@ -109,27 +109,6 @@ impl FxSet {
         let rate = self.map.get(&key)?;
         Some((amount * rate.rate, Some(rate.clone())))
     }
-
-    /// 全量视图（键序稳定），供调试/审计。
-    pub fn snapshot_json(&self) -> serde_json::Value {
-        let mut keys: Vec<&(String, String)> = self.map.keys().collect();
-        keys.sort();
-        let arr: Vec<serde_json::Value> = keys
-            .into_iter()
-            .map(|(from, to)| {
-                let r = &self.map[&(from.clone(), to.clone())];
-                serde_json::json!({
-                    "from": from,
-                    "to": to,
-                    "rate": r.rate,
-                    "source": r.source,
-                    "at": r.at,
-                    "inverse": r.inverse,
-                })
-            })
-            .collect();
-        serde_json::Value::Array(arr)
-    }
 }
 
 /// 读出 fx_rates 全量并应用 manual 优先 + stale 过滤 + 逆汇率展开。
