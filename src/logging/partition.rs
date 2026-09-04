@@ -77,6 +77,14 @@ async fn existing_partition_names(pool: &sqlx::PgPool) -> ApiResult<HashSet<Stri
 /// 启动/定时：确保覆盖 [now-1个窗口, now+ahead个窗口] 的分区存在（幂等），返回新建名。
 pub async fn ensure_partitions(pool: &sqlx::PgPool, days: u32, ahead: i64) -> ApiResult<Vec<String>> {
     let days = effective_days(days);
+    // advisory 锁（固定键）：防多实例/重启并发 CREATE PARTITION 竞态（review P2-3）
+    const LOCK_KEY: i64 = 794_724_262_143_070; // 任意固定键（'nextapi' 语义占位）
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(LOCK_KEY)
+        .execute(&mut *tx)
+        .await?;
+
     let existing = existing_partition_names(pool).await?;
     let now = Utc::now();
     let cur = partition_index(now, days);
@@ -97,9 +105,10 @@ pub async fn ensure_partitions(pool: &sqlx::PgPool, days: u32, ahead: i64) -> Ap
             from.timestamp(),
             to.timestamp()
         );
-        sqlx::query(&sql).execute(pool).await?;
+        sqlx::query(&sql).execute(&mut *tx).await?;
         created.push(name);
     }
+    tx.commit().await?;
     Ok(created)
 }
 

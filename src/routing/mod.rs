@@ -258,14 +258,18 @@ impl Breaker {
         let now = Utc::now();
         let threshold = up.breaker_threshold.max(1) as u32;
 
-        // 在锁内完成状态迁移与 DB 回写内容的推导；`await` 放在锁外，避免持有 std Mutex 跨 await。
-        let (next, write_back, db) = {
-            let states = self.states.lock().unwrap();
+        // 在锁内完成状态迁移（读→计算→**立即写回**，杜绝并发失败计数丢失）与 DB
+        // 回写内容的推导；`await` 放在锁外，避免持有 std Mutex 跨 await。
+        // DB 回写基于旧状态推导：并发下 FailuresOnly 可能略滞后于内存计数，
+        // 但 Open 边界回写准确（重启恢复用，允许近似）。
+        let (next, db) = {
+            let mut states = self.states.lock().unwrap();
             let state = states
                 .get(&id)
                 .cloned()
                 .unwrap_or(BreakerState::Closed { failures: 0 });
-            let (next, write_back) = next_on_failure(&state, threshold, now);
+            let (next, _write_back) = next_on_failure(&state, threshold, now);
+            states.insert(id, next.clone());
 
             // 离开 HalfOpen 时清理探测计时，避免残留。
             if matches!(state, BreakerState::HalfOpen { .. })
@@ -287,9 +291,10 @@ impl Breaker {
                 }),
                 _ => None,
             };
-            (next, write_back, db)
+            (next, db)
         };
-        debug_assert_eq!(write_back, db.is_some(), "回写决策与 db 推导应一致");
+        debug_assert_eq!(db.is_some(), matches!(next, BreakerState::Open { .. }), "DB 回写与开闸状态应一致");
+        let _ = &next;
 
         if let Some(db) = db {
             let res = match db {
@@ -315,8 +320,7 @@ impl Breaker {
                 tracing::warn!(upstream = %up.name, error = %e, "熔断失败回写 DB 失败");
             }
         }
-
-        self.states.lock().unwrap().insert(id, next);
+        // 内存状态已在锁内推进，无需此处回写（见上）。
     }
 
     /// 手动启停后清除内存状态（由管理 API 调用）。

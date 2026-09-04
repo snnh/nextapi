@@ -643,13 +643,22 @@ fn nonstream_success(
             match protocol::response_to_ir(t, &json, &mut ctx)
                 .and_then(|ir| protocol::response_from_ir(entry, &ir, &mut ctx))
             {
-                Ok(out) => NonstreamOutcome {
-                    response: json_rsp(StatusCode::OK, request_id, ctx.degraded_header().as_deref(), out.clone()),
-                    status: 200,
-                    degraded: !ctx.degraded.is_empty(),
-                    error: None,
-                    final_json: Some(out),
-                },
+                Ok(out) => {
+                    // 回写网关模型名（与透传路径一致；转换响应会保留上游 model，review P2-6）
+                    let mut out = out;
+                    if let Some(obj) = out.as_object_mut() {
+                        if obj.contains_key("model") {
+                            obj.insert("model".into(), serde_json::Value::String(gateway_model.to_string()));
+                        }
+                    }
+                    NonstreamOutcome {
+                        response: json_rsp(StatusCode::OK, request_id, ctx.degraded_header().as_deref(), out.clone()),
+                        status: 200,
+                        degraded: !ctx.degraded.is_empty(),
+                        error: None,
+                        final_json: Some(out),
+                    }
+                }
                 Err(e) => {
                     let body = error_from_ir(
                         entry,

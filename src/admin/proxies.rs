@@ -137,6 +137,7 @@ async fn create_proxy(
     Json(body): Json<CreateProxyReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_proxy(&body.name, &body.kind, &body.host, body.port)?;
+    validate_proxy_extras(body.username.as_deref(), body.no_proxy.as_deref())?;
 
     // 密码：非空则加密；密钥缺失 → BadRequest
     let password_enc = encrypt_password_option(&state, body.password.as_deref())?;
@@ -204,6 +205,7 @@ async fn update_proxy(
         None => row.username.clone(),
     };
     let no_proxy = body.no_proxy.unwrap_or_else(|| row.no_proxy.clone());
+    validate_proxy_extras(username.as_deref(), Some(no_proxy.as_slice()))?;
     let enabled = body.enabled.unwrap_or(row.enabled);
 
     // 密码语义：未传 / "***" 保持、"" 清除、其他加密更新
@@ -340,17 +342,48 @@ async fn test_proxy(
 
 /// 校验代理字段：类型、端口、名称/主机。
 fn validate_proxy(name: &str, kind: &str, host: &str, port: u16) -> Result<(), ApiError> {
+    const MAX_NAME: usize = 255;
+    const MAX_HOST: usize = 255;
     if name.trim().is_empty() {
         return Err(ApiError::bad_request("代理名称不能为空"));
     }
+    if name.chars().count() > MAX_NAME {
+        return Err(ApiError::bad_request(format!("name 不能超过 {MAX_NAME} 字符")));
+    }
     if host.trim().is_empty() {
         return Err(ApiError::bad_request("代理主机不能为空"));
+    }
+    if host.chars().count() > MAX_HOST {
+        return Err(ApiError::bad_request(format!("host 不能超过 {MAX_HOST} 字符")));
     }
     if !matches!(kind, "http" | "https" | "socks5") {
         return Err(ApiError::bad_request("代理类型必须为 http/https/socks5"));
     }
     if !(1..=65535).contains(&port) {
         return Err(ApiError::bad_request("端口必须在 1..=65535"));
+    }
+    Ok(())
+}
+
+/// username/no_proxy 边界校验（review P2）：防存储膨胀。
+fn validate_proxy_extras(username: Option<&str>, no_proxy: Option<&[String]>) -> Result<(), ApiError> {
+    const MAX_USERNAME: usize = 128;
+    const MAX_NO_PROXY: usize = 100;
+    const MAX_ITEM: usize = 255;
+    if let Some(u) = username {
+        if u.chars().count() > MAX_USERNAME {
+            return Err(ApiError::bad_request(format!("username 不能超过 {MAX_USERNAME} 字符")));
+        }
+    }
+    if let Some(np) = no_proxy {
+        if np.len() > MAX_NO_PROXY {
+            return Err(ApiError::bad_request(format!("no_proxy 最多 {MAX_NO_PROXY} 项")));
+        }
+        for item in np {
+            if item.chars().count() > MAX_ITEM {
+                return Err(ApiError::bad_request(format!("no_proxy 项不能超过 {MAX_ITEM} 字符")));
+            }
+        }
     }
     Ok(())
 }
@@ -376,6 +409,10 @@ fn password_semantics(password: Option<&str>) -> PasswordSemantics {
 fn encrypt_password_option(state: &AppState, password: Option<&str>) -> Result<Option<String>, ApiError> {
     match password {
         Some(pw) if !pw.is_empty() => {
+            // 掩码字面量是「保持原值」的保留语义，创建路径无旧值可保持 → 拒绝（review P2-13）
+            if pw == "***" {
+                return Err(ApiError::bad_request("\"***\" 为掩码保留值，不能作为真实密码"));
+            }
             if !state.crypto.is_available() {
                 return Err(ApiError::bad_request(
                     "未设置 NEXTAPI_SECRET_KEY，无法保存代理密码",

@@ -814,8 +814,9 @@ async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
     if !cfg.allow_url {
         return Err(ApiError::Forbidden);
     }
-    check_ssrf(url)?;
+    check_ssrf(url).await?;
 
+    // 一次性 client：禁重定向（重定向目标不复查会绕过 SSRF 校验，review P2-5）。
     let client = build_import_client(state, url);
     let max_bytes = max_size_mb.saturating_mul(1_048_576u64).max(1);
     let timeout = Duration::from_secs(timeout_secs.max(1));
@@ -826,6 +827,9 @@ async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
         .send()
         .await
         .map_err(|e| ApiError::internal(format!("URL 拉取失败: {e}")))?;
+    if resp.status().is_redirection() {
+        return Err(ApiError::bad_request("不允许重定向（URL 导入禁跟随 3xx）"));
+    }
     let resp = resp
         .error_for_status()
         .map_err(|e| ApiError::bad_request(format!("URL 返回异常状态: {e}")))?;
@@ -845,7 +849,7 @@ async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
 }
 
 /// SSRF 防护：仅 https；host 为 IP 时禁内网段；域名为 localhost/内网后缀时拒绝。
-fn check_ssrf(url: &str) -> ApiResult<()> {
+async fn check_ssrf(url: &str) -> ApiResult<()> {
     let parsed = reqwest::Url::parse(url).map_err(|e| ApiError::bad_request(format!("URL 非法: {e}")))?;
     if parsed.scheme() != "https" {
         return Err(ApiError::bad_request("仅允许 https URL"));
@@ -869,6 +873,18 @@ fn check_ssrf(url: &str) -> ApiResult<()> {
     {
         return Err(ApiError::bad_request("禁止访问本机/内网域名"));
     }
+    // 域名：DNS 解析后复核（防解析到内网/云元数据的域名，review P2-5）；
+    // 任一解析结果为内网即拒绝；解析失败也拒绝（宁可失败不可盲发）。
+    let ips = tokio::net::lookup_host((host, 443))
+        .await
+        .map_err(|e| ApiError::bad_request(format!("域名解析失败: {e}")))?
+        .collect::<Vec<_>>();
+    if ips.is_empty() {
+        return Err(ApiError::bad_request("域名无解析结果"));
+    }
+    if ips.iter().any(|sa| is_internal_ip(sa.ip())) {
+        return Err(ApiError::bad_request("域名解析到内网地址，禁止访问"));
+    }
     Ok(())
 }
 
@@ -881,12 +897,18 @@ fn is_internal_ip(ip: std::net::IpAddr) -> bool {
                 || (o & 0xFFFF_0000) == 0xC0A8_0000 // 192.168/16
                 || (o & 0xFF00_0000) == 0x7F00_0000 // 127/8
                 || (o & 0xFFFF_0000) == 0xA9FE_0000 // 169.254/16
+                || (o & 0xFFC0_0000) == 0x6440_0000 // 100.64/10 CGNAT 共享地址
         }
         std::net::IpAddr::V6(v6) => {
+            // IPv4-mapped IPv6（::ffff:a.b.c.d）按内嵌 IPv4 判定
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_internal_ip(std::net::IpAddr::V4(v4));
+            }
             let seg = v6.segments();
             v6.is_loopback() // ::1
                 || ((seg[0] & 0xFFC0) == 0xFE80) // fe80::/10 链路本地
                 || ((seg[0] & 0xFE00) == 0xFC00) // fc00::/7 ULA 私网
+                || (seg[0] == 0x0064 && seg[1] == 0xff9b) // 64:ff9b::/96 NAT64（可能映射内网，兜底拒绝）
         }
     }
 }
@@ -920,12 +942,24 @@ fn build_import_client(state: &AppState, url: &str) -> reqwest::Client {
             }
         }
     }
-    state.client_pools.direct_client()
+    import_direct_client()
+}
+
+/// 直连导入 client（一次性：禁重定向，SSRF 安全；低频操作不共享连接池）。
+fn import_direct_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 fn proxy_client(p: &crate::entities::ProxyRow) -> Option<reqwest::Client> {
     let proxy = reqwest::Proxy::all(p.proxy_url()).ok()?;
-    reqwest::Client::builder().proxy(proxy).build().ok()
+    reqwest::Client::builder()
+        .proxy(proxy)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,6 +1155,12 @@ fn analyze_import(items: &[PriceExportItem], upstream_ids: &HashMap<String, Uuid
 // ---------------------------------------------------------------------------
 
 fn validate_create_fields(body: &CreateRuleReq) -> ApiResult<()> {
+    if body.model_id.trim().is_empty() {
+        return Err(ApiError::bad_request("model_id 不能为空"));
+    }
+    if body.model_id.chars().count() > 255 {
+        return Err(ApiError::bad_request("model_id 不能超过 255 字符"));
+    }
     validate_fields(
         &body.unit,
         &body.currency,
@@ -1129,6 +1169,15 @@ fn validate_create_fields(body: &CreateRuleReq) -> ApiResult<()> {
         body.dimensions.as_ref(),
         body.segments.as_ref(),
     )
+}
+
+/// JSON 嵌套深度（对象/数组递归；防深嵌套 DoS，review P2）。
+fn json_depth(v: &serde_json::Value) -> usize {
+    match v {
+        serde_json::Value::Array(a) => 1 + a.iter().map(json_depth).max().unwrap_or(0),
+        serde_json::Value::Object(o) => 1 + o.values().map(json_depth).max().unwrap_or(0),
+        _ => 1,
+    }
 }
 
 /// CRUD 字段校验：unit/currency/context_basis 白名单、base_price>=0、JSON 形态合法。
@@ -1158,10 +1207,19 @@ fn validate_fields(
         if !d.is_null() && !d.is_object() {
             return Err(ApiError::bad_request("dimensions 必须为 JSON 对象"));
         }
+        if !d.is_null() && json_depth(d) > 10 {
+            return Err(ApiError::bad_request("dimensions 嵌套过深（最多 10 层）"));
+        }
     }
     if let Some(s) = segments {
         if !s.is_array() {
             return Err(ApiError::bad_request("segments 必须为 JSON 数组"));
+        }
+        if s.as_array().map_or(0, Vec::len) > 50 {
+            return Err(ApiError::bad_request("segments 最多 50 段"));
+        }
+        if json_depth(s) > 10 {
+            return Err(ApiError::bad_request("segments 嵌套过深（最多 10 层）"));
         }
     }
     Ok(())

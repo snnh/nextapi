@@ -301,23 +301,75 @@ fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value
 }
 
 fn set_nested_segs(cur: &mut serde_json::Value, segs: &[&str], value: serde_json::Value) {
+    if segs.is_empty() {
+        return;
+    }
+    // 数字路径段 = 数组索引（review P2-4：原实现把数组强转对象破坏请求结构）
+    let next_is_index = segs.get(1).map_or(false, |s| s.parse::<usize>().is_ok());
+
     if segs.len() == 1 {
-        if let Some(obj) = cur.as_object_mut() {
-            obj.insert(segs[0].to_string(), value);
+        match cur {
+            serde_json::Value::Object(obj) => {
+                obj.insert(segs[0].to_string(), value);
+            }
+            serde_json::Value::Array(arr) => {
+                if let Ok(i) = segs[0].parse::<usize>() {
+                    if i < arr.len() {
+                        arr[i] = value;
+                    } else {
+                        tracing::warn!("body 覆盖路径 {segs:?} 数组越界，忽略该键");
+                    }
+                }
+            }
+            _ => {}
         }
         return;
     }
-    if !cur.is_object() {
-        *cur = serde_json::Value::Object(Default::default());
+
+    match cur {
+        serde_json::Value::Object(obj) => {
+            let child = match obj.entry(segs[0].to_string()) {
+                serde_json::map::Entry::Occupied(o) => o.into_mut(),
+                serde_json::map::Entry::Vacant(v) => {
+                    v.insert(if next_is_index {
+                        serde_json::Value::Array(Default::default())
+                    } else {
+                        serde_json::Value::Object(Default::default())
+                    })
+                }
+            };
+            if child.is_array() && !next_is_index {
+                // 现存数组上无法用非索引键写入 → 忽略，绝不把数组转成对象（review P2-4）
+                tracing::warn!("body 覆盖路径 `{}` 落在数组上且非索引段，忽略该键", segs[0]);
+                return;
+            }
+            // 容器类型与下一段语义对齐（标量 → 容器只在确有路径时替换）
+            if next_is_index && !child.is_array() {
+                *child = serde_json::Value::Array(Default::default());
+            } else if !next_is_index && !child.is_object() && !child.is_array() {
+                *child = serde_json::Value::Object(Default::default());
+            }
+            set_nested_segs(child, &segs[1..], value);
+        }
+        serde_json::Value::Array(arr) => {
+            // 路径落在数组上：首段必须是索引，否则语义不明 → 忽略不破坏
+            if let Ok(i) = segs[0].parse::<usize>() {
+                if i >= arr.len() {
+                    // 扩容到索引位；新元素用与下一段语义一致的默认容器（保证数组元素同构）
+                    let fill = if next_is_index {
+                        serde_json::Value::Array(Default::default())
+                    } else {
+                        serde_json::Value::Object(Default::default())
+                    };
+                    arr.resize_with(i + 1, || fill.clone());
+                }
+                set_nested_segs(&mut arr[i], &segs[1..], value);
+            } else {
+                tracing::warn!("body 覆盖路径 `{}` 落在数组上且非索引段，忽略该键", segs[0]);
+            }
+        }
+        _ => {}
     }
-    let child = match cur.as_object_mut().unwrap().entry(segs[0].to_string()) {
-        serde_json::map::Entry::Occupied(o) => o.into_mut(),
-        serde_json::map::Entry::Vacant(v) => v.insert(serde_json::Value::Object(Default::default())),
-    };
-    if !child.is_object() {
-        *child = serde_json::Value::Object(Default::default());
-    }
-    set_nested_segs(child, &segs[1..], value);
 }
 
 fn add_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value) {
@@ -637,6 +689,40 @@ mod tests {
         assert_eq!(endpoint_path(Protocol::Anthropic, "m", false), "/messages");
         assert_eq!(endpoint_path(Protocol::Gemini, "m", false), "/models/m:generateContent");
         assert_eq!(endpoint_path(Protocol::Gemini, "m", true), "/models/m:streamGenerateContent?alt=sse");
+    }
+
+    #[test]
+    fn set_nested_preserves_arrays_by_index() {
+        // review P2-4：数组索引路径不再把数组强转对象
+        let mut body = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "ok"}
+            ],
+            "temperature": 1.0
+        });
+        set_nested(&mut body, "messages.0.content", serde_json::json!("hello"));
+        assert_eq!(body["messages"][0]["content"], "hello");
+        assert!(body["messages"].is_array());
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+
+        // 数组不存在时按索引创建（元素用对象容器）
+        let mut body2 = serde_json::json!({});
+        set_nested(&mut body2, "items.2.name", serde_json::json!("x"));
+        assert_eq!(body2["items"].as_array().unwrap().len(), 3);
+        assert_eq!(body2["items"][2]["name"], "x");
+        assert!(body2["items"][0].is_object());
+
+        // 现存数组上使用非索引键 → 忽略且不破坏
+        let mut body3 = serde_json::json!({ "messages": [{ "role": "user" }] });
+        set_nested(&mut body3, "messages.role", serde_json::json!("system"));
+        assert!(body3["messages"].is_array());
+        assert_eq!(body3["messages"][0]["role"], "user");
+
+        // 深层：数组中元素内嵌数组
+        let mut body4 = serde_json::json!({ "list": [[1, 2], [3]] });
+        set_nested(&mut body4, "list.1.0", serde_json::json!(9));
+        assert_eq!(body4["list"][1][0], 9);
     }
 
     #[test]

@@ -91,7 +91,10 @@ async fn replace_routes(
     admin: AdminUsername,
     Json(routes): Json<Vec<RouteItem>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // 1. 校验 weight > 0
+    // 1. 校验 weight > 0 与字段边界（长度/数量上限，review P2）
+    if routes.len() > 5000 {
+        return Err(ApiError::bad_request("路由总数不能超过 5000"));
+    }
     for r in &routes {
         if r.weight.unwrap_or(1) <= 0 {
             return Err(ApiError::bad_request(format!(
@@ -101,6 +104,15 @@ async fn replace_routes(
         }
         if r.model_pattern.trim().is_empty() {
             return Err(ApiError::bad_request("model_pattern 不能为空"));
+        }
+        if r.model_pattern.chars().count() > 255 {
+            return Err(ApiError::bad_request("model_pattern 不能超过 255 字符"));
+        }
+        if r.override_model.as_deref().map_or(false, |m| m.chars().count() > 255) {
+            return Err(ApiError::bad_request("override_model 不能超过 255 字符"));
+        }
+        if r.retry_status_codes.as_ref().map_or(0, Vec::len) > 20 {
+            return Err(ApiError::bad_request("retry_status_codes 最多 20 个状态码"));
         }
     }
 

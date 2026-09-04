@@ -42,10 +42,17 @@ async fn flush(
         }
         Err(e) => {
             tracing::warn!("批量写库失败，写 WAL 兜底: {e}");
-            if let Err(we) = wal.append(batch).await {
-                tracing::error!("WAL 兜底追加失败，数据丢弃: {we}");
+            match wal.append(batch).await {
+                Ok(_) => {
+                    // WAL 兜底成功：批次已持久化，由重放负责落库（幂等守卫防重复）
+                    batch.clear();
+                }
+                Err(we) => {
+                    // WAL 也失败（如磁盘故障）：保留批次在内存等待下次 flush 重试，
+                    // 防止静默丢弃（批次有界 ≤ BATCH_MAX；新事件继续走 rx 溢出语义）。
+                    tracing::error!("WAL 兜底追加失败，批次保留待重试（最多 {} 条）: {we}", batch.len());
+                }
             }
-            batch.clear();
             // 指数退避 1s→30s（先休眠，再加大下次退避值）
             tokio::time::sleep(Duration::from_secs((*backoff).min(30))).await;
             *backoff = next_backoff(*backoff);

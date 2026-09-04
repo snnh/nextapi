@@ -18,7 +18,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::AdminUsername;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
 /// 审计日志行（含 LEFT JOIN 出的 admin 用户名）。
@@ -70,6 +70,10 @@ async fn list_audit(
 ) -> ApiResult<Json<serde_json::Value>> {
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
+    // page 上限防深 OFFSET 慢查询（review P2-12）
+    if page > 100_000 {
+        return Err(ApiError::bad_request("page 不能超过 100000"));
+    }
     let offset = ((page as i64) - 1) * (page_size as i64);
 
     // 总数（与列表共用同一过滤条件）

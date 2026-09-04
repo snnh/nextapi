@@ -56,11 +56,13 @@ fn json_404() -> Response {
 /// SPA fallback handler（挂在 Router 末尾，仅接收未匹配请求）。
 pub async fn spa_fallback(uri: Uri, method: Method) -> Response {
     let path = uri.path();
-    // API / 网关前缀未匹配 → JSON 404，绝不回退 index.html
-    if path.starts_with("/api/")
-        || path.starts_with("/v1/")
-        || path == "/healthz"
-        || path == "/metrics"
+    // API / 网关前缀未匹配 → JSON 404，绝不回退 index.html。
+    // 前缀比较大小写不敏感并覆盖无尾斜杠形态（/api、/API/xxx，review P2-11）。
+    let lower = path.to_ascii_lowercase();
+    if lower.starts_with("/api")
+        || lower.starts_with("/v1")
+        || lower.starts_with("/healthz")
+        || lower.starts_with("/metrics")
     {
         return json_404();
     }
@@ -107,9 +109,14 @@ mod tests {
         for p in [
             "/api/unknown",
             "/api/logs/xyz",
+            "/api",
+            "/API/keys",
             "/v1/chat/completions",
+            "/v1",
             "/metrics",
+            "/metrics/x",
             "/healthz",
+            "/healthz/x",
         ] {
             let resp = spa_fallback(Uri::from_static(p), Method::GET).await;
             assert_eq!(resp.status(), StatusCode::NOT_FOUND, "path: {p}");

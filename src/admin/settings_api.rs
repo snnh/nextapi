@@ -40,9 +40,22 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> ApiResult<Json<serd
 /// PUT /api/settings：按键保存并热生效，返回更新后的视图。
 async fn put_settings(
     State(state): State<Arc<AppState>>,
+    admin: auth::AdminUsername,
     Json(req): Json<PutSettingsReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let keys: Vec<String> = req.settings.keys().cloned().collect();
     state.settings.put(req.settings).await?;
+    // 审计只记键名（值可能含敏感项，不落审计）
+    auth::audit(
+        &state,
+        &admin.0,
+        "settings.put",
+        "system_settings",
+        None,
+        serde_json::json!({ "keys": keys }),
+        None,
+    )
+    .await?;
     let items = state.settings.view().await?;
     Ok(Json(serde_json::json!({ "settings": items })))
 }
@@ -58,6 +71,7 @@ async fn get_config(State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_
 /// PUT /api/config：写入完整配置；掩码值（"***"）= 保持原值；写文件后热加载并审计。
 async fn put_config(
     State(state): State<Arc<AppState>>,
+    admin: auth::AdminUsername,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     // 兼容两种形态：GET 返回的 {config: {...}} 或直接完整配置 JSON
@@ -69,14 +83,20 @@ async fn put_config(
     let new_cfg: ConfigFile = serde_json::from_value(value.clone())
         .map_err(|e| ApiError::bad_request(format!("配置解析失败: {e}")))?;
 
-    // 写回配置文件（YAML）
+    // 写回配置文件（YAML）：先写同目录临时文件再 rename，原子替换防半写损坏（review P2-10）
     let yaml_str = serde_yaml::to_string(&new_cfg).map_err(|e| ApiError::internal(e))?;
-    std::fs::write(&state.config_path, yaml_str).map_err(|e| ApiError::internal(e))?;
+    let path = state.config_path.as_path();
+    let tmp = path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, yaml_str).map_err(|e| ApiError::internal(format!("配置写入失败: {e}")))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        ApiError::internal(format!("配置替换失败: {e}"))
+    })?;
 
     // 热载 hot 参数 + 更新内存中的 file_config + 审计
     state.settings.on_file_reload(&new_cfg).await?;
     *state.file_config.write().unwrap() = new_cfg;
-    auth::audit(&state, "admin", "config.put", "config", None, serde_json::json!({}), None).await?;
+    auth::audit(&state, &admin.0, "config.put", "config", None, serde_json::json!({}), None).await?;
 
     // 返回新的 GET 结果
     let cfg = state.file_config.read().unwrap().clone();
@@ -86,12 +106,15 @@ async fn put_config(
 }
 
 /// POST /api/config/reload：仅重载 hot 运行参数，不覆盖 DB 业务实体。
-async fn reload_config(State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_json::Value>> {
+async fn reload_config(
+    State(state): State<Arc<AppState>>,
+    admin: auth::AdminUsername,
+) -> ApiResult<Json<serde_json::Value>> {
     let cfg = config::load_file(&state.config_path.to_string_lossy())
         .map_err(|e| ApiError::bad_request(format!("配置加载失败: {e}")))?;
     state.settings.on_file_reload(&cfg).await?;
     *state.file_config.write().unwrap() = cfg;
-    auth::audit(&state, "admin", "config.reload", "config", None, serde_json::json!({}), None).await?;
+    auth::audit(&state, &admin.0, "config.reload", "config", None, serde_json::json!({}), None).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -126,22 +149,38 @@ fn restore_masked_fields(value: &mut serde_json::Value, old: &ConfigFile) {
     }
     // upstreams[*].api_key（按下标对齐，缺省保持 "***" 不还原）
     if let Some(ups) = value.get_mut("upstreams").and_then(|u| u.as_array_mut()) {
-        for (i, item) in ups.iter_mut().enumerate() {
-            if let Some(api) = item.get_mut("api_key") {
-                if api.as_str() == Some("***") {
-                    if let Some(o) = old.upstreams.get(i).and_then(|it| it.get("api_key")) {
-                        *api = yaml_value_to_json(o);
+        for item in ups.iter_mut() {
+            let masked = item.get("api_key").and_then(|v| v.as_str()) == Some("***");
+            if masked {
+                // 按 name 匹配旧值而非下标（重排后防错配，review P2-7）
+                let name = item.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                let old_val = old
+                    .upstreams
+                    .iter()
+                    .find(|it| it.get("name").and_then(|n| n.as_str()) == Some(name.as_str()))
+                    .and_then(|it| it.get("api_key"))
+                    .cloned();
+                if let Some(o) = old_val {
+                    if let Some(api) = item.get_mut("api_key") {
+                        *api = yaml_value_to_json(&o);
                     }
                 }
             }
         }
     }
-    // proxies[*].password（按下标对齐）
+    // proxies[*].password（按 name 匹配旧值而非下标）
     if let Some(proxies) = value.get_mut("proxies").and_then(|p| p.as_array_mut()) {
-        for (i, item) in proxies.iter_mut().enumerate() {
-            if let Some(pw) = item.get_mut("password") {
-                if pw.as_str() == Some("***") {
-                    let old_pw = old.proxies.get(i).and_then(|p| p.password.clone()).unwrap_or_default();
+        for item in proxies.iter_mut() {
+            let masked = item.get("password").and_then(|v| v.as_str()) == Some("***");
+            if masked {
+                let name = item.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                let old_pw = old
+                    .proxies
+                    .iter()
+                    .find(|p| p.name == name)
+                    .and_then(|p| p.password.clone())
+                    .unwrap_or_default();
+                if let Some(pw) = item.get_mut("password") {
                     *pw = serde_json::Value::String(old_pw);
                 }
             }

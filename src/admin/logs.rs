@@ -280,8 +280,13 @@ fn push_log_where(qb: &mut QueryBuilder<'_, Postgres>, f: &LogFilter) {
 
 /// 分页参数校验：page 缺省 1（<1 钳制为 1）；page_size 缺省 20，须在 1..=200 内。
 fn validate_pagination(page: Option<u32>, page_size: Option<u32>) -> ApiResult<(u32, u32)> {
+    // page 上限防深 OFFSET 慢查询（review P2-12）：200/页 × 10 万页封顶
+    const MAX_PAGE: u32 = 100_000;
     let page = page.unwrap_or(1).max(1);
     let page_size = page_size.unwrap_or(20);
+    if page > MAX_PAGE {
+        return Err(ApiError::bad_request(format!("page 不能超过 {MAX_PAGE}")));
+    }
     if !(1..=200).contains(&page_size) {
         return Err(ApiError::bad_request("page_size 必须在 1..=200 之间"));
     }

@@ -391,13 +391,26 @@ fn validate_upstream(
     timeout_ms: Option<i32>,
     breaker_threshold: Option<i32>,
 ) -> Result<(), ApiError> {
+    const MAX_NAME: usize = 255;
+    const MAX_URL: usize = 2048;
+    const MAX_PROTOCOLS: usize = 16;
+    const MAX_TIMEOUT_MS: i32 = 86_400_000; // 24h
     if name.trim().is_empty() {
         return Err(ApiError::bad_request("上游名称不能为空"));
+    }
+    if name.chars().count() > MAX_NAME {
+        return Err(ApiError::bad_request(format!("name 不能超过 {MAX_NAME} 字符")));
     }
     if base_url.trim().is_empty() {
         return Err(ApiError::bad_request("上游 base_url 不能为空"));
     }
+    if base_url.chars().count() > MAX_URL {
+        return Err(ApiError::bad_request(format!("base_url 不能超过 {MAX_URL} 字符")));
+    }
     if let Some(ps) = protocols {
+        if ps.len() > MAX_PROTOCOLS {
+            return Err(ApiError::bad_request(format!("protocols 最多 {MAX_PROTOCOLS} 项")));
+        }
         for p in ps {
             if p.parse::<Protocol>().is_err() && !is_images_protocol(p) {
                 return Err(ApiError::bad_request(format!("protocols 包含非法协议: {p}")));
@@ -408,10 +421,16 @@ fn validate_upstream(
         if t <= 0 {
             return Err(ApiError::bad_request("timeout_ms 必须 > 0"));
         }
+        if t > MAX_TIMEOUT_MS {
+            return Err(ApiError::bad_request("timeout_ms 超出上限（24h）"));
+        }
     }
     if let Some(b) = breaker_threshold {
         if b <= 0 {
             return Err(ApiError::bad_request("breaker_threshold 必须 > 0"));
+        }
+        if b > 1_000_000 {
+            return Err(ApiError::bad_request("breaker_threshold 超出上限"));
         }
     }
     Ok(())
@@ -421,6 +440,10 @@ fn validate_upstream(
 fn encrypt_create_api_key(state: &AppState, api_key: Option<&str>) -> Result<Option<String>, ApiError> {
     match api_key {
         Some(ak) if !ak.is_empty() => {
+            // 掩码字面量是「保持原值」的保留语义，创建路径无旧值可保持 → 拒绝（review P2-13）
+            if ak == "***" {
+                return Err(ApiError::bad_request("\"***\" 为掩码保留值，不能作为真实密钥"));
+            }
             if !state.crypto.is_available() {
                 return Err(ApiError::bad_request("未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key"));
             }

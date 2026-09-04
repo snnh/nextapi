@@ -947,8 +947,9 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
         }
         "message_delta" => {
             if let Some(u) = v.get("usage") {
+                // output_tokens 为「截至当前累计」值：多次 delta 用 max 而非累加，防虚增（review P2-5）
                 let ot = u["output_tokens"].as_u64().unwrap_or(0);
-                st.usage.completion_tokens += ot;
+                st.usage.completion_tokens = st.usage.completion_tokens.max(ot);
                 if let Some(c) = u["cache_read_input_tokens"].as_u64() {
                     st.usage.cache_read_tokens = Some(c);
                 }
@@ -1118,10 +1119,10 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, _ctx: &mut ConvCtx) 
         events.push(event_str(content_block_delta_input_json(block_idx, tc))?);
     }
 
-    // usage 累积
+    // usage 累积（IR usage 为截至该 chunk 的累计值 → 取 max，防多次携带时翻倍；review P2-5）
     if let Some(u) = &chunk.usage {
         st.usage.prompt_tokens = u.prompt_tokens;
-        st.usage.completion_tokens += u.completion_tokens;
+        st.usage.completion_tokens = st.usage.completion_tokens.max(u.completion_tokens);
         st.usage.cache_read_tokens = u.cache_read_tokens.or(st.usage.cache_read_tokens);
         st.usage.cache_write_tokens = u.cache_write_tokens.or(st.usage.cache_write_tokens);
     }

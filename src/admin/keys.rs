@@ -118,6 +118,14 @@ async fn create_key(
     Json(body): Json<CreateKeyReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     validate_quota(body.quota_unit.as_deref(), body.quota_window.as_deref())?;
+    validate_key_limits(
+        body.name.as_deref().unwrap_or(""),
+        body.models.as_deref(),
+        body.rpm,
+        body.tpm,
+        body.quota_limit,
+        body.passthrough_upstreams.as_deref(),
+    )?;
 
     // 生成 Key / 哈希 / 前缀
     let key = generate_key();
@@ -198,6 +206,14 @@ async fn update_key(
     let expires_at = body.expires_at.unwrap_or(existing.expires_at);
 
     validate_quota(quota_unit.as_deref(), quota_window.as_deref())?;
+    validate_key_limits(
+        &name,
+        models.as_deref(),
+        rpm,
+        tpm,
+        quota_limit,
+        passthrough_upstreams.as_deref(),
+    )?;
 
     // debug：仅当显式传 debug_enabled / debug_expires_at 时才重新推导，否则沿用现有状态。
     let debug_enabled = body.debug_enabled.unwrap_or(existing.debug_enabled);
@@ -329,6 +345,61 @@ fn validate_quota(unit: Option<&str>, window: Option<&str>) -> Result<(), ApiErr
     if let Some(w) = window {
         if !matches!(w, "daily" | "monthly" | "total") {
             return Err(ApiError::bad_request("quota_window 必须为 daily/monthly/total"));
+        }
+    }
+    Ok(())
+}
+
+/// Key 字段边界校验（review P2）：数值非负且不超上限、字符串/数组长度上限，
+/// 防止负数 quota_limit 全量阻断与存储膨胀。
+fn validate_key_limits(
+    name: &str,
+    models: Option<&[String]>,
+    rpm: Option<i32>,
+    tpm: Option<i32>,
+    quota_limit: Option<Decimal>,
+    passthrough: Option<&[String]>,
+) -> Result<(), ApiError> {
+    const MAX_RATE: i32 = 10_000_000; // rpm/tpm 上限
+    const MAX_NAME: usize = 255;
+    const MAX_MODELS: usize = 500;
+    const MAX_ITEM_LEN: usize = 255;
+    const MAX_PASSTHROUGH: usize = 200;
+
+    if name.chars().count() > MAX_NAME {
+        return Err(ApiError::bad_request(format!("name 不能超过 {MAX_NAME} 字符")));
+    }
+    for v in [rpm, tpm].into_iter().flatten() {
+        if !(0..=MAX_RATE).contains(&v) {
+            return Err(ApiError::bad_request(format!("rpm/tpm 必须在 0..={MAX_RATE}")));
+        }
+    }
+    if let Some(ql) = quota_limit {
+        if ql.is_sign_negative() {
+            return Err(ApiError::bad_request("quota_limit 不能为负数"));
+        }
+        if ql > Decimal::from(1_000_000_000_000_000i64) {
+            return Err(ApiError::bad_request("quota_limit 超出上限（1e15）"));
+        }
+    }
+    if let Some(ms) = models {
+        if ms.len() > MAX_MODELS {
+            return Err(ApiError::bad_request(format!("模型白名单最多 {MAX_MODELS} 项")));
+        }
+        for m in ms {
+            if m.chars().count() > MAX_ITEM_LEN {
+                return Err(ApiError::bad_request(format!("模型名不能超过 {MAX_ITEM_LEN} 字符")));
+            }
+        }
+    }
+    if let Some(ps) = passthrough {
+        if ps.len() > MAX_PASSTHROUGH {
+            return Err(ApiError::bad_request(format!("透传上游最多 {MAX_PASSTHROUGH} 项")));
+        }
+        for p in ps {
+            if p.chars().count() > MAX_ITEM_LEN {
+                return Err(ApiError::bad_request(format!("上游名不能超过 {MAX_ITEM_LEN} 字符")));
+            }
         }
     }
     Ok(())

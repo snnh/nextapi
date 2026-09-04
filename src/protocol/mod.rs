@@ -177,3 +177,90 @@ pub fn stream_end(p: Protocol, st: &mut AnyStreamState, ctx: &mut ConvCtx) -> Re
         _ => Err(ConvertError::Unsupported("流状态机与协议不匹配".into())),
     }
 }
+
+#[cfg(test)]
+mod cross_protocol_tests {
+    //! 跨协议转换矩阵（review C-P2-3）：IR 枢轴 N→1→N 的文本/工具双向断言。
+    use super::*;
+    use serde_json::json;
+
+    fn roundtrip(from: Protocol, to: Protocol, body: serde_json::Value) -> (serde_json::Value, Vec<DegradedItem>) {
+        let mut ctx = ConvCtx::default();
+        let ir = crate::protocol::request_to_ir(from, &body, &mut ctx).expect("request_to_ir 应成功");
+        let out = crate::protocol::request_from_ir(to, &ir, &mut ctx).expect("request_from_ir 应成功");
+        (out, ctx.degraded)
+    }
+
+    #[test]
+    fn chat_text_request_to_anthropic() {
+        // OpenAI Chat → Anthropic：system/messages/温度映射 + max_tokens 默认
+        let (out, _deg) = roundtrip(
+            Protocol::OpenaiChat,
+            Protocol::Anthropic,
+            json!({
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "你是助手"},
+                    {"role": "user", "content": "你好"}
+                ],
+                "temperature": 0.5
+            }),
+        );
+        // system 映射 + 用户内容保留 + 温度映射
+        let sys = out["system"].as_str().map(String::from);
+        assert!(sys.as_deref() == Some("你是助手") || format!("{:?}", out).contains("你是助手"));
+        assert!(format!("{:?}", out["messages"]).contains("你好"));
+        assert_eq!(out["temperature"], 0.5);
+        // Anthropic 必填 max_tokens 由 IR 层补齐
+        assert!(out["max_tokens"].is_number() && out["max_tokens"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn chat_tool_request_to_gemini() {
+        // OpenAI Chat（工具定义 + tool_calls 语义）→ Gemini：functions → functionDeclarations
+        let (out, _deg) = roundtrip(
+            Protocol::OpenaiChat,
+            Protocol::Gemini,
+            json!({
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "user", "content": "北京天气？"},
+                    {"role": "assistant", "content": null,
+                     "tool_calls": [{"id": "call_1", "type": "function",
+                                     "function": {"name": "get_weather", "arguments": "{\"city\":\"bj\"}"}}]},
+                    {"role": "tool", "tool_call_id": "call_1", "content": "晴"}
+                ],
+                "tools": [{"type": "function", "function": {
+                    "name": "get_weather",
+                    "description": "查天气",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+                }}]
+            }),
+        );
+        // Gemini 请求体：contents / tools.functionDeclarations；序列化文本含关键信息
+        let text = format!("{:?}", out);
+        assert!(text.contains("contents"), "应有 contents: {out}");
+        assert!(text.contains("functionDeclarations") || text.contains("tools"), "工具应映射: {out}");
+        assert!(text.contains("get_weather"), "工具名应保留: {out}");
+        assert!(text.contains("bj") || text.contains("\"city\""), "工具参数应保留: {out}");
+    }
+
+    #[test]
+    fn anthropic_request_to_openai_chat() {
+        let (out, _deg) = roundtrip(
+            Protocol::Anthropic,
+            Protocol::OpenaiChat,
+            json!({
+                "model": "claude-3",
+                "max_tokens": 4096,
+                "system": "保持简洁",
+                "messages": [{"role": "user", "content": "1+1=?"}]
+            }),
+        );
+        assert_eq!(out["model"], "claude-3");
+        let text = format!("{:?}", out);
+        assert!(text.contains("1+1=?"), "用户消息应保留: {out}");
+        assert!(text.contains("保持简洁"), "system 内容应保留: {out}");
+        assert!(out["messages"].as_array().map_or(false, |a| !a.is_empty()), "messages 应有内容: {out}");
+    }
+}
