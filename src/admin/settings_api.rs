@@ -96,7 +96,16 @@ async fn put_config(
     // 热载 hot 参数 + 更新内存中的 file_config + 审计
     state.settings.on_file_reload(&new_cfg).await?;
     *state.file_config.write().unwrap() = new_cfg;
-    auth::audit(&state, &admin.0, "config.put", "config", None, serde_json::json!({}), None).await?;
+    auth::audit(
+        &state,
+        &admin.0,
+        "config.put",
+        "config",
+        None,
+        serde_json::json!({}),
+        None,
+    )
+    .await?;
 
     // 返回新的 GET 结果
     let cfg = state.file_config.read().unwrap().clone();
@@ -114,7 +123,16 @@ async fn reload_config(
         .map_err(|e| ApiError::bad_request(format!("配置加载失败: {e}")))?;
     state.settings.on_file_reload(&cfg).await?;
     *state.file_config.write().unwrap() = cfg;
-    auth::audit(&state, &admin.0, "config.reload", "config", None, serde_json::json!({}), None).await?;
+    auth::audit(
+        &state,
+        &admin.0,
+        "config.reload",
+        "config",
+        None,
+        serde_json::json!({}),
+        None,
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -153,7 +171,11 @@ fn restore_masked_fields(value: &mut serde_json::Value, old: &ConfigFile) {
             let masked = item.get("api_key").and_then(|v| v.as_str()) == Some("***");
             if masked {
                 // 按 name 匹配旧值而非下标（重排后防错配，review P2-7）
-                let name = item.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                let name = item
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 let old_val = old
                     .upstreams
                     .iter()
@@ -173,7 +195,11 @@ fn restore_masked_fields(value: &mut serde_json::Value, old: &ConfigFile) {
         for item in proxies.iter_mut() {
             let masked = item.get("password").and_then(|v| v.as_str()) == Some("***");
             if masked {
-                let name = item.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                let name = item
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 let old_pw = old
                     .proxies
                     .iter()

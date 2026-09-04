@@ -45,7 +45,10 @@ impl ConvCtx {
 
     /// 记录一个降级项（字段被丢弃/简化）。
     pub fn degrade(&mut self, field: impl Into<String>, reason: impl Into<String>) {
-        self.degraded.push(DegradedItem { field: field.into(), reason: reason.into() });
+        self.degraded.push(DegradedItem {
+            field: field.into(),
+            reason: reason.into(),
+        });
     }
 
     /// 生成 X-NextAPI-Degraded 响应头值（无降级时 None）。
@@ -53,7 +56,13 @@ impl ConvCtx {
         if self.degraded.is_empty() {
             None
         } else {
-            Some(self.degraded.iter().map(|d| d.field.as_str()).collect::<Vec<_>>().join(","))
+            Some(
+                self.degraded
+                    .iter()
+                    .map(|d| d.field.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
         }
     }
 }
@@ -144,7 +153,9 @@ pub fn chunk_to_ir(
 ) -> Result<Option<IrChunk>, ConvertError> {
     match (p, st) {
         (Protocol::OpenaiChat, AnyStreamState::OpenaiChat(s)) => chat::chunk_to_ir(data, s, ctx),
-        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => responses::chunk_to_ir(data, s, ctx),
+        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => {
+            responses::chunk_to_ir(data, s, ctx)
+        }
         (Protocol::Anthropic, AnyStreamState::Anthropic(s)) => anthropic::chunk_to_ir(data, s, ctx),
         (Protocol::Gemini, AnyStreamState::Gemini(s)) => gemini::chunk_to_ir(data, s, ctx),
         _ => Err(ConvertError::Unsupported("流状态机与协议不匹配".into())),
@@ -160,18 +171,28 @@ pub fn chunk_from_ir(
 ) -> Result<Vec<String>, ConvertError> {
     match (p, st) {
         (Protocol::OpenaiChat, AnyStreamState::OpenaiChat(s)) => chat::chunk_from_ir(chunk, s, ctx),
-        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => responses::chunk_from_ir(chunk, s, ctx),
-        (Protocol::Anthropic, AnyStreamState::Anthropic(s)) => anthropic::chunk_from_ir(chunk, s, ctx),
+        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => {
+            responses::chunk_from_ir(chunk, s, ctx)
+        }
+        (Protocol::Anthropic, AnyStreamState::Anthropic(s)) => {
+            anthropic::chunk_from_ir(chunk, s, ctx)
+        }
         (Protocol::Gemini, AnyStreamState::Gemini(s)) => gemini::chunk_from_ir(chunk, s, ctx),
         _ => Err(ConvertError::Unsupported("流状态机与协议不匹配".into())),
     }
 }
 
 /// 流结束：产出协议终止事件（OpenAI 为 ["[DONE]"]；Anthropic 为 message_stop 等；Gemini 无）。
-pub fn stream_end(p: Protocol, st: &mut AnyStreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+pub fn stream_end(
+    p: Protocol,
+    st: &mut AnyStreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Vec<String>, ConvertError> {
     match (p, st) {
         (Protocol::OpenaiChat, AnyStreamState::OpenaiChat(s)) => chat::stream_end(s, ctx),
-        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => responses::stream_end(s, ctx),
+        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => {
+            responses::stream_end(s, ctx)
+        }
         (Protocol::Anthropic, AnyStreamState::Anthropic(s)) => anthropic::stream_end(s, ctx),
         (Protocol::Gemini, AnyStreamState::Gemini(s)) => gemini::stream_end(s, ctx),
         _ => Err(ConvertError::Unsupported("流状态机与协议不匹配".into())),
@@ -184,10 +205,16 @@ mod cross_protocol_tests {
     use super::*;
     use serde_json::json;
 
-    fn roundtrip(from: Protocol, to: Protocol, body: serde_json::Value) -> (serde_json::Value, Vec<DegradedItem>) {
+    fn roundtrip(
+        from: Protocol,
+        to: Protocol,
+        body: serde_json::Value,
+    ) -> (serde_json::Value, Vec<DegradedItem>) {
         let mut ctx = ConvCtx::default();
-        let ir = crate::protocol::request_to_ir(from, &body, &mut ctx).expect("request_to_ir 应成功");
-        let out = crate::protocol::request_from_ir(to, &ir, &mut ctx).expect("request_from_ir 应成功");
+        let ir =
+            crate::protocol::request_to_ir(from, &body, &mut ctx).expect("request_to_ir 应成功");
+        let out =
+            crate::protocol::request_from_ir(to, &ir, &mut ctx).expect("request_from_ir 应成功");
         (out, ctx.degraded)
     }
 
@@ -240,9 +267,15 @@ mod cross_protocol_tests {
         // Gemini 请求体：contents / tools.functionDeclarations；序列化文本含关键信息
         let text = format!("{:?}", out);
         assert!(text.contains("contents"), "应有 contents: {out}");
-        assert!(text.contains("functionDeclarations") || text.contains("tools"), "工具应映射: {out}");
+        assert!(
+            text.contains("functionDeclarations") || text.contains("tools"),
+            "工具应映射: {out}"
+        );
         assert!(text.contains("get_weather"), "工具名应保留: {out}");
-        assert!(text.contains("bj") || text.contains("\"city\""), "工具参数应保留: {out}");
+        assert!(
+            text.contains("bj") || text.contains("\"city\""),
+            "工具参数应保留: {out}"
+        );
     }
 
     #[test]
@@ -261,6 +294,9 @@ mod cross_protocol_tests {
         let text = format!("{:?}", out);
         assert!(text.contains("1+1=?"), "用户消息应保留: {out}");
         assert!(text.contains("保持简洁"), "system 内容应保留: {out}");
-        assert!(out["messages"].as_array().map_or(false, |a| !a.is_empty()), "messages 应有内容: {out}");
+        assert!(
+            out["messages"].as_array().map_or(false, |a| !a.is_empty()),
+            "messages 应有内容: {out}"
+        );
     }
 }

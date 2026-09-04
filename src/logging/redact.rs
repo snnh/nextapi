@@ -10,7 +10,10 @@ use serde_json::Value;
 
 /// 敏感 key 白名单（命中且为长字符串时脱敏）。
 fn is_redact_key(k: &str) -> bool {
-    matches!(k, "data" | "b64_json" | "image" | "base64" | "file" | "file_data")
+    matches!(
+        k,
+        "data" | "b64_json" | "image" | "base64" | "file" | "file_data"
+    )
 }
 
 /// 递归遍历并脱敏。字符串值以 "data:" 开头 → "[redacted]"；对象 key 命中敏感集合且字符串
@@ -70,7 +73,10 @@ pub fn redact_and_truncate(body: &[u8], max_bytes: usize) -> (Value, bool) {
     // 序列化后超限 → 截断为字符串并标记 truncated
     let serialized = serde_json::to_string(&value).unwrap_or_else(|_| "{}".into());
     if serialized.len() > max_bytes {
-        (Value::String(truncate_to_bytes(&serialized, max_bytes)), true)
+        (
+            Value::String(truncate_to_bytes(&serialized, max_bytes)),
+            true,
+        )
     } else {
         (value, false)
     }

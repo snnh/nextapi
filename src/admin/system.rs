@@ -98,7 +98,10 @@ async fn perform_check(
 
     let client = build_client(state, use_proxy_override, proxy_id_override);
 
-    let url = format!("https://api.github.com/repos/{}/releases/latest", cfg.repo.trim());
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        cfg.repo.trim()
+    );
     let ua = format!("nextapi/{}", state.version);
     let resp = client
         .get(&url)
@@ -117,7 +120,9 @@ async fn perform_check(
         }
         Ok(r) => {
             let status = r.status().as_u16();
-            Err(ApiError::BadGateway(format!("GitHub 返回非 200 状态码: {status}")))
+            Err(ApiError::BadGateway(format!(
+                "GitHub 返回非 200 状态码: {status}"
+            )))
         }
         Err(e) => Err(ApiError::BadGateway(format!("请求 GitHub 失败: {e}"))),
     }
@@ -143,8 +148,20 @@ fn build_client(
     // proxy_id 取值：body → cfg.proxy_id → proxy.default_proxy_id（非空才取，全空直连）
     let proxy_id = proxy_id_override
         .filter(|s| !s.is_empty())
-        .or_else(|| if cfg.proxy_id.is_empty() { None } else { Some(cfg.proxy_id) })
-        .or_else(|| if default_proxy_id.is_empty() { None } else { Some(default_proxy_id) });
+        .or_else(|| {
+            if cfg.proxy_id.is_empty() {
+                None
+            } else {
+                Some(cfg.proxy_id)
+            }
+        })
+        .or_else(|| {
+            if default_proxy_id.is_empty() {
+                None
+            } else {
+                Some(default_proxy_id)
+            }
+        });
 
     let Some(pid_str) = proxy_id else {
         return reqwest::Client::new();
@@ -181,10 +198,25 @@ fn build_client(
 
 /// 校验并构建成功响应（纯函数，便于单测版本比较）。
 fn build_check_response(current_version: &str, body: &serde_json::Value) -> serde_json::Value {
-    let latest_version = body.get("tag_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let release_name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let published_at = body.get("published_at").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let html_url = body.get("html_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let latest_version = body
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let release_name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let published_at = body
+        .get("published_at")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let html_url = body
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let release_body = body.get("body").and_then(|v| v.as_str()).unwrap_or("");
     let release_notes: String = if release_body.is_empty() {
         String::new()
@@ -196,7 +228,9 @@ fn build_check_response(current_version: &str, body: &serde_json::Value) -> serd
         Some(std::cmp::Ordering::Less) => true,
         Some(_) => false,
         None => {
-            tracing::warn!("版本号非数字，无法比较: current={current_version}, latest={latest_version}");
+            tracing::warn!(
+                "版本号非数字，无法比较: current={current_version}, latest={latest_version}"
+            );
             false
         }
     };
@@ -214,7 +248,9 @@ fn build_check_response(current_version: &str, body: &serde_json::Value) -> serd
 
 /// 去掉版本号前导 `v`/`V`。
 fn strip_version_prefix(s: &str) -> &str {
-    s.strip_prefix('v').or_else(|| s.strip_prefix('V')).unwrap_or(s)
+    s.strip_prefix('v')
+        .or_else(|| s.strip_prefix('V'))
+        .unwrap_or(s)
 }
 
 /// 版本比较：去前导 v/V，按 `.` 分段数字比较；任一段非数字 → None（无法比较，视为无更新）。
@@ -258,7 +294,10 @@ pub fn spawn_scheduled_check(state: Arc<AppState>) {
 
             match perform_check(&state, None, None).await {
                 Ok(v) => {
-                    if v.get("update_available").and_then(|b| b.as_bool()).unwrap_or(false) {
+                    if v.get("update_available")
+                        .and_then(|b| b.as_bool())
+                        .unwrap_or(false)
+                    {
                         tracing::warn!("发现新版本可更新: {v}");
                     } else {
                         tracing::info!("更新检查完成（无新版本）");
@@ -277,17 +316,38 @@ mod tests {
 
     #[test]
     fn version_compare_basic() {
-        assert_eq!(compare_versions("0.1.0", "v0.1.0"), Some(std::cmp::Ordering::Equal));
-        assert_eq!(compare_versions("0.1.0", "v1.2.3"), Some(std::cmp::Ordering::Less));
-        assert_eq!(compare_versions("2.0.0", "1.9.9"), Some(std::cmp::Ordering::Greater));
-        assert_eq!(compare_versions("1.2", "1.2.3"), Some(std::cmp::Ordering::Less));
-        assert_eq!(compare_versions("1.2.3", "1.2"), Some(std::cmp::Ordering::Greater));
+        assert_eq!(
+            compare_versions("0.1.0", "v0.1.0"),
+            Some(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(
+            compare_versions("0.1.0", "v1.2.3"),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            compare_versions("2.0.0", "1.9.9"),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            compare_versions("1.2", "1.2.3"),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            compare_versions("1.2.3", "1.2"),
+            Some(std::cmp::Ordering::Greater)
+        );
     }
 
     #[test]
     fn version_compare_strips_vcase() {
-        assert_eq!(compare_versions("1.0.0", "V1.0.0"), Some(std::cmp::Ordering::Equal));
-        assert_eq!(compare_versions("1.0.0", "v1.0.1"), Some(std::cmp::Ordering::Less));
+        assert_eq!(
+            compare_versions("1.0.0", "V1.0.0"),
+            Some(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(
+            compare_versions("1.0.0", "v1.0.1"),
+            Some(std::cmp::Ordering::Less)
+        );
     }
 
     #[test]
@@ -310,7 +370,10 @@ mod tests {
         assert_eq!(out["latest_version"], "v9.9.9");
         assert_eq!(out["release_name"], "NextAPI 9.9");
         assert_eq!(out["published_at"], "2026-01-01T00:00:00Z");
-        assert_eq!(out["html_url"], "https://github.com/a/b/releases/tag/v9.9.9");
+        assert_eq!(
+            out["html_url"],
+            "https://github.com/a/b/releases/tag/v9.9.9"
+        );
         assert_eq!(out["update_available"], true);
         assert_eq!(out["release_notes"], "notes");
     }

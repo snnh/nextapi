@@ -22,7 +22,11 @@ pub struct PartitionInfo {
 
 /// 防御：days=0 视为 30。
 fn effective_days(days: u32) -> u32 {
-    if days == 0 { 30 } else { days }
+    if days == 0 {
+        30
+    } else {
+        days
+    }
 }
 
 /// 纯函数：epoch 天 → 分区序号（floor(unix_days / days)）。
@@ -75,7 +79,11 @@ async fn existing_partition_names(pool: &sqlx::PgPool) -> ApiResult<HashSet<Stri
 }
 
 /// 启动/定时：确保覆盖 [now-1个窗口, now+ahead个窗口] 的分区存在（幂等），返回新建名。
-pub async fn ensure_partitions(pool: &sqlx::PgPool, days: u32, ahead: i64) -> ApiResult<Vec<String>> {
+pub async fn ensure_partitions(
+    pool: &sqlx::PgPool,
+    days: u32,
+    ahead: i64,
+) -> ApiResult<Vec<String>> {
     let days = effective_days(days);
     // advisory 锁（固定键）：防多实例/重启并发 CREATE PARTITION 竞态（review P2-3）
     const LOCK_KEY: i64 = 794_724_262_143_070; // 任意固定键（'nextapi' 语义占位）
@@ -137,7 +145,13 @@ pub async fn list_partitions(pool: &sqlx::PgPool, days: u32) -> ApiResult<Vec<Pa
             continue;
         };
         let (from_ts, to_ts) = partition_range(idx, days);
-        out.push(PartitionInfo { name, from_ts, to_ts, size_bytes, row_estimate });
+        out.push(PartitionInfo {
+            name,
+            from_ts,
+            to_ts,
+            size_bytes,
+            row_estimate,
+        });
     }
     Ok(out)
 }
@@ -151,10 +165,8 @@ pub async fn drop_covered(
     dry_run: bool,
 ) -> ApiResult<Vec<PartitionInfo>> {
     let all = list_partitions(pool, days).await?;
-    let mut candidates: Vec<PartitionInfo> = all
-        .into_iter()
-        .filter(|p| p.to_ts <= before)
-        .collect();
+    let mut candidates: Vec<PartitionInfo> =
+        all.into_iter().filter(|p| p.to_ts <= before).collect();
     candidates.sort_by(|a, b| a.name.cmp(&b.name));
 
     if dry_run {

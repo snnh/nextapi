@@ -77,9 +77,8 @@ async fn list_audit(
     let offset = ((page as i64) - 1) * (page_size as i64);
 
     // 总数（与列表共用同一过滤条件）
-    let mut count_qb = QueryBuilder::<Postgres>::new(
-        "SELECT count(*) FROM admin_audit_logs l WHERE 1 = 1",
-    );
+    let mut count_qb =
+        QueryBuilder::<Postgres>::new("SELECT count(*) FROM admin_audit_logs l WHERE 1 = 1");
     push_filters(&mut count_qb, &params);
     let total: i64 = count_qb.build_query_scalar().fetch_one(&state.db).await?;
 
@@ -92,7 +91,8 @@ async fn list_audit(
          WHERE 1 = 1",
     );
     push_filters(&mut qb, &params);
-    qb.push(" ORDER BY l.created_at DESC LIMIT ").push_bind(page_size as i64);
+    qb.push(" ORDER BY l.created_at DESC LIMIT ")
+        .push_bind(page_size as i64);
     qb.push(" OFFSET ").push_bind(offset);
     let rows = qb.build_query_as::<AuditRow>().fetch_all(&state.db).await?;
 
@@ -126,6 +126,7 @@ fn push_filters(qb: &mut QueryBuilder<'_, Postgres>, params: &AuditQuery) {
         qb.push(" AND l.action = ").push_bind(action.clone());
     }
     if let Some(object_type) = params.object_type.as_ref().filter(|s| !s.is_empty()) {
-        qb.push(" AND l.object_type = ").push_bind(object_type.clone());
+        qb.push(" AND l.object_type = ")
+            .push_bind(object_type.clone());
     }
 }

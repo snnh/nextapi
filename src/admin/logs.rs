@@ -111,12 +111,16 @@ async fn list_logs(
     // 数据页
     let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {LOG_COLS} FROM usage_logs WHERE"));
     push_log_where(&mut qb, &f);
-    qb.push(" ORDER BY ts DESC, id DESC LIMIT ").push_bind(page_size as i64);
+    qb.push(" ORDER BY ts DESC, id DESC LIMIT ")
+        .push_bind(page_size as i64);
     qb.push(" OFFSET ").push_bind(offset);
     let rows: Vec<UsageLogRow> = qb.build_query_as().fetch_all(&state.db).await?;
 
     let snap = state.cache.snapshot();
-    let items: Vec<LogItem> = rows.into_iter().map(|row| attach_names(row, &snap)).collect();
+    let items: Vec<LogItem> = rows
+        .into_iter()
+        .map(|row| attach_names(row, &snap))
+        .collect();
 
     Ok(Json(serde_json::json!({
         "items": items,
@@ -140,7 +144,8 @@ async fn export_csv(
     // 多查一行以判断是否截断
     let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {LOG_COLS} FROM usage_logs WHERE"));
     push_log_where(&mut qb, &f);
-    qb.push(" ORDER BY ts DESC, id DESC LIMIT ").push_bind(LIMIT as i64 + 1);
+    qb.push(" ORDER BY ts DESC, id DESC LIMIT ")
+        .push_bind(LIMIT as i64 + 1);
     let rows: Vec<UsageLogRow> = qb.build_query_as().fetch_all(&state.db).await?;
 
     let truncated = rows.len() > LIMIT;
@@ -221,7 +226,9 @@ async fn cleanup_logs(
         .await?;
     }
 
-    Ok(Json(serde_json::json!({ "dry_run": req.dry_run, "dropped": dropped })))
+    Ok(Json(
+        serde_json::json!({ "dry_run": req.dry_run, "dropped": dropped }),
+    ))
 }
 
 /// 解析查询参数为过滤条件（from_ts/to_ts 缺省 = billing_timezone 当天 00:00 → 现在）。
@@ -235,8 +242,18 @@ fn build_log_filter(q: &LogQuery, tz: &str) -> ApiResult<LogFilter> {
         Some(s) => parse_rfc3339(s)?,
         None => now,
     };
-    let key_id = q.key_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
-    let upstream_id = q.upstream_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
+    let key_id = q
+        .key_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(parse_uuid)
+        .transpose()?;
+    let upstream_id = q
+        .upstream_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(parse_uuid)
+        .transpose()?;
 
     Ok(LogFilter {
         from_ts,
@@ -307,7 +324,9 @@ fn parse_uuid(s: &str) -> ApiResult<Uuid> {
 
 /// 内存快照 join：key 按 id 遍历 values 查找（量小可接受）；upstream 按 id 直查。
 fn attach_names(row: UsageLogRow, snap: &Snapshot) -> LogItem {
-    let key = row.key_id.and_then(|id| snap.api_keys.values().find(|k| k.id == id));
+    let key = row
+        .key_id
+        .and_then(|id| snap.api_keys.values().find(|k| k.id == id));
     let upstream = row.upstream_id.and_then(|id| snap.upstreams.get(&id));
     LogItem {
         row,
@@ -319,7 +338,9 @@ fn attach_names(row: UsageLogRow, snap: &Snapshot) -> LogItem {
 
 /// 组装 CSV 单行（列序固定，按契约 §10）。
 fn csv_record(row: &UsageLogRow, snap: &Snapshot) -> String {
-    let key = row.key_id.and_then(|id| snap.api_keys.values().find(|k| k.id == id));
+    let key = row
+        .key_id
+        .and_then(|id| snap.api_keys.values().find(|k| k.id == id));
     let upstream = row.upstream_id.and_then(|id| snap.upstreams.get(&id));
     let fields = [
         row.request_id.clone(),
@@ -344,7 +365,11 @@ fn csv_record(row: &UsageLogRow, snap: &Snapshot) -> String {
         row.cost_usd.map(|d| d.to_string()).unwrap_or_default(),
         row.error.clone().unwrap_or_default(),
     ];
-    fields.iter().map(|s| csv_escape(s)).collect::<Vec<_>>().join(",")
+    fields
+        .iter()
+        .map(|s| csv_escape(s))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn opt_i64(v: Option<i64>) -> String {
@@ -443,13 +468,22 @@ mod tests {
 
     #[test]
     fn validate_pagination_page_size_out_of_range() {
-        assert!(matches!(validate_pagination(Some(1), Some(0)), Err(ApiError::BadRequest(_))));
-        assert!(matches!(validate_pagination(Some(1), Some(201)), Err(ApiError::BadRequest(_))));
+        assert!(matches!(
+            validate_pagination(Some(1), Some(0)),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(matches!(
+            validate_pagination(Some(1), Some(201)),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]
     fn parse_rfc3339_invalid_is_bad_request() {
-        assert!(matches!(parse_rfc3339("not-a-time"), Err(ApiError::BadRequest(_))));
+        assert!(matches!(
+            parse_rfc3339("not-a-time"),
+            Err(ApiError::BadRequest(_))
+        ));
         assert!(parse_rfc3339("2024-01-01T00:00:00Z").is_ok());
     }
 
@@ -475,14 +509,24 @@ mod tests {
 
     #[test]
     fn build_log_filter_invalid_uuid_bad_request() {
-        let q = LogQuery { key_id: Some("bad".into()), ..Default::default() };
-        assert!(matches!(build_log_filter(&q, "Asia/Shanghai"), Err(ApiError::BadRequest(_))));
+        let q = LogQuery {
+            key_id: Some("bad".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            build_log_filter(&q, "Asia/Shanghai"),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]
     fn build_log_filter_empty_ts_defaults_to_window_start() {
         // 空串视为缺省 → 走 daily 窗口起点，不应报错
-        let q = LogQuery { from_ts: Some(String::new()), to_ts: Some(String::new()), ..Default::default() };
+        let q = LogQuery {
+            from_ts: Some(String::new()),
+            to_ts: Some(String::new()),
+            ..Default::default()
+        };
         let f = build_log_filter(&q, "Asia/Shanghai").unwrap();
         assert!(f.from_ts <= f.to_ts);
     }

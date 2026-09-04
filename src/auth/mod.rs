@@ -22,9 +22,7 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use jsonwebtoken::{
-    decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
-};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::{HashMap, VecDeque};
@@ -57,7 +55,10 @@ pub struct JwtService {
 
 impl JwtService {
     pub fn new(secret: String) -> Self {
-        Self { secret, ttl_secs: TOKEN_TTL_SECS }
+        Self {
+            secret,
+            ttl_secs: TOKEN_TTL_SECS,
+        }
     }
 
     /// 签发管理员 token（HS256）。
@@ -161,8 +162,13 @@ async fn login(
     }
 
     // 4. 签发 JWT
-    let token = state.jwt.issue(&body.username).map_err(|e| ApiError::internal(e))?;
-    Ok(Json(serde_json::json!({ "token": token, "username": body.username })))
+    let token = state
+        .jwt
+        .issue(&body.username)
+        .map_err(|e| ApiError::internal(e))?;
+    Ok(Json(
+        serde_json::json!({ "token": token, "username": body.username }),
+    ))
 }
 
 /// GET /me：返回当前登录用户名。
@@ -366,10 +372,25 @@ mod tests {
         let window = Duration::from_secs(RATE_WINDOW_SECS);
         // 允许 limit=3 个事件
         assert!(window_allow(&mut q, start, 3, window));
-        assert!(window_allow(&mut q, start + Duration::from_secs(1), 3, window));
-        assert!(window_allow(&mut q, start + Duration::from_secs(2), 3, window));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(1),
+            3,
+            window
+        ));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(2),
+            3,
+            window
+        ));
         // 第 4 个超限
-        assert!(!window_allow(&mut q, start + Duration::from_secs(3), 3, window));
+        assert!(!window_allow(
+            &mut q,
+            start + Duration::from_secs(3),
+            3,
+            window
+        ));
         assert_eq!(q.len(), 3);
     }
 
@@ -382,10 +403,20 @@ mod tests {
         q.push_back(start + Duration::from_secs(2));
         q.push_back(start + Duration::from_secs(3));
         // 此刻 3 个事件都在窗口内，达到上限 → 第 4 个超限
-        assert!(!window_allow(&mut q, start + Duration::from_secs(4), 3, window));
+        assert!(!window_allow(
+            &mut q,
+            start + Duration::from_secs(4),
+            3,
+            window
+        ));
         assert_eq!(q.len(), 3);
         // 跳至 far future：全部事件过期，窗口重新放行且只剩新压入的 1 个
-        assert!(window_allow(&mut q, start + Duration::from_secs(100), 3, window));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(100),
+            3,
+            window
+        ));
         assert_eq!(q.len(), 1);
     }
 
@@ -393,7 +424,12 @@ mod tests {
     fn window_zero_limit_rejects_all() {
         let start = Instant::now();
         // limit=0 时纯函数任何事件都超限（不放行、不记录）
-        assert!(!window_allow(&mut VecDeque::new(), start, 0, Duration::from_secs(1)));
+        assert!(!window_allow(
+            &mut VecDeque::new(),
+            start,
+            0,
+            Duration::from_secs(1)
+        ));
     }
 
     #[test]

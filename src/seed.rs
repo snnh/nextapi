@@ -106,7 +106,9 @@ fn argon2_hash(password: &str) -> anyhow::Result<String> {
 fn generate_random_password() -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::rng();
-    (0..16).map(|_| CHARS[rng.random_range(0..CHARS.len())] as char).collect()
+    (0..16)
+        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
+        .collect()
 }
 
 /// 代理配置：按 name 幂等；password 非空时必须经 Crypto 加密，密钥缺失则报错。
@@ -148,8 +150,11 @@ async fn seed_proxies(
 /// 汇率：按 (from,to,source) 幂等；manual 的 fetched_at 为 NULL。
 async fn seed_fx_rates(tx: &mut Transaction<'_, Postgres>, cfg: &ConfigFile) -> anyhow::Result<()> {
     for f in &cfg.fx_rates {
-        let fetched_at: Option<chrono::DateTime<chrono::Utc>> =
-            if f.source == "manual" { None } else { Some(chrono::Utc::now()) };
+        let fetched_at: Option<chrono::DateTime<chrono::Utc>> = if f.source == "manual" {
+            None
+        } else {
+            Some(chrono::Utc::now())
+        };
         sqlx::query(
             "INSERT INTO fx_rates (currency_from, currency_to, rate, source, fetched_at) \
              VALUES ($1, $2, $3, $4, $5) \
@@ -183,8 +188,12 @@ mod tests {
         use argon2::Argon2;
         let h = argon2_hash("test-password").unwrap();
         let parsed = PasswordHash::new(&h).unwrap();
-        assert!(Argon2::default().verify_password(b"test-password", &parsed).is_ok());
-        assert!(Argon2::default().verify_password(b"wrong", &parsed).is_err());
+        assert!(Argon2::default()
+            .verify_password(b"test-password", &parsed)
+            .is_ok());
+        assert!(Argon2::default()
+            .verify_password(b"wrong", &parsed)
+            .is_err());
     }
 
     #[test]
@@ -197,6 +206,9 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(resolve_admin_password_hash(&cfg).unwrap(), "$argon2$pre-hashed");
+        assert_eq!(
+            resolve_admin_password_hash(&cfg).unwrap(),
+            "$argon2$pre-hashed"
+        );
     }
 }

@@ -147,11 +147,10 @@ impl SettingsEngine {
         let hot_flat = crate::config::hot_flat(&effective);
 
         // DB 行信息（source / secret / restart_required 取自存储；ui 优先于 file）
-        let rows = sqlx::query(
-            "SELECT key, value, source, secret, restart_required FROM system_settings",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT key, value, source, secret, restart_required FROM system_settings")
+                .fetch_all(&self.pool)
+                .await?;
         let mut db: HashMap<String, (serde_json::Value, String, bool, bool)> = HashMap::new();
         for row in rows {
             let key: String = row.get("key");
@@ -166,12 +165,22 @@ impl SettingsEngine {
 
         // hot 键：生效值取 effective，来源取 DB 行（ui 优先）
         for (key, value) in hot_flat {
-            let (_, source, secret, restart_required) = db
-                .get(&key)
-                .cloned()
-                .unwrap_or((value.clone(), "file".into(), false, false));
-            let source = if source == "ui" { "ui".to_string() } else { "file".to_string() };
-            items.push(SettingItem { key, value, source, restart_required, secret });
+            let (_, source, secret, restart_required) =
+                db.get(&key)
+                    .cloned()
+                    .unwrap_or((value.clone(), "file".into(), false, false));
+            let source = if source == "ui" {
+                "ui".to_string()
+            } else {
+                "file".to_string()
+            };
+            items.push(SettingItem {
+                key,
+                value,
+                source,
+                restart_required,
+                secret,
+            });
         }
 
         // 启动类键：env > UI > YAML，secret 项掩码
@@ -212,8 +221,10 @@ impl SettingsEngine {
     /// 掩码值（"***"）回传语义 = 保持原值。启动类键允许保存但标注需重启。
     pub async fn put(&self, updates: serde_json::Map<String, serde_json::Value>) -> ApiResult<()> {
         // hot 键空间（来自当前 YAML hot 快照）
-        let hot_keys: std::collections::HashSet<String> =
-            crate::config::hot_flat(&self.yaml_hot()).into_iter().map(|(k, _)| k).collect();
+        let hot_keys: std::collections::HashSet<String> = crate::config::hot_flat(&self.yaml_hot())
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         let base = self.yaml_hot();
 
         // 逐键校验，收集合法更新
@@ -238,10 +249,11 @@ impl SettingsEngine {
                 }
             } else {
                 // hot 键：先用 apply_overrides 试算做类型校验
-                crate::config::apply_overrides(&base, &[(key.clone(), value.clone())])
-                    .map_err(|e| {
+                crate::config::apply_overrides(&base, &[(key.clone(), value.clone())]).map_err(
+                    |e| {
                         crate::error::ApiError::bad_request(format!("配置值类型不匹配: {key}: {e}"))
-                    })?;
+                    },
+                )?;
             }
             let secret = key_is_secret(&key);
             let restart = is_startup;
@@ -278,8 +290,9 @@ impl SettingsEngine {
         yaml_value: &str,
     ) -> ApiResult<(String, &'static str)> {
         // env（按 STARTUP_ENV_MAP 查表；仅启动时读取）
-        if let Some((_, env_name)) =
-            crate::config::STARTUP_ENV_MAP.iter().find(|(k, _)| *k == key)
+        if let Some((_, env_name)) = crate::config::STARTUP_ENV_MAP
+            .iter()
+            .find(|(k, _)| *k == key)
         {
             if let Ok(v) = std::env::var(env_name) {
                 if !v.is_empty() {
@@ -315,8 +328,10 @@ impl SettingsEngine {
     /// 计算生效 hot 配置：以 YAML hot 为基准，叠加上全部属于 hot 键空间的 UI 覆盖。
     /// 单行失败记录 warning 并跳过该行，不影响其它覆盖。
     async fn merge_effective(&self, yaml: &HotConfig) -> ApiResult<HotConfig> {
-        let hot_keys: std::collections::HashSet<String> =
-            crate::config::hot_flat(yaml).into_iter().map(|(k, _)| k).collect();
+        let hot_keys: std::collections::HashSet<String> = crate::config::hot_flat(yaml)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         let rows = sqlx::query("SELECT key, value FROM system_settings WHERE source = 'ui'")
             .fetch_all(&self.pool)
             .await?;
@@ -437,11 +452,19 @@ mod tests {
                 admin_jwt_secret: "s3cret".into(),
                 debug: false,
             },
-            database: crate::config::DatabaseCfg { url: "postgres://u:p@h/db".into() },
+            database: crate::config::DatabaseCfg {
+                url: "postgres://u:p@h/db".into(),
+            },
             ..Default::default()
         };
-        assert_eq!(startup_yaml_value(&cfg, "server.listen").unwrap(), "127.0.0.1:9000");
-        assert_eq!(startup_yaml_value(&cfg, "database.url").unwrap(), "postgres://u:p@h/db");
+        assert_eq!(
+            startup_yaml_value(&cfg, "server.listen").unwrap(),
+            "127.0.0.1:9000"
+        );
+        assert_eq!(
+            startup_yaml_value(&cfg, "database.url").unwrap(),
+            "postgres://u:p@h/db"
+        );
         assert_eq!(
             startup_yaml_value(&cfg, "server.admin_jwt_secret").unwrap(),
             "s3cret"

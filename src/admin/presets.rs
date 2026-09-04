@@ -30,7 +30,10 @@ async fn list_presets(
     State(_state): State<Arc<AppState>>,
     _admin: AdminUsername,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let items: Vec<serde_json::Value> = presets::presets().iter().map(|p| serde_json::json!(p)).collect();
+    let items: Vec<serde_json::Value> = presets::presets()
+        .iter()
+        .map(|p| serde_json::json!(p))
+        .collect();
     Ok(Json(serde_json::json!({ "items": items })))
 }
 
@@ -50,6 +53,13 @@ async fn provision_preset(
     Json(body): Json<ProvisionReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let preset = presets::find(&name).ok_or(ApiError::NotFound)?;
-    let result = presets::provision(&state, preset, &body.api_key, body.name.as_deref(), &admin.0).await?;
+    let result = presets::provision(
+        &state,
+        preset,
+        &body.api_key,
+        body.name.as_deref(),
+        &admin.0,
+    )
+    .await?;
     Ok(Json(result))
 }

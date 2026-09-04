@@ -6,7 +6,7 @@
 //! - 用量上限：基于 quota_usage 独立计数器（最终一致），判定结果缓存 1–5s（可配），
 //!   超限动作 block（429）/ warn（仅告警）。
 
-use chrono::{Datelike, DateTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use rust_decimal::Decimal;
 use sqlx::PgPool;
 use std::collections::{HashMap, VecDeque};
@@ -111,7 +111,8 @@ pub async fn check_quota(
     billing_timezone: &str,
     action: &str,
 ) -> Result<(), ApiError> {
-    let (Some(limit), Some(unit), Some(window)) = (&key.quota_limit, &key.quota_unit, &key.quota_window)
+    let (Some(limit), Some(unit), Some(window)) =
+        (&key.quota_limit, &key.quota_unit, &key.quota_window)
     else {
         return Ok(());
     };
@@ -160,7 +161,10 @@ pub async fn check_quota(
 pub fn window_start(window: &str, tz: &str, now: DateTime<Utc>) -> DateTime<Utc> {
     // total 与未知 window：固定 epoch
     if window != "daily" && window != "monthly" {
-        return Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).single().expect("epoch");
+        return Utc
+            .with_ymd_and_hms(1970, 1, 1, 0, 0, 0)
+            .single()
+            .expect("epoch");
     }
 
     // 非法时区回退 UTC
@@ -211,7 +215,10 @@ impl QuotaCache {
 
     /// 移除某 Key 的判定缓存（删除 Key 时调用，防残留，review P3）。
     pub fn remove(&self, key_id: Uuid) {
-        self.inner.lock().expect("QuotaCache 锁中毒").remove(&key_id);
+        self.inner
+            .lock()
+            .expect("QuotaCache 锁中毒")
+            .remove(&key_id);
     }
 }
 
@@ -248,7 +255,9 @@ mod tests {
 
     /// 构造 UTC 时刻（单值无歧义）。
     fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("构建 UTC")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("构建 UTC")
     }
 
     // ---- 滑窗 window_allow ----
@@ -277,7 +286,11 @@ mod tests {
         let limit = 1;
         // 恰在 60s 边界的旧事件仍算在窗口内 → 拒绝
         assert!(window_allow(&mut q, start, limit));
-        assert!(!window_allow(&mut q, start + Duration::from_secs(60), limit));
+        assert!(!window_allow(
+            &mut q,
+            start + Duration::from_secs(60),
+            limit
+        ));
         assert_eq!(q.len(), 1);
         // 61s：过期 → 放行
         assert!(window_allow(&mut q, start + Duration::from_secs(61), limit));
@@ -301,7 +314,10 @@ mod tests {
         assert!(matches!(limiter.check_rpm(&key, 0), Ok(())));
         assert!(matches!(limiter.check_rpm(&key, 0), Ok(())));
         // 第 3 个超限
-        assert!(matches!(limiter.check_rpm(&key, 0), Err(ApiError::RateLimited)));
+        assert!(matches!(
+            limiter.check_rpm(&key, 0),
+            Err(ApiError::RateLimited)
+        ));
     }
 
     #[test]
@@ -323,9 +339,12 @@ mod tests {
     fn check_rpm_uses_default_rpm() {
         let limiter = RateLimiter::new();
         let key = mk_key(None, None); // rpm 未配置
-        // default_rpm = 1：第 1 个放行，第 2 个超限
+                                      // default_rpm = 1：第 1 个放行，第 2 个超限
         assert!(matches!(limiter.check_rpm(&key, 1), Ok(())));
-        assert!(matches!(limiter.check_rpm(&key, 1), Err(ApiError::RateLimited)));
+        assert!(matches!(
+            limiter.check_rpm(&key, 1),
+            Err(ApiError::RateLimited)
+        ));
     }
 
     // ---- tpm_precheck ----
@@ -338,17 +357,35 @@ mod tests {
             Err(ApiError::RateLimited)
         ));
         // max == tpm → 放行（边界，m > t 才拒）
-        assert!(matches!(tpm_precheck(&mk_key(Some(1), Some(100)), Some(100)), Ok(())));
+        assert!(matches!(
+            tpm_precheck(&mk_key(Some(1), Some(100)), Some(100)),
+            Ok(())
+        ));
         // max < tpm → 放行
-        assert!(matches!(tpm_precheck(&mk_key(Some(1), Some(100)), Some(99)), Ok(())));
+        assert!(matches!(
+            tpm_precheck(&mk_key(Some(1), Some(100)), Some(99)),
+            Ok(())
+        ));
         // max 未传 → 放行
-        assert!(matches!(tpm_precheck(&mk_key(Some(1), Some(100)), None), Ok(())));
+        assert!(matches!(
+            tpm_precheck(&mk_key(Some(1), Some(100)), None),
+            Ok(())
+        ));
         // tpm 未配置 → 放行
-        assert!(matches!(tpm_precheck(&mk_key(Some(1), None), Some(9999)), Ok(())));
+        assert!(matches!(
+            tpm_precheck(&mk_key(Some(1), None), Some(9999)),
+            Ok(())
+        ));
         // tpm Some(0) → 不限放行
-        assert!(matches!(tpm_precheck(&mk_key(Some(1), Some(0)), Some(9999)), Ok(())));
+        assert!(matches!(
+            tpm_precheck(&mk_key(Some(1), Some(0)), Some(9999)),
+            Ok(())
+        ));
         // tpm Some(负) → 不限放行
-        assert!(matches!(tpm_precheck(&mk_key(Some(1), Some(-5)), Some(9999)), Ok(())));
+        assert!(matches!(
+            tpm_precheck(&mk_key(Some(1), Some(-5)), Some(9999)),
+            Ok(())
+        ));
     }
 
     // ---- window_start ----

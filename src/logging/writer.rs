@@ -50,7 +50,10 @@ async fn flush(
                 Err(we) => {
                     // WAL 也失败（如磁盘故障）：保留批次在内存等待下次 flush 重试，
                     // 防止静默丢弃（批次有界 ≤ BATCH_MAX；新事件继续走 rx 溢出语义）。
-                    tracing::error!("WAL 兜底追加失败，批次保留待重试（最多 {} 条）: {we}", batch.len());
+                    tracing::error!(
+                        "WAL 兜底追加失败，批次保留待重试（最多 {} 条）: {we}",
+                        batch.len()
+                    );
                 }
             }
             // 指数退避 1s→30s（先休眠，再加大下次退避值）

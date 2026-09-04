@@ -180,7 +180,11 @@ fn fx_probe_url(cfg: &crate::config::FxAutoFetchCfg) -> String {
 }
 
 /// 构建汇率拉取 client（按 fx_auto_fetch.use_proxy/proxy_id + 全局 no_proxy 并集）。
-fn build_fx_client(state: &AppState, cfg: &crate::config::FxAutoFetchCfg, url: &str) -> reqwest::Client {
+fn build_fx_client(
+    state: &AppState,
+    cfg: &crate::config::FxAutoFetchCfg,
+    url: &str,
+) -> reqwest::Client {
     let hot = state.hot.load();
     let snap = state.cache.snapshot();
 

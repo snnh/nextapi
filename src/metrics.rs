@@ -41,18 +41,44 @@ impl Metrics {
         let gateway_requests = Family::<RequestLabels, Counter>::default();
         let gateway_errors = Family::<RequestLabels, Counter>::default();
         let gateway_latency = Family::<RequestLabels, Histogram>::new_with_constructor(|| {
-            Histogram::new(prometheus_client::metrics::histogram::exponential_buckets(0.005, 2.0, 12))
+            Histogram::new(prometheus_client::metrics::histogram::exponential_buckets(
+                0.005, 2.0, 12,
+            ))
         });
         let gateway_tokens = Family::<RequestLabels, Counter>::default();
         let log_overflows = Counter::default();
         let log_queue_depth = Gauge::default();
 
-        registry.register("nextapi_gateway_requests", "网关请求数", gateway_requests.clone());
-        registry.register("nextapi_gateway_errors", "网关错误数", gateway_errors.clone());
-        registry.register("nextapi_gateway_latency_seconds", "请求延迟", gateway_latency.clone());
-        registry.register("nextapi_gateway_tokens", "token 计数", gateway_tokens.clone());
-        registry.register("nextapi_log_overflows", "日志队列/WAL 溢出计数", log_overflows.clone());
-        registry.register("nextapi_log_queue_depth", "异步日志队列深度", log_queue_depth.clone());
+        registry.register(
+            "nextapi_gateway_requests",
+            "网关请求数",
+            gateway_requests.clone(),
+        );
+        registry.register(
+            "nextapi_gateway_errors",
+            "网关错误数",
+            gateway_errors.clone(),
+        );
+        registry.register(
+            "nextapi_gateway_latency_seconds",
+            "请求延迟",
+            gateway_latency.clone(),
+        );
+        registry.register(
+            "nextapi_gateway_tokens",
+            "token 计数",
+            gateway_tokens.clone(),
+        );
+        registry.register(
+            "nextapi_log_overflows",
+            "日志队列/WAL 溢出计数",
+            log_overflows.clone(),
+        );
+        registry.register(
+            "nextapi_log_queue_depth",
+            "异步日志队列深度",
+            log_queue_depth.clone(),
+        );
 
         Metrics {
             registry: Mutex::new(registry),
@@ -82,7 +108,10 @@ impl Default for Metrics {
 /// GET /metrics
 pub async fn handle(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     (
-        [("content-type", "application/openmetrics-text; version=1.0.0; charset=utf-8")],
+        [(
+            "content-type",
+            "application/openmetrics-text; version=1.0.0; charset=utf-8",
+        )],
         state.metrics.render(),
     )
 }

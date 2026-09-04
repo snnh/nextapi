@@ -255,8 +255,10 @@ fn finalize_stream(stream: &mut TeeStream) {
             "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
         }));
         if let Some((req, req_trunc)) = &ctx.debug_req {
-            let (resp, resp_trunc) =
-                crate::logging::redact::redact_and_truncate(text.as_bytes(), crate::logging::DEBUG_MAX_BYTES);
+            let (resp, resp_trunc) = crate::logging::redact::redact_and_truncate(
+                text.as_bytes(),
+                crate::logging::DEBUG_MAX_BYTES,
+            );
             ev.debug_payload = Some(serde_json::json!({
                 "request": req.clone(),
                 "response": resp,
@@ -265,9 +267,16 @@ fn finalize_stream(stream: &mut TeeStream) {
         }
         ctx.state.log_sink.log(ev);
 
-        let total = usage.prompt_tokens.unwrap_or(0).saturating_add(usage.completion_tokens.unwrap_or(0));
+        let total = usage
+            .prompt_tokens
+            .unwrap_or(0)
+            .saturating_add(usage.completion_tokens.unwrap_or(0));
         if total > 0 {
-            ctx.state.metrics.gateway_tokens.get_or_create(&ctx.labels).inc_by(total.max(0) as u64);
+            ctx.state
+                .metrics
+                .gateway_tokens
+                .get_or_create(&ctx.labels)
+                .inc_by(total.max(0) as u64);
         }
     });
 }
@@ -400,7 +409,11 @@ fn parse_gemini_action(action: &str) -> Option<(String, bool)> {
 }
 
 /// 提取请求模型名：Gemini 取路径 model，其余取 body["model"]；缺失返回 BadRequest。
-fn extract_model(entry: Entry, body: &serde_json::Value, gemini_model: Option<&str>) -> Result<String, ApiError> {
+fn extract_model(
+    entry: Entry,
+    body: &serde_json::Value,
+    gemini_model: Option<&str>,
+) -> Result<String, ApiError> {
     match entry {
         Entry::Gemini => match gemini_model {
             Some(m) if !m.is_empty() => Ok(m.to_string()),
@@ -446,7 +459,8 @@ fn decide_mode(entry: Protocol, up: &UpstreamRow) -> Option<Mode> {
 /// 候选排序构建：按 priority 升序分组，每组 weighted_pick 得一个主候选，同组其余作为
 /// 故障转移后续候选（按权重降序排列）；每组均出现在有序尝试列表中。
 fn order_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
-    let mut groups: std::collections::BTreeMap<i32, Vec<Candidate>> = std::collections::BTreeMap::new();
+    let mut groups: std::collections::BTreeMap<i32, Vec<Candidate>> =
+        std::collections::BTreeMap::new();
     for c in candidates {
         groups.entry(c.route.priority).or_default().push(c);
     }
@@ -456,10 +470,14 @@ fn order_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
         if let Some(primary) = routing::weighted_pick(&routes) {
             if let Some(p) = group.iter().find(|c| c.route.id == primary.id).cloned() {
                 ordered.push(p.clone());
-                let mut rest: Vec<Candidate> =
-                    group.iter().filter(|c| c.route.id != p.route.id).cloned().collect();
+                let mut rest: Vec<Candidate> = group
+                    .iter()
+                    .filter(|c| c.route.id != p.route.id)
+                    .cloned()
+                    .collect();
                 rest.sort_by(|a, b| {
-                    b.route.weight
+                    b.route
+                        .weight
                         .cmp(&a.route.weight)
                         .then(a.route.sort_order.cmp(&b.route.sort_order))
                 });
@@ -485,7 +503,11 @@ fn build_outbound(
             upstream::rewrite_body(&mut b, Some(upstream_model), upstream.overrides().as_ref());
             // PLAN §4.4：OpenAI 系透传流式注入 stream_options.include_usage 用于 usage 采集兜底
             inject_stream_usage_option(&mut b, entry, stream);
-            Ok(Outbound { body: b, protocol: entry, mode })
+            Ok(Outbound {
+                body: b,
+                protocol: entry,
+                mode,
+            })
         }
         Mode::Convert(target) => {
             let mut ctx = ConvCtx::new();
@@ -497,7 +519,11 @@ fn build_outbound(
                 ir.stream_include_usage = true;
             }
             let out = protocol::request_from_ir(target, &ir, &mut ctx)?;
-            Ok(Outbound { body: out, protocol: target, mode })
+            Ok(Outbound {
+                body: out,
+                protocol: target,
+                mode,
+            })
         }
     }
 }
@@ -507,7 +533,9 @@ fn inject_stream_usage_option(body: &mut serde_json::Value, protocol: Protocol, 
     if !stream || protocol != Protocol::OpenaiChat {
         return;
     }
-    let Some(obj) = body.as_object_mut() else { return };
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
     let so = obj
         .entry("stream_options")
         .or_insert_with(|| serde_json::json!({}));
@@ -521,10 +549,20 @@ fn inject_stream_usage_option(body: &mut serde_json::Value, protocol: Protocol, 
 // ---------------------------------------------------------------------------
 
 /// 构造 JSON 响应（自动写 content-type / X-Request-Id / 可选 X-NextAPI-Degraded）。
-fn json_rsp(status: StatusCode, request_id: &str, degraded: Option<&str>, body: serde_json::Value) -> Response {
+fn json_rsp(
+    status: StatusCode,
+    request_id: &str,
+    degraded: Option<&str>,
+    body: serde_json::Value,
+) -> Response {
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
-    h.insert(HDR_REQUEST_ID, request_id.parse::<header::HeaderValue>().unwrap_or_else(|_| header::HeaderValue::from_static("")));
+    h.insert(
+        HDR_REQUEST_ID,
+        request_id
+            .parse::<header::HeaderValue>()
+            .unwrap_or_else(|_| header::HeaderValue::from_static("")),
+    );
     if let Some(d) = degraded {
         if let Ok(dv) = header::HeaderValue::from_str(d) {
             h.insert(HDR_DEGRADED, dv);
@@ -536,7 +574,11 @@ fn json_rsp(status: StatusCode, request_id: &str, degraded: Option<&str>, body: 
 
 /// 以入口协议（错误结构）构造错误 JSON 响应。
 fn error_resp(entry: Protocol, request_id: &str, status: u16, message: &str) -> Response {
-    let ir = IrError { status, message: message.to_string(), ..Default::default() };
+    let ir = IrError {
+        status,
+        message: message.to_string(),
+        ..Default::default()
+    };
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     json_rsp(code, request_id, None, error_from_ir(entry, &ir))
 }
@@ -545,7 +587,12 @@ fn error_resp(entry: Protocol, request_id: &str, status: u16, message: &str) -> 
 fn stream_rsp(request_id: &str, body: Body) -> Response {
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
-    h.insert(HDR_REQUEST_ID, request_id.parse::<header::HeaderValue>().unwrap_or_else(|_| header::HeaderValue::from_static("")));
+    h.insert(
+        HDR_REQUEST_ID,
+        request_id
+            .parse::<header::HeaderValue>()
+            .unwrap_or_else(|_| header::HeaderValue::from_static("")),
+    );
     (StatusCode::OK, h, body).into_response()
 }
 
@@ -582,7 +629,10 @@ fn fail_message(fail: &Fail) -> String {
 }
 
 /// 构建 debug_payload（req 已脱敏；resp 按字节脱敏 + 截断）。
-fn debug_payload(req: &Option<(serde_json::Value, bool)>, resp_bytes: &[u8]) -> Option<serde_json::Value> {
+fn debug_payload(
+    req: &Option<(serde_json::Value, bool)>,
+    resp_bytes: &[u8],
+) -> Option<serde_json::Value> {
     let (req, req_trunc) = req.as_ref()?;
     let (resp, resp_trunc) =
         crate::logging::redact::redact_and_truncate(resp_bytes, crate::logging::DEBUG_MAX_BYTES);
@@ -648,11 +698,19 @@ fn nonstream_success(
                     let mut out = out;
                     if let Some(obj) = out.as_object_mut() {
                         if obj.contains_key("model") {
-                            obj.insert("model".into(), serde_json::Value::String(gateway_model.to_string()));
+                            obj.insert(
+                                "model".into(),
+                                serde_json::Value::String(gateway_model.to_string()),
+                            );
                         }
                     }
                     NonstreamOutcome {
-                        response: json_rsp(StatusCode::OK, request_id, ctx.degraded_header().as_deref(), out.clone()),
+                        response: json_rsp(
+                            StatusCode::OK,
+                            request_id,
+                            ctx.degraded_header().as_deref(),
+                            out.clone(),
+                        ),
                         status: 200,
                         degraded: !ctx.degraded.is_empty(),
                         error: None,
@@ -682,7 +740,10 @@ fn nonstream_success(
             let mut v = json;
             if let Some(obj) = v.as_object_mut() {
                 if obj.contains_key("model") {
-                    obj.insert("model".into(), serde_json::Value::String(gateway_model.to_string()));
+                    obj.insert(
+                        "model".into(),
+                        serde_json::Value::String(gateway_model.to_string()),
+                    );
                 }
             }
             NonstreamOutcome {
@@ -703,16 +764,28 @@ fn entry_error(entry: Protocol, fail: &Fail) -> (u16, serde_json::Value) {
             UpstreamError::Status(s, body) => {
                 let ir = serde_json::from_str::<serde_json::Value>(body)
                     .map(|j| error_to_ir(entry, *s, &j))
-                    .unwrap_or_else(|_| IrError { status: *s, message: body.clone(), ..Default::default() });
+                    .unwrap_or_else(|_| IrError {
+                        status: *s,
+                        message: body.clone(),
+                        ..Default::default()
+                    });
                 (*s, error_from_ir(entry, &ir))
             }
             other => {
-                let ir = IrError { status: 502, message: other.to_string(), ..Default::default() };
+                let ir = IrError {
+                    status: 502,
+                    message: other.to_string(),
+                    ..Default::default()
+                };
                 (502, error_from_ir(entry, &ir))
             }
         },
         Fail::Convert(e) => {
-            let ir = IrError { status: 502, message: e.to_string(), ..Default::default() };
+            let ir = IrError {
+                status: 502,
+                message: e.to_string(),
+                ..Default::default()
+            };
             (502, error_from_ir(entry, &ir))
         }
     }
@@ -731,12 +804,21 @@ fn metrics_labels(key: &ApiKeyRow, model: &str, entry: Entry, upstream: &str) ->
     }
 }
 
-fn record(metrics: &crate::metrics::Metrics, labels: &RequestLabels, start: Instant, is_error: bool, resp: Response) -> Response {
+fn record(
+    metrics: &crate::metrics::Metrics,
+    labels: &RequestLabels,
+    start: Instant,
+    is_error: bool,
+    resp: Response,
+) -> Response {
     metrics.gateway_requests.get_or_create(labels).inc();
     if is_error {
         metrics.gateway_errors.get_or_create(labels).inc();
     }
-    metrics.gateway_latency.get_or_create(labels).observe(start.elapsed().as_secs_f64());
+    metrics
+        .gateway_latency
+        .get_or_create(labels)
+        .observe(start.elapsed().as_secs_f64());
     resp
 }
 
@@ -849,7 +931,10 @@ async fn run_gateway(
     params_meta = crate::upstream::usage::request_params_meta(entry_protocol, &body_value);
     tmpl.usage_raw = Some(serde_json::json!({ "params": params_meta.clone() }));
     if debug_active {
-        debug_req = Some(crate::logging::redact::redact_and_truncate(&body, crate::logging::DEBUG_MAX_BYTES));
+        debug_req = Some(crate::logging::redact::redact_and_truncate(
+            &body,
+            crate::logging::DEBUG_MAX_BYTES,
+        ));
     }
 
     // 4. 模型白名单
@@ -859,7 +944,10 @@ async fn run_gateway(
     }
 
     // 5. 限流 + TPM 预检 + 配额
-    if let Err(e) = state.limiter.check_rpm(&key, gateway_cfg.default_rate_limit_rpm) {
+    if let Err(e) = state
+        .limiter
+        .check_rpm(&key, gateway_cfg.default_rate_limit_rpm)
+    {
         let msg = e.to_string();
         log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
         return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
@@ -870,11 +958,20 @@ async fn run_gateway(
         return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
     }
     {
-        let exceeded = match state.quota_cache.get(key.id, gateway_cfg.quota_check_cache_secs) {
+        let exceeded = match state
+            .quota_cache
+            .get(key.id, gateway_cfg.quota_check_cache_secs)
+        {
             Some(v) => v,
             None => {
                 let v = matches!(
-                    limit::check_quota(&state.db, &key, &gateway_cfg.billing_timezone, &gateway_cfg.quota_exceed_action).await,
+                    limit::check_quota(
+                        &state.db,
+                        &key,
+                        &gateway_cfg.billing_timezone,
+                        &gateway_cfg.quota_exceed_action
+                    )
+                    .await,
                     Err(ApiError::RateLimited)
                 );
                 state.quota_cache.put(key.id, v);
@@ -892,29 +989,52 @@ async fn run_gateway(
     if matched.is_empty() {
         let lbl = metrics_labels(&key, &model, entry, "");
         log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
-        return record(&state.metrics, &lbl, start, true, error_resp(entry_protocol, &request_id, 404, "模型未配置路由"));
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(entry_protocol, &request_id, 404, "模型未配置路由"),
+        );
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     for route in matched {
         if let Some(up) = snap.upstreams.get(&route.upstream_id).cloned() {
             if up.enabled && state.breaker.allow(&up) {
-                candidates.push(Candidate { route, upstream: up });
+                candidates.push(Candidate {
+                    route,
+                    upstream: up,
+                });
             }
         }
     }
     if candidates.is_empty() {
         let lbl = metrics_labels(&key, &model, entry, "");
         log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
-        return record(&state.metrics, &lbl, start, true, error_resp(entry_protocol, &request_id, 503, "无可用上游"));
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(entry_protocol, &request_id, 503, "无可用上游"),
+        );
     }
     let attempts: Vec<Attempt> = order_candidates(candidates)
         .into_iter()
-        .filter_map(|c| decide_mode(entry_protocol, &c.upstream).map(|mode| Attempt { candidate: c, mode }))
+        .filter_map(|c| {
+            decide_mode(entry_protocol, &c.upstream).map(|mode| Attempt { candidate: c, mode })
+        })
         .collect();
     if attempts.is_empty() {
         let lbl = metrics_labels(&key, &model, entry, "");
         log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
-        return record(&state.metrics, &lbl, start, true, error_resp(entry_protocol, &request_id, 503, "无可用上游"));
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(entry_protocol, &request_id, 503, "无可用上游"),
+        );
     }
 
     // 7-10. 协议决策 → 请求构建 → 执行/重试/故障转移 → 响应
@@ -936,15 +1056,28 @@ async fn run_gateway(
             .unwrap_or_else(|| model.clone());
         let overrides = upstream.overrides();
 
-        let outbound = match build_outbound(entry_protocol, mode, &body_value, stream, &up_model, upstream) {
+        let outbound = match build_outbound(
+            entry_protocol,
+            mode,
+            &body_value,
+            stream,
+            &up_model,
+            upstream,
+        ) {
             Ok(o) => o,
             Err(cvt) => {
                 // 转换失败且入口协议受支持 → PassthroughFallback（PLAN §3.2）
-                if matches!(mode, Mode::Convert(_)) && upstream.protocol_list().contains(&entry_protocol) {
+                if matches!(mode, Mode::Convert(_))
+                    && upstream.protocol_list().contains(&entry_protocol)
+                {
                     let mut b = body_value.clone();
                     upstream::rewrite_body(&mut b, Some(&up_model), overrides.as_ref());
                     inject_stream_usage_option(&mut b, entry_protocol, stream);
-                    Outbound { body: b, protocol: entry_protocol, mode: Mode::PassthroughFallback }
+                    Outbound {
+                        body: b,
+                        protocol: entry_protocol,
+                        mode: Mode::PassthroughFallback,
+                    }
                 } else {
                     // 该候选无法承接（转换失败且入口不受支持），转移到下一候选
                     last_upstream = Some(upstream.name.clone());
@@ -965,8 +1098,15 @@ async fn run_gateway(
             upstream::endpoint_path(outbound.protocol, &up_model, stream)
         );
         let mut req_headers = reqwest::header::HeaderMap::new();
-        req_headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
-        upstream::apply_auth(&mut req_headers, outbound.protocol, upstream.api_key_plain.as_deref());
+        req_headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        upstream::apply_auth(
+            &mut req_headers,
+            outbound.protocol,
+            upstream.api_key_plain.as_deref(),
+        );
         upstream::apply_header_overrides(&mut req_headers, overrides.as_ref());
         // no_proxy 合并规则（PLAN §5.9）：目标 URL 命中全局 proxy.no_proxy 或所选代理
         // 自身 no_proxy 任一列表 → 直连池。
@@ -987,7 +1127,9 @@ async fn run_gateway(
             if upstream.use_proxy && upstream::no_proxy_match(&lists, &url) {
                 state.client_pools.direct_client()
             } else {
-                state.client_pools.client_for(upstream, &snap, &default_proxy_id)
+                state
+                    .client_pools
+                    .client_for(upstream, &snap, &default_proxy_id)
             }
         };
 
@@ -1006,13 +1148,25 @@ async fn run_gateway(
         let mut idx: u32 = 0;
         loop {
             let exec_res: Result<ExecOutcome, UpstreamError> = if stream {
-                upstream::execute_stream(&client, &url, req_headers.clone(), &outbound.body, stream_timeout_ms)
-                    .await
-                    .map(ExecOutcome::Stream)
+                upstream::execute_stream(
+                    &client,
+                    &url,
+                    req_headers.clone(),
+                    &outbound.body,
+                    stream_timeout_ms,
+                )
+                .await
+                .map(ExecOutcome::Stream)
             } else {
-                upstream::execute_nonstream(&client, &url, req_headers.clone(), &outbound.body, upstream.timeout_ms)
-                    .await
-                    .map(ExecOutcome::Json)
+                upstream::execute_nonstream(
+                    &client,
+                    &url,
+                    req_headers.clone(),
+                    &outbound.body,
+                    upstream.timeout_ms,
+                )
+                .await
+                .map(ExecOutcome::Json)
             };
 
             match exec_res {
@@ -1020,8 +1174,10 @@ async fn run_gateway(
                     state.breaker.on_success(&state.db, upstream).await;
                     let lbl = metrics_labels(&key, &model, entry, &upstream.name);
                     // 用上游原始 JSON 提取 usage（§12.2）；转换前后 usage 语义等价，取原始值最准。
-                    let usage = crate::upstream::usage::extract_json_usage(outbound.protocol, &json);
-                    let outcome = nonstream_success(entry_protocol, outbound.mode, json, &model, &request_id);
+                    let usage =
+                        crate::upstream::usage::extract_json_usage(outbound.protocol, &json);
+                    let outcome =
+                        nonstream_success(entry_protocol, outbound.mode, json, &model, &request_id);
                     let retry_count = (idx + failed_candidates) as i32;
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
@@ -1040,13 +1196,27 @@ async fn run_gateway(
                             "params": params_meta.clone(),
                             "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
                         }));
-                        let total = usage.prompt_tokens.unwrap_or(0).saturating_add(usage.completion_tokens.unwrap_or(0));
+                        let total = usage
+                            .prompt_tokens
+                            .unwrap_or(0)
+                            .saturating_add(usage.completion_tokens.unwrap_or(0));
                         if total > 0 {
-                            state.metrics.gateway_tokens.get_or_create(&lbl).inc_by(total.max(0) as u64);
+                            state
+                                .metrics
+                                .gateway_tokens
+                                .get_or_create(&lbl)
+                                .inc_by(total.max(0) as u64);
                         }
-                        if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(
-                            outcome.final_json.as_ref().unwrap_or(&serde_json::Value::Null),
-                        ).unwrap_or_default()) {
+                        if let Some(payload) = debug_payload(
+                            &debug_req,
+                            &serde_json::to_vec(
+                                outcome
+                                    .final_json
+                                    .as_ref()
+                                    .unwrap_or(&serde_json::Value::Null),
+                            )
+                            .unwrap_or_default(),
+                        ) {
                             ev.debug_payload = Some(payload);
                         }
                         state.log_sink.log(ev);
@@ -1055,9 +1225,16 @@ async fn run_gateway(
                         // 转换失败（502）：记为失败事件（token 恒 None）。
                         ev.status = outcome.status as i32;
                         ev.error = outcome.error.clone();
-                        if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(
-                            outcome.final_json.as_ref().unwrap_or(&serde_json::Value::Null),
-                        ).unwrap_or_default()) {
+                        if let Some(payload) = debug_payload(
+                            &debug_req,
+                            &serde_json::to_vec(
+                                outcome
+                                    .final_json
+                                    .as_ref()
+                                    .unwrap_or(&serde_json::Value::Null),
+                            )
+                            .unwrap_or_default(),
+                        ) {
                             ev.debug_payload = Some(payload);
                         }
                         state.log_sink.log(ev);
@@ -1068,16 +1245,27 @@ async fn run_gateway(
                     state.breaker.on_success(&state.db, upstream).await;
                     let lbl = metrics_labels(&key, &model, entry, &upstream.name);
                     let sbody = if matches!(outbound.mode, Mode::Convert(_)) {
-                        Body::from_stream(upstream::sse_convert_stream(resp, outbound.protocol, entry_protocol))
+                        Body::from_stream(upstream::sse_convert_stream(
+                            resp,
+                            outbound.protocol,
+                            entry_protocol,
+                        ))
                     } else {
-                        Body::from_stream(upstream::sse_passthrough_stream(resp, model.clone(), request_id.clone()))
+                        Body::from_stream(upstream::sse_passthrough_stream(
+                            resp,
+                            model.clone(),
+                            request_id.clone(),
+                        ))
                     };
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
                     ev.protocol_out = outbound.protocol.as_str().to_string();
                     ev.convert_mode = mode_str(outbound.mode).to_string();
                     ev.degraded = false; // 流式转换的降级项在流内部处理，无法在此捕获，记为 false
-                    let collect = Arc::new(Mutex::new(StreamCollect { text: String::new(), ttfb_ms: None }));
+                    let collect = Arc::new(Mutex::new(StreamCollect {
+                        text: String::new(),
+                        ttfb_ms: None,
+                    }));
                     let retry_count = (idx + failed_candidates) as i32;
                     let teed = tee_log_stream(
                         sbody,
@@ -1129,7 +1317,14 @@ async fn run_gateway(
         None => (
             502,
             "无可用上游".to_string(),
-            error_from_ir(entry_protocol, &IrError { status: 502, message: "无可用上游".into(), ..Default::default() }),
+            error_from_ir(
+                entry_protocol,
+                &IrError {
+                    status: 502,
+                    message: "无可用上游".into(),
+                    ..Default::default()
+                },
+            ),
         ),
     };
     // 失败终点：protocol_out 已知则填，convert_mode 已决策则填，否则兜底（log_fail 内完成）。
@@ -1148,19 +1343,36 @@ async fn run_gateway(
 // 入口 handlers（薄封装）
 // ---------------------------------------------------------------------------
 
-async fn openai_chat(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn openai_chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     run_gateway(state, Entry::OpenaiChat, headers, body, None).await
 }
 
-async fn openai_responses(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn openai_responses(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     run_gateway(state, Entry::OpenaiResponses, headers, body, None).await
 }
 
-async fn anthropic(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn anthropic(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     run_gateway(state, Entry::Anthropic, headers, body, None).await
 }
 
-async fn gemini(State(state): State<Arc<AppState>>, Path(action): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+async fn gemini(
+    State(state): State<Arc<AppState>>,
+    Path(action): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     run_gateway(state, Entry::Gemini, headers, body, Some(action)).await
 }
 
@@ -1195,7 +1407,11 @@ fn image_metrics_labels(key: &ApiKeyRow, model: &str, upstream: &str) -> Request
 /// - 候选须 `media::image_api_of(up).is_some()`；
 /// - tpm_precheck 跳过（图片无 max_tokens 语义）；
 /// - 响应/记账含媒体维度（images/image_size）。
-async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn images_generations(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let request_id = Uuid::new_v4().to_string();
     let start = Instant::now();
 
@@ -1252,7 +1468,12 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
         Ok(v) => v,
         Err(_) => {
             log_fail(&state, &tmpl, start, 400, "请求体不是合法 JSON", 0);
-            return error_resp(Protocol::OpenaiChat, &request_id, 400, "请求体不是合法 JSON");
+            return error_resp(
+                Protocol::OpenaiChat,
+                &request_id,
+                400,
+                "请求体不是合法 JSON",
+            );
         }
     };
     let ir = match media::parse_image_request(&body_value) {
@@ -1272,7 +1493,10 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
     };
     tmpl.model = model.clone();
     if debug_active {
-        debug_req = Some(crate::logging::redact::redact_and_truncate(&body, crate::logging::DEBUG_MAX_BYTES));
+        debug_req = Some(crate::logging::redact::redact_and_truncate(
+            &body,
+            crate::logging::DEBUG_MAX_BYTES,
+        ));
     }
 
     // 4. 模型白名单 + RPM + 配额（跳过 tpm_precheck——图片无 max_tokens 语义）
@@ -1280,17 +1504,29 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
         log_fail(&state, &tmpl, start, 403, "禁止访问", 0);
         return error_resp(Protocol::OpenaiChat, &request_id, 403, "禁止访问");
     }
-    if let Err(e) = state.limiter.check_rpm(&key, gateway_cfg.default_rate_limit_rpm) {
+    if let Err(e) = state
+        .limiter
+        .check_rpm(&key, gateway_cfg.default_rate_limit_rpm)
+    {
         let msg = e.to_string();
         log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
         return error_resp(Protocol::OpenaiChat, &request_id, e.status().as_u16(), &msg);
     }
     {
-        let exceeded = match state.quota_cache.get(key.id, gateway_cfg.quota_check_cache_secs) {
+        let exceeded = match state
+            .quota_cache
+            .get(key.id, gateway_cfg.quota_check_cache_secs)
+        {
             Some(v) => v,
             None => {
                 let v = matches!(
-                    limit::check_quota(&state.db, &key, &gateway_cfg.billing_timezone, &gateway_cfg.quota_exceed_action).await,
+                    limit::check_quota(
+                        &state.db,
+                        &key,
+                        &gateway_cfg.billing_timezone,
+                        &gateway_cfg.quota_exceed_action
+                    )
+                    .await,
                     Err(ApiError::RateLimited)
                 );
                 state.quota_cache.put(key.id, v);
@@ -1299,7 +1535,12 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
         };
         if exceeded {
             log_fail(&state, &tmpl, start, 429, "请求过于频繁，请稍后再试", 0);
-            return error_resp(Protocol::OpenaiChat, &request_id, 429, "请求过于频繁，请稍后再试");
+            return error_resp(
+                Protocol::OpenaiChat,
+                &request_id,
+                429,
+                "请求过于频繁，请稍后再试",
+            );
         }
     }
 
@@ -1308,20 +1549,35 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
     if matched.is_empty() {
         let lbl = image_metrics_labels(&key, &model, "");
         log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
-        return record(&state.metrics, &lbl, start, true, error_resp(Protocol::OpenaiChat, &request_id, 404, "模型未配置路由"));
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(Protocol::OpenaiChat, &request_id, 404, "模型未配置路由"),
+        );
     }
     let mut candidates: Vec<Candidate> = Vec::new();
     for route in matched {
         if let Some(up) = snap.upstreams.get(&route.upstream_id).cloned() {
             if up.enabled && media::image_api_of(&up).is_some() && state.breaker.allow(&up) {
-                candidates.push(Candidate { route, upstream: up });
+                candidates.push(Candidate {
+                    route,
+                    upstream: up,
+                });
             }
         }
     }
     if candidates.is_empty() {
         let lbl = image_metrics_labels(&key, &model, "");
         log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
-        return record(&state.metrics, &lbl, start, true, error_resp(Protocol::OpenaiChat, &request_id, 503, "无可用上游"));
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(Protocol::OpenaiChat, &request_id, 503, "无可用上游"),
+        );
     }
     let ordered = order_candidates(candidates);
 
@@ -1336,7 +1592,9 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
         let route = &cand.route;
         let upstream = &cand.upstream;
         // 候选收集时已核实 image_api_of 为 Some，此处再取避免 unwrap
-        let Some(image_api) = media::image_api_of(upstream) else { continue 'outer; };
+        let Some(image_api) = media::image_api_of(upstream) else {
+            continue 'outer;
+        };
         let up_model = route
             .override_model
             .clone()
@@ -1356,15 +1614,26 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
 
         // 请求头：content-type + 鉴权 + 异步头 + 覆盖
         let mut req_headers = reqwest::header::HeaderMap::new();
-        req_headers.insert(reqwest::header::CONTENT_TYPE, "application/json".parse().unwrap());
+        req_headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
         match image_api {
             ImageApi::Openai | ImageApi::DashscopeSync | ImageApi::DashscopeAsync => {
                 // OpenAI / 阿里系鉴权：Authorization Bearer（apply_auth 的 OpenaiChat 形态即 Bearer）
-                upstream::apply_auth(&mut req_headers, Protocol::OpenaiChat, upstream.api_key_plain.as_deref());
+                upstream::apply_auth(
+                    &mut req_headers,
+                    Protocol::OpenaiChat,
+                    upstream.api_key_plain.as_deref(),
+                );
             }
             ImageApi::Gemini => {
                 // Gemini 鉴权：x-goog-api-key
-                upstream::apply_auth(&mut req_headers, Protocol::Gemini, upstream.api_key_plain.as_deref());
+                upstream::apply_auth(
+                    &mut req_headers,
+                    Protocol::Gemini,
+                    upstream.api_key_plain.as_deref(),
+                );
             }
         }
         if media::needs_async_header(image_api) {
@@ -1376,7 +1645,9 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
         let client = {
             let mut lists: Vec<Vec<String>> = vec![state.hot.load().proxy.no_proxy.clone()];
             let eff_proxy_id = if upstream.use_proxy {
-                upstream.proxy_id.or_else(|| uuid::Uuid::parse_str(&default_proxy_id).ok())
+                upstream
+                    .proxy_id
+                    .or_else(|| uuid::Uuid::parse_str(&default_proxy_id).ok())
             } else {
                 None
             };
@@ -1388,36 +1659,61 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
             if upstream.use_proxy && upstream::no_proxy_match(&lists, &url) {
                 state.client_pools.direct_client()
             } else {
-                state.client_pools.client_for(upstream, &snap, &default_proxy_id)
+                state
+                    .client_pools
+                    .client_for(upstream, &snap, &default_proxy_id)
             }
         };
 
         // 记录候选对应的协议/转换模式（供失败兜底记账回填）
         last_protocol_out = Some(image_api_name(image_api).to_string());
         last_convert_mode = Some(
-            if image_api == ImageApi::Openai { "media_passthrough" } else { "media_adapt" }.into(),
+            if image_api == ImageApi::Openai {
+                "media_passthrough"
+            } else {
+                "media_adapt"
+            }
+            .into(),
         );
 
         let lock = route.lock_upstream;
         let retry_limit = if lock { 0 } else { route.retries.max(0) as u32 };
         let mut idx: u32 = 0;
         loop {
-            let exec = upstream::execute_nonstream(&client, &url, req_headers.clone(), &req_body, upstream.timeout_ms).await;
+            let exec = upstream::execute_nonstream(
+                &client,
+                &url,
+                req_headers.clone(),
+                &req_body,
+                upstream.timeout_ms,
+            )
+            .await;
             match exec {
                 Ok(json) => {
                     state.breaker.on_success(&state.db, upstream).await;
                     match media::parse_image_response(image_api, ir.size.as_deref(), &json) {
-                        Ok(ImageOutcome::Created { images, image_count, image_size, .. }) => {
+                        Ok(ImageOutcome::Created {
+                            images,
+                            image_count,
+                            image_size,
+                            ..
+                        }) => {
                             // 同步创建 → 200 {created, data, usage:{image_count}}
                             let data: Vec<serde_json::Value> = images
                                 .iter()
                                 .map(|img| {
                                     let mut m = serde_json::Map::new();
                                     if let Some(u) = &img.url {
-                                        m.insert("url".to_string(), serde_json::Value::String(u.clone()));
+                                        m.insert(
+                                            "url".to_string(),
+                                            serde_json::Value::String(u.clone()),
+                                        );
                                     }
                                     if let Some(b) = &img.b64_json {
-                                        m.insert("b64_json".to_string(), serde_json::Value::String(b.clone()));
+                                        m.insert(
+                                            "b64_json".to_string(),
+                                            serde_json::Value::String(b.clone()),
+                                        );
                                     }
                                     serde_json::Value::Object(m)
                                 })
@@ -1430,18 +1726,32 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
                             let mut ev = tmpl.clone();
                             ev.upstream_id = Some(upstream.id);
                             ev.protocol_out = image_api_name(image_api).to_string();
-                            ev.convert_mode = if image_api == ImageApi::Openai { "media_passthrough" } else { "media_adapt" }.into();
+                            ev.convert_mode = if image_api == ImageApi::Openai {
+                                "media_passthrough"
+                            } else {
+                                "media_adapt"
+                            }
+                            .into();
                             ev.latency_ms = Some(start.elapsed().as_millis() as i32);
                             ev.retry_count = (idx + failed_candidates) as i32;
                             ev.status = 200;
                             ev.images = Some(image_count);
                             ev.image_size = image_size.clone();
-                            if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(&body_json).unwrap_or_default()) {
+                            if let Some(payload) = debug_payload(
+                                &debug_req,
+                                &serde_json::to_vec(&body_json).unwrap_or_default(),
+                            ) {
                                 ev.debug_payload = Some(payload);
                             }
                             state.log_sink.log(ev);
                             let lbl = image_metrics_labels(&key, &model, &upstream.name);
-                            return record(&state.metrics, &lbl, start, false, json_rsp(StatusCode::OK, &request_id, None, body_json));
+                            return record(
+                                &state.metrics,
+                                &lbl,
+                                start,
+                                false,
+                                json_rsp(StatusCode::OK, &request_id, None, body_json),
+                            );
                         }
                         Ok(ImageOutcome::Task { provider_task_id }) => {
                             // 异步任务 → 202，插入 media_tasks 供 M6-C 闭环
@@ -1498,12 +1808,21 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
                             ev.retry_count = (idx + failed_candidates) as i32;
                             ev.status = 202;
                             // 异步任务无即时图片：images/image_size 保持 NULL
-                            if let Some(payload) = debug_payload(&debug_req, &serde_json::to_vec(&body_json).unwrap_or_default()) {
+                            if let Some(payload) = debug_payload(
+                                &debug_req,
+                                &serde_json::to_vec(&body_json).unwrap_or_default(),
+                            ) {
                                 ev.debug_payload = Some(payload);
                             }
                             state.log_sink.log(ev);
                             let lbl = image_metrics_labels(&key, &model, &upstream.name);
-                            return record(&state.metrics, &lbl, start, false, json_rsp(StatusCode::ACCEPTED, &request_id, None, body_json));
+                            return record(
+                                &state.metrics,
+                                &lbl,
+                                start,
+                                false,
+                                json_rsp(StatusCode::ACCEPTED, &request_id, None, body_json),
+                            );
                         }
                         Err(e) => {
                             // 上游响应虽 2xx 但结构不符合预期：视为该候选失败（BodyRead 不可重试）
@@ -1511,7 +1830,9 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
                             last_err = Some(e);
                             failed_candidates += 1;
                             last_idx = idx;
-                            if lock { break 'outer; }
+                            if lock {
+                                break 'outer;
+                            }
                             break;
                         }
                     }
@@ -1531,7 +1852,9 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
                     }
                     failed_candidates += 1;
                     last_idx = idx;
-                    if lock { break 'outer; }
+                    if lock {
+                        break 'outer;
+                    }
                     break;
                 }
             }
@@ -1551,7 +1874,14 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
     let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
     log_fail(&state, &ev, start, status, &msg, retry_count);
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let body = error_from_ir(Protocol::OpenaiChat, &IrError { status, message: msg, ..Default::default() });
+    let body = error_from_ir(
+        Protocol::OpenaiChat,
+        &IrError {
+            status,
+            message: msg,
+            ..Default::default()
+        },
+    );
     let resp = json_rsp(code, &request_id, None, body);
     record(&state.metrics, &lbl, start, true, resp)
 }
@@ -1559,17 +1889,27 @@ async fn images_generations(State(state): State<Arc<AppState>>, headers: HeaderM
 /// POST /v1/videos/generations：视频占位（v1.18 未接入）。不做鉴权/记账，恒 501。
 async fn video_generations_placeholder() -> Response {
     let request_id = Uuid::new_v4().to_string();
-    json_rsp(StatusCode::NOT_IMPLEMENTED, &request_id, None, serde_json::json!({
-        "error": { "message": "视频生成暂未接入（占位）", "type": "not_implemented" }
-    }))
+    json_rsp(
+        StatusCode::NOT_IMPLEMENTED,
+        &request_id,
+        None,
+        serde_json::json!({
+            "error": { "message": "视频生成暂未接入（占位）", "type": "not_implemented" }
+        }),
+    )
 }
 
 /// GET /v1/videos/tasks/{*task_id}：视频任务占位，恒 501。
 async fn video_tasks_placeholder(_task_id: Path<String>) -> Response {
     let request_id = Uuid::new_v4().to_string();
-    json_rsp(StatusCode::NOT_IMPLEMENTED, &request_id, None, serde_json::json!({
-        "error": { "message": "视频生成暂未接入（占位）", "type": "not_implemented" }
-    }))
+    json_rsp(
+        StatusCode::NOT_IMPLEMENTED,
+        &request_id,
+        None,
+        serde_json::json!({
+            "error": { "message": "视频生成暂未接入（占位）", "type": "not_implemented" }
+        }),
+    )
 }
 
 /// GET /v1/models：网关可用模型列表（OpenAI 格式）。
@@ -1584,7 +1924,9 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
         if pattern.is_empty() || pattern.contains('*') {
             continue;
         }
-        let Some(up) = snap.upstreams.get(&route.upstream_id) else { continue };
+        let Some(up) = snap.upstreams.get(&route.upstream_id) else {
+            continue;
+        };
         if !up.enabled {
             continue;
         }
@@ -1623,9 +1965,15 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1beta/models/{*action}", post(gemini))
         // 图片通道（契约 m6 §4）
         .route("/v1/images/generations", post(images_generations))
-        .route("/v1/images/tasks/{task_id}", get(media::tasks::get_image_task))
+        .route(
+            "/v1/images/tasks/{task_id}",
+            get(media::tasks::get_image_task),
+        )
         // 视频占位（v1.18 未接入，恒 501）
-        .route("/v1/videos/generations", post(video_generations_placeholder))
+        .route(
+            "/v1/videos/generations",
+            post(video_generations_placeholder),
+        )
         .route("/v1/videos/tasks/{*task_id}", get(video_tasks_placeholder))
 }
 
@@ -1649,7 +1997,10 @@ mod tests {
             Ok::<Bytes, std::io::Error>(Bytes::from_static(b"data: [DONE]\n\n")),
         ]));
         let start = Instant::now();
-        let collect = Arc::new(Mutex::new(StreamCollect { text: String::new(), ttfb_ms: None }));
+        let collect = Arc::new(Mutex::new(StreamCollect {
+            text: String::new(),
+            ttfb_ms: None,
+        }));
         let mut tee = TeeStream {
             inner: inner.into_data_stream(),
             collect: collect.clone(),
@@ -1691,7 +2042,14 @@ mod tests {
         }
     }
 
-    fn mk_route(tag: &str, pattern: &str, priority: i32, weight: i32, enabled: bool, sort_order: i32) -> ModelRouteRow {
+    fn mk_route(
+        tag: &str,
+        pattern: &str,
+        priority: i32,
+        weight: i32,
+        enabled: bool,
+        sort_order: i32,
+    ) -> ModelRouteRow {
         let now = Utc::now();
         ModelRouteRow {
             id: Uuid::new_v4(),
@@ -1711,7 +2069,10 @@ mod tests {
     }
 
     fn cand(up: UpstreamRow, route: ModelRouteRow) -> Candidate {
-        Candidate { route, upstream: up }
+        Candidate {
+            route,
+            upstream: up,
+        }
     }
 
     #[test]
@@ -1739,26 +2100,44 @@ mod tests {
 
     #[test]
     fn clean_auth_value_bearer_and_plain() {
-        assert_eq!(clean_auth_value("authorization", "Bearer xyz"), Some("xyz".into()));
+        assert_eq!(
+            clean_auth_value("authorization", "Bearer xyz"),
+            Some("xyz".into())
+        );
         assert_eq!(clean_auth_value("authorization", "xyz"), Some("xyz".into()));
-        assert_eq!(clean_auth_value("x-goog-api-key", "gkey"), Some("gkey".into()));
+        assert_eq!(
+            clean_auth_value("x-goog-api-key", "gkey"),
+            Some("gkey".into())
+        );
         assert_eq!(clean_auth_value("authorization", "   "), None);
     }
 
     #[test]
     fn hash_key_is_sha256_hex() {
-        assert_eq!(hash_key("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            hash_key("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
     fn gemini_action_parse() {
-        assert_eq!(parse_gemini_action("gemini-pro:generateContent"), Some(("gemini-pro".into(), false)));
-        assert_eq!(parse_gemini_action("gemini-pro:streamGenerateContent"), Some(("gemini-pro".into(), true)));
+        assert_eq!(
+            parse_gemini_action("gemini-pro:generateContent"),
+            Some(("gemini-pro".into(), false))
+        );
+        assert_eq!(
+            parse_gemini_action("gemini-pro:streamGenerateContent"),
+            Some(("gemini-pro".into(), true))
+        );
         assert_eq!(parse_gemini_action("gemini-pro"), None);
         assert_eq!(parse_gemini_action("gemini-pro:foo"), None);
         assert_eq!(parse_gemini_action(":generateContent"), None);
         // 防御：容忍前导斜杠/空白
-        assert_eq!(parse_gemini_action("/gemini-pro:generateContent"), Some(("gemini-pro".into(), false)));
+        assert_eq!(
+            parse_gemini_action("/gemini-pro:generateContent"),
+            Some(("gemini-pro".into(), false))
+        );
     }
 
     #[test]
@@ -1772,7 +2151,9 @@ mod tests {
         // 契约 m6 §7-B：视频占位恒 501（不做鉴权/记账）
         let resp = video_generations_placeholder().await;
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["error"]["type"], "not_implemented");
         assert_eq!(v["error"]["message"], "视频生成暂未接入（占位）");
@@ -1780,7 +2161,9 @@ mod tests {
         // 视频任务占位同样 501
         let tasks_resp = video_tasks_placeholder(Path("task-abc".to_string())).await;
         assert_eq!(tasks_resp.status(), StatusCode::NOT_IMPLEMENTED);
-        let tbytes = axum::body::to_bytes(tasks_resp.into_body(), usize::MAX).await.unwrap();
+        let tbytes = axum::body::to_bytes(tasks_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let tv: serde_json::Value = serde_json::from_slice(&tbytes).unwrap();
         assert_eq!(tv["error"]["type"], "not_implemented");
     }
@@ -1789,16 +2172,28 @@ mod tests {
     fn image_api_name_maps_variants() {
         assert_eq!(image_api_name(ImageApi::Openai), "images_openai");
         assert_eq!(image_api_name(ImageApi::Gemini), "images_gemini");
-        assert_eq!(image_api_name(ImageApi::DashscopeSync), "images_dashscope_sync");
-        assert_eq!(image_api_name(ImageApi::DashscopeAsync), "images_dashscope_async");
+        assert_eq!(
+            image_api_name(ImageApi::DashscopeSync),
+            "images_dashscope_sync"
+        );
+        assert_eq!(
+            image_api_name(ImageApi::DashscopeAsync),
+            "images_dashscope_async"
+        );
     }
 
     #[test]
     fn extract_model_forms() {
         let body = json!({ "model": "gpt-4o" });
-        assert_eq!(extract_model(Entry::OpenaiChat, &body, None).unwrap(), "gpt-4o");
+        assert_eq!(
+            extract_model(Entry::OpenaiChat, &body, None).unwrap(),
+            "gpt-4o"
+        );
         // Gemini 模型取自路径
-        assert_eq!(extract_model(Entry::Gemini, &body, Some("gemini-pro")).unwrap(), "gemini-pro");
+        assert_eq!(
+            extract_model(Entry::Gemini, &body, Some("gemini-pro")).unwrap(),
+            "gemini-pro"
+        );
         // 缺失 → 400
         assert!(extract_model(Entry::Anthropic, &json!({}), None).is_err());
         assert!(extract_model(Entry::Gemini, &body, None).is_err());
@@ -1807,9 +2202,15 @@ mod tests {
     #[test]
     fn extract_max_tokens_forms() {
         assert_eq!(extract_max_tokens(&json!({ "max_tokens": 100 })), Some(100));
-        assert_eq!(extract_max_tokens(&json!({ "max_completion_tokens": 200 })), Some(200));
+        assert_eq!(
+            extract_max_tokens(&json!({ "max_completion_tokens": 200 })),
+            Some(200)
+        );
         // max_tokens 优先
-        assert_eq!(extract_max_tokens(&json!({ "max_tokens": 1, "max_completion_tokens": 2 })), Some(1));
+        assert_eq!(
+            extract_max_tokens(&json!({ "max_tokens": 1, "max_completion_tokens": 2 })),
+            Some(1)
+        );
         assert_eq!(extract_max_tokens(&json!({ "max_tokens": "x" })), None);
         assert_eq!(extract_max_tokens(&json!({})), None);
     }
@@ -1829,13 +2230,22 @@ mod tests {
         let mut up = make_upstream();
         up.protocols = vec!["openai_chat".into(), "anthropic".into()];
         up.extra = json!({});
-        assert_eq!(decide_mode(Protocol::OpenaiChat, &up), Some(Mode::Passthrough));
+        assert_eq!(
+            decide_mode(Protocol::OpenaiChat, &up),
+            Some(Mode::Passthrough)
+        );
         // 入口不受支持 → 按优先级取第一个支持协议
-        assert_eq!(decide_mode(Protocol::Gemini, &up), Some(Mode::Convert(Protocol::OpenaiChat)));
+        assert_eq!(
+            decide_mode(Protocol::Gemini, &up),
+            Some(Mode::Convert(Protocol::OpenaiChat))
+        );
         // 只支持 gemini 时，openai 入口应转换为 gemini
         let mut up1 = make_upstream();
         up1.protocols = vec!["gemini".into()];
-        assert_eq!(decide_mode(Protocol::OpenaiChat, &up1), Some(Mode::Convert(Protocol::Gemini)));
+        assert_eq!(
+            decide_mode(Protocol::OpenaiChat, &up1),
+            Some(Mode::Convert(Protocol::Gemini))
+        );
         // 完全无支持协议 → None
         let mut up2 = make_upstream();
         up2.protocols = vec![];
@@ -1847,7 +2257,10 @@ mod tests {
         let mut up = make_upstream();
         up.protocols = vec!["gemini".into(), "anthropic".into()];
         up.extra = json!({ "protocol_priority": ["anthropic", "gemini"] });
-        assert_eq!(decide_mode(Protocol::OpenaiChat, &up), Some(Mode::Convert(Protocol::Anthropic)));
+        assert_eq!(
+            decide_mode(Protocol::OpenaiChat, &up),
+            Some(Mode::Convert(Protocol::Anthropic))
+        );
     }
 
     #[test]
@@ -1863,14 +2276,25 @@ mod tests {
             assert_eq!(ids.iter().filter(|&&id| id == x.route.id).count(), 1);
         }
         // 优先级升序分组：两个 priority=10 在前，priority=20 在后
-        assert!(out[0].route.priority <= out[1].route.priority && out[1].route.priority <= out[2].route.priority);
+        assert!(
+            out[0].route.priority <= out[1].route.priority
+                && out[1].route.priority <= out[2].route.priority
+        );
     }
 
     #[test]
     fn build_outbound_passthrough_writes_model_and_usage_option() {
         let up = make_upstream();
         let body = json!({ "model": "orig", "stream": true });
-        let ob = build_outbound(Protocol::OpenaiChat, Mode::Passthrough, &body, true, "up-model", &up).unwrap();
+        let ob = build_outbound(
+            Protocol::OpenaiChat,
+            Mode::Passthrough,
+            &body,
+            true,
+            "up-model",
+            &up,
+        )
+        .unwrap();
         assert_eq!(ob.body["model"], json!("up-model"));
         assert_eq!(ob.body["stream_options"]["include_usage"], json!(true));
         assert_eq!(ob.protocol, Protocol::OpenaiChat);
@@ -1880,7 +2304,15 @@ mod tests {
     fn build_outbound_convert_uses_ir_model_and_stream() {
         let up = make_upstream();
         let body = json!({ "messages": [{ "role": "user", "content": "hi" }], "stream": true });
-        let ob = build_outbound(Protocol::Anthropic, Mode::Convert(Protocol::OpenaiChat), &body, true, "up-model", &up).unwrap();
+        let ob = build_outbound(
+            Protocol::Anthropic,
+            Mode::Convert(Protocol::OpenaiChat),
+            &body,
+            true,
+            "up-model",
+            &up,
+        )
+        .unwrap();
         assert_eq!(ob.protocol, Protocol::OpenaiChat);
         assert_eq!(ob.body["model"], json!("up-model"));
         assert_eq!(ob.body["stream"], json!(true));

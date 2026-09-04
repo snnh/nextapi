@@ -31,9 +31,14 @@ static PRESETS: [Preset; 8] = [
         kind: "aliyun",
         base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         // 文本走 OpenAI 兼容；图像走 DashScope 原生（同步 Qwen-Image + 异步万相）
-        protocols: &["openai_chat", "images_dashscope_sync", "images_dashscope_async"],
+        protocols: &[
+            "openai_chat",
+            "images_dashscope_sync",
+            "images_dashscope_async",
+        ],
         media_base_url: Some("https://dashscope.aliyuncs.com"),
-        description: "阿里云百炼：文本走 OpenAI 兼容；图像走 DashScope 原生（Qwen-Image 同步 + 万相异步）。",
+        description:
+            "阿里云百炼：文本走 OpenAI 兼容；图像走 DashScope 原生（Qwen-Image 同步 + 万相异步）。",
     },
     Preset {
         name: "qianfan",
@@ -142,14 +147,22 @@ pub async fn provision(
 
     // api_key 加密（crypto 不可用时的处理照抄 upstreams create）
     if !state.crypto.is_available() {
-        return Err(ApiError::bad_request("未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key"));
+        return Err(ApiError::bad_request(
+            "未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key",
+        ));
     }
-    let api_key_enc = state.crypto.encrypt(api_key).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let api_key_enc = state
+        .crypto
+        .encrypt(api_key)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
     // extra 写 media_base_url（仅当 Some；保留既有键，勿覆盖——新建行并无既有键）
     let mut extra = serde_json::Map::new();
     if let Some(m) = preset.media_base_url {
-        extra.insert("media_base_url".to_string(), serde_json::Value::String(m.to_string()));
+        extra.insert(
+            "media_base_url".to_string(),
+            serde_json::Value::String(m.to_string()),
+        );
     }
     let extra = serde_json::Value::Object(extra);
 
@@ -175,7 +188,11 @@ pub async fn provision(
     .await?;
 
     // 写后刷新快照 + 审计
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     auth_audit(state, admin, &name, preset).await?;
 
     // 连通性探测：刷新后从快照取回新建上游（含内存 api_key_plain）
@@ -196,12 +213,7 @@ fn validate_provision_key(api_key: &str) -> Result<(), ApiError> {
 }
 
 /// 审计（复用 crate::auth::audit；object_type \"upstream\"，summary 含 preset 全量）。
-async fn auth_audit(
-    state: &AppState,
-    admin: &str,
-    name: &str,
-    preset: &Preset,
-) -> ApiResult<()> {
+async fn auth_audit(state: &AppState, admin: &str, name: &str, preset: &Preset) -> ApiResult<()> {
     crate::auth::audit(
         state,
         admin,
@@ -217,8 +229,14 @@ async fn auth_audit(
 /// 连通性探测（参考 upstreams.rs test_upstream）：client_for + GET {base_url}/models + 10s 超时。
 /// 失败不阻断创建，结果进响应 test 字段。
 async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> serde_json::Value {
-    let client = state.client_pools.client_for(up, snap, &state.hot.load().proxy.default_proxy_id);
-    let proto = up.protocol_list().first().copied().unwrap_or(Protocol::OpenaiChat);
+    let client = state
+        .client_pools
+        .client_for(up, snap, &state.hot.load().proxy.default_proxy_id);
+    let proto = up
+        .protocol_list()
+        .first()
+        .copied()
+        .unwrap_or(Protocol::OpenaiChat);
 
     let url = format!("{}/models", up.base_url.trim_end_matches('/'));
     let mut headers = reqwest::header::HeaderMap::new();
@@ -227,7 +245,12 @@ async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> 
 
     let started = std::time::Instant::now();
     let latency_ms = started.elapsed().as_millis() as u64;
-    let resp = client.get(&url).headers(headers).timeout(Duration::from_secs(10)).send().await;
+    let resp = client
+        .get(&url)
+        .headers(headers)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
 
     match resp {
         Ok(r) => {
@@ -293,7 +316,11 @@ mod tests {
         ];
         for p in ps {
             for proto in p.protocols {
-                assert!(WHITELIST.contains(proto), "预设 `{}` 含非法 protocol: {proto}", p.name);
+                assert!(
+                    WHITELIST.contains(proto),
+                    "预设 `{}` 含非法 protocol: {proto}",
+                    p.name
+                );
             }
             // URL 必须 https
             assert!(
@@ -303,7 +330,11 @@ mod tests {
                 p.base_url
             );
             if let Some(m) = p.media_base_url {
-                assert!(m.starts_with("https://"), "预设 `{}` 的 media_base_url 必须为 https: {m}", p.name);
+                assert!(
+                    m.starts_with("https://"),
+                    "预设 `{}` 的 media_base_url 必须为 https: {m}",
+                    p.name
+                );
             }
         }
     }
@@ -312,11 +343,21 @@ mod tests {
     fn preset_expected_fields() {
         let dash = find("dashscope").unwrap();
         assert_eq!(dash.kind, "aliyun");
-        assert_eq!(dash.protocols, &["openai_chat", "images_dashscope_sync", "images_dashscope_async"]);
+        assert_eq!(
+            dash.protocols,
+            &[
+                "openai_chat",
+                "images_dashscope_sync",
+                "images_dashscope_async"
+            ]
+        );
         assert_eq!(dash.media_base_url, Some("https://dashscope.aliyuncs.com"));
 
         let zen = find("zenmux").unwrap();
-        assert_eq!(zen.protocols, &["openai_chat", "openai_responses", "anthropic", "gemini"]);
+        assert_eq!(
+            zen.protocols,
+            &["openai_chat", "openai_responses", "anthropic", "gemini"]
+        );
 
         let or = find("openrouter").unwrap();
         assert_eq!(or.protocols, &["openai_chat", "openai_responses"]);
@@ -324,8 +365,15 @@ mod tests {
         // 其余单协议
         for name in ["qianfan", "kimi", "hunyuan", "zhipu", "volcano"] {
             let p = find(name).unwrap();
-            assert_eq!(p.protocols, &["openai_chat"], "预设 `{name}` 应仅支持 openai_chat");
-            assert!(p.media_base_url.is_none(), "预设 `{name}` 不应有 media_base_url");
+            assert_eq!(
+                p.protocols,
+                &["openai_chat"],
+                "预设 `{name}` 应仅支持 openai_chat"
+            );
+            assert!(
+                p.media_base_url.is_none(),
+                "预设 `{name}` 不应有 media_base_url"
+            );
         }
     }
 

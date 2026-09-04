@@ -55,7 +55,9 @@ impl Crypto {
             .0
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("{ENV_SECRET_KEY} 未设置，无法解密敏感字段"))?;
-        let buf = B64.decode(enc).map_err(|e| anyhow::anyhow!("密文 base64 解码失败: {e}"))?;
+        let buf = B64
+            .decode(enc)
+            .map_err(|e| anyhow::anyhow!("密文 base64 解码失败: {e}"))?;
         if buf.len() < 13 {
             anyhow::bail!("密文长度非法");
         }

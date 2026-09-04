@@ -21,15 +21,24 @@ pub struct IrError {
 
 /// 解析上游错误体为 IrError。body 非 JSON 时整体作为 message。
 pub fn error_to_ir(p: Protocol, status: u16, body: &serde_json::Value) -> IrError {
-    let err = IrError { status, ..Default::default() };
+    let err = IrError {
+        status,
+        ..Default::default()
+    };
     match p {
         // OpenAI 系：{"error": {"message","type","code"}}
         Protocol::OpenaiChat | Protocol::OpenaiResponses => {
             let e = &body["error"];
             IrError {
-                message: e["message"].as_str().unwrap_or_else(|| body.as_str().unwrap_or("")).into(),
+                message: e["message"]
+                    .as_str()
+                    .unwrap_or_else(|| body.as_str().unwrap_or(""))
+                    .into(),
                 r#type: e["type"].as_str().map(Into::into),
-                code: e["code"].as_str().map(Into::into).or_else(|| e["code"].as_i64().map(|c| c.to_string())),
+                code: e["code"]
+                    .as_str()
+                    .map(Into::into)
+                    .or_else(|| e["code"].as_i64().map(|c| c.to_string())),
                 ..err
             }
         }

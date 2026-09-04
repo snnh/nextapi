@@ -123,8 +123,14 @@ fn parse_file(f: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
         .or_else(|| f["file_id"].as_str())
         .unwrap_or_default()
         .to_string();
-    let url = f["file_url"].as_str().or_else(|| f["url"].as_str()).map(String::from);
-    let data = f["file_data"].as_str().or_else(|| f["data"].as_str()).map(String::from);
+    let url = f["file_url"]
+        .as_str()
+        .or_else(|| f["url"].as_str())
+        .map(String::from);
+    let data = f["file_data"]
+        .as_str()
+        .or_else(|| f["data"].as_str())
+        .map(String::from);
     if name.is_empty() && url.is_none() && data.is_none() {
         ctx.degrade("content.file", "file part 无内容");
         return None;
@@ -190,7 +196,10 @@ fn parse_tool_call(tc: &Value, ctx: &mut ConvCtx) -> Option<IrToolCall> {
         return None;
     }
     let id = tc["id"].as_str().unwrap_or_default().to_string();
-    let name = tc["function"]["name"].as_str().unwrap_or_default().to_string();
+    let name = tc["function"]["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let args = &tc["function"]["arguments"];
     let arguments = if args.is_string() {
         args.as_str().unwrap_or_default().to_string()
@@ -200,7 +209,11 @@ fn parse_tool_call(tc: &Value, ctx: &mut ConvCtx) -> Option<IrToolCall> {
         // \u976e\u5b57\u7b26\u4e32\u53c2\u6570\u5e8f\u5217\u5316\u4e3a\u5b57\u7b26\u4e32
         serde_json::to_string(args).unwrap_or_default()
     };
-    Some(IrToolCall { id, name, arguments })
+    Some(IrToolCall {
+        id,
+        name,
+        arguments,
+    })
 }
 
 /// 解析一条消息为 IR 消息。结构错误（非对象）才报 Parse。
@@ -236,12 +249,18 @@ fn parse_tools(v: &Value, ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertError
             out.push(IrTool {
                 name: f["name"].as_str().unwrap_or_default().to_string(),
                 description: f["description"].as_str().map(String::from),
-                parameters: f.get("parameters").cloned().unwrap_or_else(|| json_object()),
+                parameters: f
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or_else(|| json_object()),
             });
         } else {
             ctx.degrade(
                 "tools",
-                format!("非 function 类型工具定义，丢弃: {}", t["type"].as_str().unwrap_or_default()),
+                format!(
+                    "非 function 类型工具定义，丢弃: {}",
+                    t["type"].as_str().unwrap_or_default()
+                ),
             );
         }
     }
@@ -270,7 +289,10 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
     }
 
     // max_tokens / max_completion_tokens 统一进 max_tokens
-    if let Some(mt) = v.get("max_tokens").or_else(|| v.get("max_completion_tokens")) {
+    if let Some(mt) = v
+        .get("max_tokens")
+        .or_else(|| v.get("max_completion_tokens"))
+    {
         if let Some(n) = mt.as_u64() {
             req.max_tokens = Some(n);
         }
@@ -281,7 +303,11 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
         if let Some(s) = stop.as_str() {
             req.stop = Some(vec![s.to_string()]);
         } else if let Some(arr) = stop.as_array() {
-            req.stop = Some(arr.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+            req.stop = Some(
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect(),
+            );
         }
     }
 
@@ -374,7 +400,10 @@ fn part_to_json(p: &IrPart) -> Value {
         IrPart::ImageInline { media_type, data } => {
             // base64 内联 → 拼回 data: URL
             let mut m = Map::new();
-            m.insert("image_url".into(), Value::String(format!("data:{media_type};base64,{data}")));
+            m.insert(
+                "image_url".into(),
+                Value::String(format!("data:{media_type};base64,{data}")),
+            );
             json_object_with("type", "image_url", m)
         }
         IrPart::InputAudio { data, format } => {
@@ -420,7 +449,10 @@ fn message_to_json(msg: &IrMessage) -> Value {
         m.insert("name".into(), Value::String(name.clone()));
     }
     if !msg.tool_calls.is_empty() {
-        m.insert("tool_calls".into(), Value::Array(msg.tool_calls.iter().map(tool_call_to_json).collect()));
+        m.insert(
+            "tool_calls".into(),
+            Value::Array(msg.tool_calls.iter().map(tool_call_to_json).collect()),
+        );
     }
     if let Some(tcid) = &msg.tool_call_id {
         m.insert("tool_call_id".into(), Value::String(tcid.clone()));
@@ -459,10 +491,16 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     degrade_ext(req, ctx);
 
     body.insert("model".into(), Value::String(req.model.clone()));
-    body.insert("messages".into(), Value::Array(req.messages.iter().map(message_to_json).collect()));
+    body.insert(
+        "messages".into(),
+        Value::Array(req.messages.iter().map(message_to_json).collect()),
+    );
 
     if !req.tools.is_empty() {
-        body.insert("tools".into(), Value::Array(req.tools.iter().map(tool_to_json).collect()));
+        body.insert(
+            "tools".into(),
+            Value::Array(req.tools.iter().map(tool_to_json).collect()),
+        );
     }
     if let Some(tc) = &req.tool_choice {
         body.insert("tool_choice".into(), tc.clone());
@@ -477,12 +515,18 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         body.insert("max_tokens".into(), Value::from(mt));
     }
     if let Some(stop) = &req.stop {
-        body.insert("stop".into(), Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()));
+        body.insert(
+            "stop".into(),
+            Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()),
+        );
     }
 
     body.insert("stream".into(), Value::Bool(req.stream));
     if req.stream_include_usage {
-        body.insert("stream_options".into(), serde_json::json!({"include_usage": true}));
+        body.insert(
+            "stream_options".into(),
+            serde_json::json!({"include_usage": true}),
+        );
     }
 
     if let Some(rf) = &req.response_format {
@@ -502,7 +546,9 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
 }
 
 fn json_number_f64(v: f64) -> Value {
-    serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
+    serde_json::Number::from_f64(v)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
 }
 
 // ---------------------------------------------------------------------------
@@ -547,7 +593,10 @@ fn parse_choice(c: &Value, ctx: &mut ConvCtx) -> Result<IrChoice, ConvertError> 
         return Err(ConvertError::Parse("choice 不是对象".into()));
     }
     let mut ch = IrChoice::default();
-    ch.index = c["index"].as_u64().and_then(|x| u32::try_from(x).ok()).unwrap_or(0);
+    ch.index = c["index"]
+        .as_u64()
+        .and_then(|x| u32::try_from(x).ok())
+        .unwrap_or(0);
     if let Some(msg) = c.get("message") {
         ch.message = parse_message(msg, ctx)?;
     }
@@ -617,7 +666,10 @@ fn usage_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
         out.insert("prompt_tokens_details".into(), Value::Object(pd));
     }
     if u.cache_write_tokens.is_some() {
-        ctx.degrade("usage.cache_write_tokens", "OpenAI Chat 无 cache_write_tokens");
+        ctx.degrade(
+            "usage.cache_write_tokens",
+            "OpenAI Chat 无 cache_write_tokens",
+        );
     }
     Value::Object(out)
 }
@@ -631,7 +683,10 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
     if let Some(sf) = &resp.system_fingerprint {
         body.insert("system_fingerprint".into(), Value::String(sf.clone()));
     }
-    body.insert("choices".into(), Value::Array(resp.choices.iter().map(choice_to_json).collect()));
+    body.insert(
+        "choices".into(),
+        Value::Array(resp.choices.iter().map(choice_to_json).collect()),
+    );
     if let Some(u) = &resp.usage {
         body.insert("usage".into(), usage_to_json(u, ctx));
     }
@@ -675,7 +730,10 @@ fn parse_tool_call_delta(tc: &Value, ctx: &mut ConvCtx) -> Option<IrToolCallDelt
         return None;
     }
     let mut d = IrToolCallDelta::default();
-    d.index = tc["index"].as_u64().and_then(|x| u32::try_from(x).ok()).unwrap_or(0);
+    d.index = tc["index"]
+        .as_u64()
+        .and_then(|x| u32::try_from(x).ok())
+        .unwrap_or(0);
     d.id = tc["id"].as_str().map(String::from);
     let f = &tc["function"];
     d.name = f["name"].as_str().map(String::from);
@@ -688,7 +746,10 @@ fn parse_chunk_choice(c: &Value, ctx: &mut ConvCtx) -> Result<IrChunkChoice, Con
         return Err(ConvertError::Parse("chunk choice 不是对象".into()));
     }
     let mut ch = IrChunkChoice::default();
-    ch.index = c["index"].as_u64().and_then(|x| u32::try_from(x).ok()).unwrap_or(0);
+    ch.index = c["index"]
+        .as_u64()
+        .and_then(|x| u32::try_from(x).ok())
+        .unwrap_or(0);
     if let Some(delta) = c.get("delta") {
         ch.delta = parse_delta(delta, ctx);
     }
@@ -699,7 +760,11 @@ fn parse_chunk_choice(c: &Value, ctx: &mut ConvCtx) -> Result<IrChunkChoice, Con
 }
 
 /// SSE data 载荷 → IR chunk；"[DONE]" 返回 Ok(None)。
-pub fn chunk_to_ir(data: &str, _st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Option<IrChunk>, ConvertError> {
+pub fn chunk_to_ir(
+    data: &str,
+    _st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Option<IrChunk>, ConvertError> {
     if data.trim() == "[DONE]" {
         return Ok(None);
     }
@@ -760,7 +825,10 @@ fn delta_to_json(d: &IrDelta) -> Value {
         m.insert("reasoning_content".into(), Value::String(rc.clone()));
     }
     if !d.tool_calls.is_empty() {
-        m.insert("tool_calls".into(), Value::Array(d.tool_calls.iter().map(tool_call_delta_to_json).collect()));
+        m.insert(
+            "tool_calls".into(),
+            Value::Array(d.tool_calls.iter().map(tool_call_delta_to_json).collect()),
+        );
     }
     Value::Object(m)
 }
@@ -776,16 +844,24 @@ fn chunk_choice_to_json(c: &IrChunkChoice) -> Value {
 }
 
 /// IR chunk → SSE data 载荷列表。
-pub fn chunk_from_ir(chunk: &IrChunk, _st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+pub fn chunk_from_ir(
+    chunk: &IrChunk,
+    _st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Vec<String>, ConvertError> {
     let mut obj = chunk.extra.clone();
     obj.insert("id".into(), Value::String(chunk.id.clone()));
     obj.insert("model".into(), Value::String(chunk.model.clone()));
     obj.insert("created".into(), Value::from(chunk.created));
-    obj.insert("choices".into(), Value::Array(chunk.choices.iter().map(chunk_choice_to_json).collect()));
+    obj.insert(
+        "choices".into(),
+        Value::Array(chunk.choices.iter().map(chunk_choice_to_json).collect()),
+    );
     if let Some(u) = &chunk.usage {
         obj.insert("usage".into(), usage_to_json(u, ctx));
     }
-    let s = serde_json::to_string(&Value::Object(obj)).map_err(|e| ConvertError::Parse(e.to_string()))?;
+    let s = serde_json::to_string(&Value::Object(obj))
+        .map_err(|e| ConvertError::Parse(e.to_string()))?;
     Ok(vec![s])
 }
 
@@ -818,7 +894,10 @@ mod tests {
         assert_eq!(req.model, "gpt-4o");
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, IrRole::System);
-        assert_eq!(req.messages[1].content, Some(IrContent::Text("Hello".into())));
+        assert_eq!(
+            req.messages[1].content,
+            Some(IrContent::Text("Hello".into()))
+        );
         assert_eq!(req.temperature, Some(0.7));
         assert_eq!(req.max_tokens, Some(100));
 
@@ -850,7 +929,10 @@ mod tests {
         let mut c = ctx();
         let resp = response_to_ir(&j, &mut c).unwrap();
         assert_eq!(resp.id, "chatcmpl-x");
-        assert_eq!(resp.choices[0].message.content, Some(IrContent::Text("hi there".into())));
+        assert_eq!(
+            resp.choices[0].message.content,
+            Some(IrContent::Text("hi there".into()))
+        );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
         let usage = resp.usage.as_ref().unwrap();
         assert_eq!(usage.cache_read_tokens, Some(3));
@@ -884,11 +966,40 @@ mod tests {
             _ => panic!("应为 Parts"),
         };
         assert_eq!(parts.len(), 6);
-        assert_eq!(parts[1], IrPart::ImageUrl { url: "https://example.com/a.png".into() });
-        assert_eq!(parts[2], IrPart::ImageUrl { url: "https://example.com/b.png".into() });
-        assert_eq!(parts[3], IrPart::ImageInline { media_type: "image/png".into(), data: "AAAABBBB".into() });
-        assert_eq!(parts[4], IrPart::InputAudio { data: "aGVsbG8=".into(), format: "wav".into() });
-        assert_eq!(parts[5], IrPart::File { name: "README.md".into(), url: None, data: Some("aGVsbG8=".into()) });
+        assert_eq!(
+            parts[1],
+            IrPart::ImageUrl {
+                url: "https://example.com/a.png".into()
+            }
+        );
+        assert_eq!(
+            parts[2],
+            IrPart::ImageUrl {
+                url: "https://example.com/b.png".into()
+            }
+        );
+        assert_eq!(
+            parts[3],
+            IrPart::ImageInline {
+                media_type: "image/png".into(),
+                data: "AAAABBBB".into()
+            }
+        );
+        assert_eq!(
+            parts[4],
+            IrPart::InputAudio {
+                data: "aGVsbG8=".into(),
+                format: "wav".into()
+            }
+        );
+        assert_eq!(
+            parts[5],
+            IrPart::File {
+                name: "README.md".into(),
+                url: None,
+                data: Some("aGVsbG8=".into())
+            }
+        );
 
         let back = request_from_ir(&req, &mut c).unwrap();
         let req2 = request_to_ir(&back, &mut c).unwrap();
@@ -966,7 +1077,9 @@ mod tests {
             "id": "cmpl-1", "model": "gpt-4o", "created": 1,
             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": null}]
         });
-        let c1 = chunk_to_ir(&serde_json::to_string(&d1).unwrap(), &mut st, &mut c).unwrap().unwrap();
+        let c1 = chunk_to_ir(&serde_json::to_string(&d1).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
         assert_eq!(c1.choices[0].delta.role, Some(IrRole::Assistant));
         assert_eq!(c1.choices[0].delta.content.as_deref(), Some("Hello"));
         let out = chunk_from_ir(&c1, &mut st, &mut c).unwrap();
@@ -980,7 +1093,9 @@ mod tests {
                 "tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":"}}]
             }, "finish_reason": null}]
         });
-        let c2 = chunk_to_ir(&serde_json::to_string(&d2).unwrap(), &mut st, &mut c).unwrap().unwrap();
+        let c2 = chunk_to_ir(&serde_json::to_string(&d2).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
         let tc = &c2.choices[0].delta.tool_calls[0];
         assert_eq!(tc.index, 0);
         assert_eq!(tc.id.as_deref(), Some("call_1"));
@@ -1000,7 +1115,9 @@ mod tests {
                 "completion_tokens_details": {"reasoning_tokens": 2}
             }
         });
-        let c3 = chunk_to_ir(&serde_json::to_string(&d3).unwrap(), &mut st, &mut c).unwrap().unwrap();
+        let c3 = chunk_to_ir(&serde_json::to_string(&d3).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
         assert_eq!(c3.choices[0].finish_reason.as_deref(), Some("stop"));
         let u = c3.usage.as_ref().unwrap();
         assert_eq!(u.cache_read_tokens, Some(3));
@@ -1017,7 +1134,10 @@ mod tests {
     fn stream_end_returns_done() {
         let mut st = StreamState::default();
         let mut c = ctx();
-        assert_eq!(stream_end(&mut st, &mut c).unwrap(), vec!["[DONE]".to_string()]);
+        assert_eq!(
+            stream_end(&mut st, &mut c).unwrap(),
+            vec!["[DONE]".to_string()]
+        );
     }
 
     #[test]

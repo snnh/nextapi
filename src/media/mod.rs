@@ -66,11 +66,17 @@ pub struct ImageData {
 }
 
 /// 入口 body（OpenAI images/generations JSON）→ ImageRequest
-pub fn parse_image_request(body: &serde_json::Value) -> Result<ImageRequest, crate::error::ApiError> {
+pub fn parse_image_request(
+    body: &serde_json::Value,
+) -> Result<ImageRequest, crate::error::ApiError> {
     // prompt 必须为非空字符串
     let prompt = match body.get("prompt") {
         Some(serde_json::Value::String(s)) if !s.trim().is_empty() => s.clone(),
-        _ => return Err(crate::error::ApiError::bad_request("prompt 必须为非空字符串")),
+        _ => {
+            return Err(crate::error::ApiError::bad_request(
+                "prompt 必须为非空字符串",
+            ))
+        }
     };
 
     // size 若提供必须匹配 ^\d+x\d+$
@@ -78,7 +84,9 @@ pub fn parse_image_request(body: &serde_json::Value) -> Result<ImageRequest, cra
         None => None,
         Some(serde_json::Value::String(s)) if is_valid_size(s) => Some(s.clone()),
         Some(serde_json::Value::String(_)) => {
-            return Err(crate::error::ApiError::bad_request("size 必须为 '宽x高' 格式（如 1024x1024）"))
+            return Err(crate::error::ApiError::bad_request(
+                "size 必须为 '宽x高' 格式（如 1024x1024）",
+            ))
         }
         Some(_) => return Err(crate::error::ApiError::bad_request("size 必须为字符串")),
     };
@@ -99,11 +107,17 @@ pub fn parse_image_request(body: &serde_json::Value) -> Result<ImageRequest, cra
 
     Ok(ImageRequest {
         prompt,
-        negative_prompt: body.get("negative_prompt").and_then(|v| v.as_str()).map(String::from),
+        negative_prompt: body
+            .get("negative_prompt")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         size,
         n,
         seed: body.get("seed").and_then(|v| v.as_i64()),
-        quality: body.get("quality").and_then(|v| v.as_str()).map(String::from),
+        quality: body
+            .get("quality")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         watermark: body.get("watermark").and_then(|v| v.as_bool()),
     })
 }
@@ -113,16 +127,29 @@ fn is_valid_size(s: &str) -> bool {
     let Some((w, h)) = s.split_once('x') else {
         return false;
     };
-    !w.is_empty() && !h.is_empty() && w.bytes().all(|b| b.is_ascii_digit()) && h.bytes().all(|b| b.is_ascii_digit())
+    !w.is_empty()
+        && !h.is_empty()
+        && w.bytes().all(|b| b.is_ascii_digit())
+        && h.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// 构建上游请求：返回 (url_path, body)
-pub fn build_image_request(api: ImageApi, up_model: &str, req: &ImageRequest) -> (String, serde_json::Value) {
+pub fn build_image_request(
+    api: ImageApi,
+    up_model: &str,
+    req: &ImageRequest,
+) -> (String, serde_json::Value) {
     match api {
         ImageApi::Openai => {
             let mut body = serde_json::Map::new();
-            body.insert("model".to_string(), serde_json::Value::String(up_model.to_string()));
-            body.insert("prompt".to_string(), serde_json::Value::String(req.prompt.clone()));
+            body.insert(
+                "model".to_string(),
+                serde_json::Value::String(up_model.to_string()),
+            );
+            body.insert(
+                "prompt".to_string(),
+                serde_json::Value::String(req.prompt.clone()),
+            );
             if let Some(n) = req.n {
                 body.insert("n".to_string(), serde_json::Value::from(n));
             }
@@ -132,7 +159,10 @@ pub fn build_image_request(api: ImageApi, up_model: &str, req: &ImageRequest) ->
             if let Some(q) = &req.quality {
                 body.insert("quality".to_string(), serde_json::Value::String(q.clone()));
             }
-            ("/v1/images/generations".to_string(), serde_json::Value::Object(body))
+            (
+                "/v1/images/generations".to_string(),
+                serde_json::Value::Object(body),
+            )
         }
         ImageApi::Gemini => {
             let mut generation_config = serde_json::Map::new();
@@ -146,9 +176,18 @@ pub fn build_image_request(api: ImageApi, up_model: &str, req: &ImageRequest) ->
             if let Some(size) = &req.size {
                 if let Some((aspect_ratio, image_size)) = size_to_gemini(size) {
                     let mut image_config = serde_json::Map::new();
-                    image_config.insert("aspectRatio".to_string(), serde_json::Value::String(aspect_ratio));
-                    image_config.insert("imageSize".to_string(), serde_json::Value::String(image_size));
-                    generation_config.insert("imageConfig".to_string(), serde_json::Value::Object(image_config));
+                    image_config.insert(
+                        "aspectRatio".to_string(),
+                        serde_json::Value::String(aspect_ratio),
+                    );
+                    image_config.insert(
+                        "imageSize".to_string(),
+                        serde_json::Value::String(image_size),
+                    );
+                    generation_config.insert(
+                        "imageConfig".to_string(),
+                        serde_json::Value::Object(image_config),
+                    );
                 }
             }
             let body = serde_json::json!({
@@ -161,7 +200,10 @@ pub fn build_image_request(api: ImageApi, up_model: &str, req: &ImageRequest) ->
             // 阿里系 parameters 共用：size 用宽*高（星号）
             let mut parameters = serde_json::Map::new();
             if let Some(size) = &req.size {
-                parameters.insert("size".to_string(), serde_json::Value::String(size_to_dashscope(size)));
+                parameters.insert(
+                    "size".to_string(),
+                    serde_json::Value::String(size_to_dashscope(size)),
+                );
             }
             if let Some(n) = req.n {
                 parameters.insert("n".to_string(), serde_json::Value::from(n));
@@ -176,27 +218,42 @@ pub fn build_image_request(api: ImageApi, up_model: &str, req: &ImageRequest) ->
             if api == ImageApi::DashscopeSync {
                 // 同步：negative_prompt 走 parameters
                 if let Some(np) = &req.negative_prompt {
-                    parameters.insert("negative_prompt".to_string(), serde_json::Value::String(np.clone()));
+                    parameters.insert(
+                        "negative_prompt".to_string(),
+                        serde_json::Value::String(np.clone()),
+                    );
                 }
                 let body = serde_json::json!({
                     "model": up_model,
                     "input": {"messages": [{"role": "user", "content": [{"text": req.prompt}]}]},
                     "parameters": serde_json::Value::Object(parameters),
                 });
-                ("/api/v1/services/aigc/multimodal-generation/generation".to_string(), body)
+                (
+                    "/api/v1/services/aigc/multimodal-generation/generation".to_string(),
+                    body,
+                )
             } else {
                 // 异步：negative_prompt 走 input，parameters 只留 size/n/seed/watermark
                 let mut input = serde_json::Map::new();
-                input.insert("prompt".to_string(), serde_json::Value::String(req.prompt.clone()));
+                input.insert(
+                    "prompt".to_string(),
+                    serde_json::Value::String(req.prompt.clone()),
+                );
                 if let Some(np) = &req.negative_prompt {
-                    input.insert("negative_prompt".to_string(), serde_json::Value::String(np.clone()));
+                    input.insert(
+                        "negative_prompt".to_string(),
+                        serde_json::Value::String(np.clone()),
+                    );
                 }
                 let body = serde_json::json!({
                     "model": up_model,
                     "input": serde_json::Value::Object(input),
                     "parameters": serde_json::Value::Object(parameters),
                 });
-                ("/api/v1/services/aigc/text2image/image-synthesis".to_string(), body)
+                (
+                    "/api/v1/services/aigc/text2image/image-synthesis".to_string(),
+                    body,
+                )
             }
         }
     }
@@ -216,14 +273,16 @@ pub fn parse_image_response(
     match api {
         ImageApi::Openai => {
             // data[].url/b64_json；image_count=data.len()；image_size=请求 size（响应无尺寸）
-            let data = json
-                .get("data")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| UpstreamError::BodyRead("OpenAI 图片响应缺少 data 数组".to_string()))?;
+            let data = json.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
+                UpstreamError::BodyRead("OpenAI 图片响应缺少 data 数组".to_string())
+            })?;
             let mut images = Vec::with_capacity(data.len());
             for item in data {
                 let url = item.get("url").and_then(|v| v.as_str()).map(String::from);
-                let b64 = item.get("b64_json").and_then(|v| v.as_str()).map(String::from);
+                let b64 = item
+                    .get("b64_json")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
                 images.push(ImageData { url, b64_json: b64 });
             }
             Ok(ImageOutcome::Created {
@@ -239,8 +298,13 @@ pub fn parse_image_response(
                 for cand in candidates {
                     if let Some(parts) = cand.pointer("/content/parts").and_then(|v| v.as_array()) {
                         for part in parts {
-                            if let Some(data) = part.pointer("/inlineData/data").and_then(|v| v.as_str()) {
-                                images.push(ImageData { url: None, b64_json: Some(data.to_string()) });
+                            if let Some(data) =
+                                part.pointer("/inlineData/data").and_then(|v| v.as_str())
+                            {
+                                images.push(ImageData {
+                                    url: None,
+                                    b64_json: Some(data.to_string()),
+                                });
                             }
                         }
                     }
@@ -257,7 +321,10 @@ pub fn parse_image_response(
             let mut images = Vec::new();
             if let Some(choices) = json.pointer("/output/choices").and_then(|v| v.as_array()) {
                 for choice in choices {
-                    if let Some(content) = choice.pointer("/message/content").and_then(|v| v.as_array()) {
+                    if let Some(content) = choice
+                        .pointer("/message/content")
+                        .and_then(|v| v.as_array())
+                    {
                         for item in content {
                             if let Some(image) = item.get("image") {
                                 push_image_url(&mut images, image);
@@ -288,8 +355,12 @@ pub fn parse_image_response(
             let task_id = json
                 .pointer("/output/task_id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| UpstreamError::BodyRead("阿里异步响应缺少 output.task_id".to_string()))?;
-            Ok(ImageOutcome::Task { provider_task_id: task_id.to_string() })
+                .ok_or_else(|| {
+                    UpstreamError::BodyRead("阿里异步响应缺少 output.task_id".to_string())
+                })?;
+            Ok(ImageOutcome::Task {
+                provider_task_id: task_id.to_string(),
+            })
         }
     }
 }
@@ -297,11 +368,17 @@ pub fn parse_image_response(
 /// 从阿里 content 项提取图片 URL（支持字符串或字符串数组）
 fn push_image_url(images: &mut Vec<ImageData>, val: &serde_json::Value) {
     match val {
-        serde_json::Value::String(s) => images.push(ImageData { url: Some(s.clone()), b64_json: None }),
+        serde_json::Value::String(s) => images.push(ImageData {
+            url: Some(s.clone()),
+            b64_json: None,
+        }),
         serde_json::Value::Array(arr) => {
             for item in arr {
                 if let Some(s) = item.as_str() {
-                    images.push(ImageData { url: Some(s.to_string()), b64_json: None });
+                    images.push(ImageData {
+                        url: Some(s.to_string()),
+                        b64_json: None,
+                    });
                 }
             }
         }
@@ -341,9 +418,15 @@ pub async fn fetch_task_status(
         }
     })?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
     if !status.is_success() {
-        return Err(UpstreamError::Status(status.as_u16(), truncate_text(&bytes, 2048)));
+        return Err(UpstreamError::Status(
+            status.as_u16(),
+            truncate_text(&bytes, 2048),
+        ));
     }
     let json: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
@@ -364,7 +447,9 @@ pub struct TaskStatus {
 fn parse_task_status(json: serde_json::Value) -> TaskStatus {
     let raw = json.clone();
     let status = normalize_task_status(
-        json.pointer("/output/task_status").and_then(|v| v.as_str()).unwrap_or(""),
+        json.pointer("/output/task_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
     );
 
     let image_count = json.pointer("/usage/image_count").and_then(|v| v.as_i64());
@@ -377,7 +462,9 @@ fn parse_task_status(json: serde_json::Value) -> TaskStatus {
                 .and_then(|v| v.as_str())
                 .map(String::from)
                 .or_else(|| {
-                    json.pointer("/output/code").and_then(|v| v.as_str()).map(|c| format!("code={c}"))
+                    json.pointer("/output/code")
+                        .and_then(|v| v.as_str())
+                        .map(|c| format!("code={c}"))
                 })
                 .unwrap_or_else(|| "任务失败".to_string()),
         )
@@ -385,7 +472,13 @@ fn parse_task_status(json: serde_json::Value) -> TaskStatus {
         None
     };
 
-    TaskStatus { status, image_count, image_size, error, raw }
+    TaskStatus {
+        status,
+        image_count,
+        image_size,
+        error,
+        raw,
+    }
 }
 
 /// 归一化任务状态：PENDING/RUNNING/SUCCEEDED/FAILED/CANCELED/UNKNOWN
@@ -514,9 +607,15 @@ mod tests {
     // ---- image_api_of ----
     #[test]
     fn image_api_of_selects_first_images_protocol() {
-        assert_eq!(image_api_of(&make_upstream(vec!["images_gemini"])), Some(ImageApi::Gemini));
         assert_eq!(
-            image_api_of(&make_upstream(vec!["images_openai", "images_dashscope_async"])),
+            image_api_of(&make_upstream(vec!["images_gemini"])),
+            Some(ImageApi::Gemini)
+        );
+        assert_eq!(
+            image_api_of(&make_upstream(vec![
+                "images_openai",
+                "images_dashscope_async"
+            ])),
             Some(ImageApi::Openai)
         );
         assert_eq!(
@@ -600,12 +699,30 @@ mod tests {
 
     #[test]
     fn size_to_gemini_known_examples() {
-        assert_eq!(size_to_gemini("1024x1024"), Some(("1:1".into(), "1K".into())));
-        assert_eq!(size_to_gemini("2688x1536"), Some(("16:9".into(), "4K".into())));
-        assert_eq!(size_to_gemini("1536x2688"), Some(("9:16".into(), "4K".into())));
-        assert_eq!(size_to_gemini("2368x1728"), Some(("4:3".into(), "4K".into())));
-        assert_eq!(size_to_gemini("1728x2368"), Some(("3:4".into(), "4K".into())));
-        assert_eq!(size_to_gemini("2048x1152"), Some(("16:9".into(), "2K".into())));
+        assert_eq!(
+            size_to_gemini("1024x1024"),
+            Some(("1:1".into(), "1K".into()))
+        );
+        assert_eq!(
+            size_to_gemini("2688x1536"),
+            Some(("16:9".into(), "4K".into()))
+        );
+        assert_eq!(
+            size_to_gemini("1536x2688"),
+            Some(("9:16".into(), "4K".into()))
+        );
+        assert_eq!(
+            size_to_gemini("2368x1728"),
+            Some(("4:3".into(), "4K".into()))
+        );
+        assert_eq!(
+            size_to_gemini("1728x2368"),
+            Some(("3:4".into(), "4K".into()))
+        );
+        assert_eq!(
+            size_to_gemini("2048x1152"),
+            Some(("16:9".into(), "2K".into()))
+        );
     }
 
     #[test]
@@ -632,7 +749,8 @@ mod tests {
     fn build_openai_passthrough() {
         let req = parse_image_request(&json!({
             "prompt":"p","size":"1024x1024","n":2,"quality":"hd","seed":7,"negative_prompt":"x"
-        })).unwrap();
+        }))
+        .unwrap();
         let (path, body) = build_image_request(ImageApi::Openai, "gpt-image-2", &req);
         assert_eq!(path, "/v1/images/generations");
         assert_eq!(body["model"], json!("gpt-image-2"));
@@ -650,14 +768,27 @@ mod tests {
     fn build_gemini_generation_config() {
         let req = parse_image_request(&json!({
             "prompt":"p","size":"1024x1024","n":3
-        })).unwrap();
+        }))
+        .unwrap();
         let (path, body) = build_image_request(ImageApi::Gemini, "gemini-3.1-flash-image", &req);
-        assert_eq!(path, "/v1beta/models/gemini-3.1-flash-image:generateContent");
+        assert_eq!(
+            path,
+            "/v1beta/models/gemini-3.1-flash-image:generateContent"
+        );
         assert_eq!(body["contents"][0]["parts"][0]["text"], json!("p"));
-        assert_eq!(body["generationConfig"]["responseModalities"], json!(["IMAGE"]));
+        assert_eq!(
+            body["generationConfig"]["responseModalities"],
+            json!(["IMAGE"])
+        );
         assert_eq!(body["generationConfig"]["candidateCount"], json!(3));
-        assert_eq!(body["generationConfig"]["imageConfig"]["aspectRatio"], json!("1:1"));
-        assert_eq!(body["generationConfig"]["imageConfig"]["imageSize"], json!("1K"));
+        assert_eq!(
+            body["generationConfig"]["imageConfig"]["aspectRatio"],
+            json!("1:1")
+        );
+        assert_eq!(
+            body["generationConfig"]["imageConfig"]["imageSize"],
+            json!("1K")
+        );
     }
 
     #[test]
@@ -684,12 +815,19 @@ mod tests {
     fn build_dashscope_sync_uses_star_size() {
         let req = parse_image_request(&json!({
             "prompt":"p","negative_prompt":"n","size":"1024x1024","n":2,"seed":11,"watermark":false
-        })).unwrap();
+        }))
+        .unwrap();
         let (path, body) = build_image_request(ImageApi::DashscopeSync, "qwen-image-2.0-pro", &req);
-        assert_eq!(path, "/api/v1/services/aigc/multimodal-generation/generation");
+        assert_eq!(
+            path,
+            "/api/v1/services/aigc/multimodal-generation/generation"
+        );
         assert_eq!(body["model"], json!("qwen-image-2.0-pro"));
         assert_eq!(body["input"]["messages"][0]["role"], json!("user"));
-        assert_eq!(body["input"]["messages"][0]["content"][0]["text"], json!("p"));
+        assert_eq!(
+            body["input"]["messages"][0]["content"][0]["text"],
+            json!("p")
+        );
         assert_eq!(body["parameters"]["size"], json!("1024*1024"));
         assert_eq!(body["parameters"]["n"], json!(2));
         assert_eq!(body["parameters"]["negative_prompt"], json!("n"));
@@ -701,7 +839,8 @@ mod tests {
     fn build_dashscope_async_shape_and_header_flag() {
         let req = parse_image_request(&json!({
             "prompt":"p","negative_prompt":"n","size":"1536x2688","n":1
-        })).unwrap();
+        }))
+        .unwrap();
         let (path, body) = build_image_request(ImageApi::DashscopeAsync, "wanx", &req);
         assert_eq!(path, "/api/v1/services/aigc/text2image/image-synthesis");
         assert_eq!(body["model"], json!("wanx"));
@@ -730,7 +869,11 @@ mod tests {
         });
         let out = parse_image_response(ImageApi::Openai, Some("1024x1024"), &json).unwrap();
         match out {
-            ImageOutcome::Created { images, image_count, image_size } => {
+            ImageOutcome::Created {
+                images,
+                image_count,
+                image_size,
+            } => {
                 assert_eq!(image_count, 2);
                 assert_eq!(image_size.as_deref(), Some("1024x1024"));
                 assert_eq!(images[0].url.as_deref(), Some("https://cdn/u1.png"));
@@ -755,7 +898,12 @@ mod tests {
         });
         let out = parse_image_response(ImageApi::Gemini, None, &json).unwrap();
         match out {
-            ImageOutcome::Created { images, image_count, image_size, .. } => {
+            ImageOutcome::Created {
+                images,
+                image_count,
+                image_size,
+                ..
+            } => {
                 assert_eq!(image_count, 1);
                 assert_eq!(image_size, None);
                 assert_eq!(images[0].b64_json.as_deref(), Some("iVBORw0KGgo="));
@@ -777,7 +925,12 @@ mod tests {
         });
         let out = parse_image_response(ImageApi::DashscopeSync, None, &json).unwrap();
         match out {
-            ImageOutcome::Created { images, image_count, image_size, .. } => {
+            ImageOutcome::Created {
+                images,
+                image_count,
+                image_size,
+                ..
+            } => {
                 assert_eq!(image_count, 1);
                 assert_eq!(image_size.as_deref(), Some("1024x1024"));
                 assert_eq!(images[0].url.as_deref(), Some("https://dashscope/1.png"));

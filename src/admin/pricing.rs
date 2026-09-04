@@ -79,10 +79,17 @@ async fn list_rules(
     _admin: AdminUsername,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let up_id = q.upstream_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
+    let up_id = q
+        .upstream_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(parse_uuid)
+        .transpose()?;
     let model = q.model_id.clone().filter(|s| !s.is_empty());
 
-    let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {PRICE_RULE_COLS} FROM price_rules WHERE TRUE"));
+    let mut qb = QueryBuilder::<Postgres>::new(format!(
+        "SELECT {PRICE_RULE_COLS} FROM price_rules WHERE TRUE"
+    ));
     if let Some(up) = up_id {
         qb.push(" AND upstream_id = ").push_bind(up);
     }
@@ -248,7 +255,11 @@ async fn update_rule(
     let enabled = body.enabled.unwrap_or(existing.enabled);
 
     validate_fields(
-        &unit, &currency, Some(context_basis.as_str()), base_price, dimensions.as_ref(),
+        &unit,
+        &currency,
+        Some(context_basis.as_str()),
+        base_price,
+        dimensions.as_ref(),
         segments.as_ref(),
     )?;
     let dimension_key = normalize_dimension_key(dimensions.as_ref());
@@ -310,16 +321,27 @@ async fn delete_rule(
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
-    auth::audit(&state, &admin.0, "pricing.delete", "price_rule", Some(&id.to_string()), serde_json::json!({}), None).await?;
+    auth::audit(
+        &state,
+        &admin.0,
+        "pricing.delete",
+        "price_rule",
+        Some(&id.to_string()),
+        serde_json::json!({}),
+        None,
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn fetch_rule(state: &AppState, id: Uuid) -> ApiResult<PriceRuleRow> {
-    sqlx::query_as::<_, PriceRuleRow>(&format!("SELECT {PRICE_RULE_COLS} FROM price_rules WHERE id=$1"))
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::NotFound)
+    sqlx::query_as::<_, PriceRuleRow>(&format!(
+        "SELECT {PRICE_RULE_COLS} FROM price_rules WHERE id=$1"
+    ))
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::NotFound)
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +397,15 @@ async fn preview_price(
     let billing_tz = hot.gateway.billing_timezone.clone();
     let stale = hot.gateway.fx_stale_max_minutes;
     drop(hot);
-    let mut result = price_one(&state.db, body.upstream_id, &body.model_id, &input, &billing_tz, stale).await?;
+    let mut result = price_one(
+        &state.db,
+        body.upstream_id,
+        &body.model_id,
+        &input,
+        &billing_tz,
+        stale,
+    )
+    .await?;
     round_priced_result(&mut result, precision);
     Ok(Json(result))
 }
@@ -529,7 +559,10 @@ async fn unpriced(
         if !up.enabled {
             continue;
         }
-        let model = route.override_model.clone().unwrap_or_else(|| route.model_pattern.clone());
+        let model = route
+            .override_model
+            .clone()
+            .unwrap_or_else(|| route.model_pattern.clone());
         if keys.contains(&(route.upstream_id, model.clone())) {
             continue;
         }
@@ -600,19 +633,24 @@ fn build_export_items(
 ) -> Vec<PriceExportItem> {
     let mut map: HashMap<(Uuid, String, String), ItemAgg> = HashMap::new();
     for row in rows {
-        let name = upstreams.get(&row.upstream_id).map(|u| u.name.clone()).unwrap_or_default();
-        let agg = map.entry((row.upstream_id, row.model_id.clone(), row.currency.clone())).or_insert_with(|| ItemAgg {
-            model_id: row.model_id.clone(),
-            upstream: name,
-            currency: row.currency.clone(),
-            input_per_m: None,
-            output_per_m: None,
-            cache_read_per_m: None,
-            cache_write_per_m: None,
-            segments: serde_json::Map::new(),
-            image: Vec::new(),
-            video: Vec::new(),
-        });
+        let name = upstreams
+            .get(&row.upstream_id)
+            .map(|u| u.name.clone())
+            .unwrap_or_default();
+        let agg = map
+            .entry((row.upstream_id, row.model_id.clone(), row.currency.clone()))
+            .or_insert_with(|| ItemAgg {
+                model_id: row.model_id.clone(),
+                upstream: name,
+                currency: row.currency.clone(),
+                input_per_m: None,
+                output_per_m: None,
+                cache_read_per_m: None,
+                cache_write_per_m: None,
+                segments: serde_json::Map::new(),
+                image: Vec::new(),
+                video: Vec::new(),
+            });
         match row.unit.as_str() {
             "token_in" => agg.input_per_m = Some(row.base_price),
             "token_out" => agg.output_per_m = Some(row.base_price),
@@ -647,8 +685,16 @@ fn build_export_items(
             } else {
                 Some(serde_json::Value::Object(agg.segments))
             },
-            image: if agg.image.is_empty() { None } else { Some(serde_json::Value::Array(agg.image)) },
-            video: if agg.video.is_empty() { None } else { Some(serde_json::Value::Array(agg.video)) },
+            image: if agg.image.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Array(agg.image))
+            },
+            video: if agg.video.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Array(agg.video))
+            },
         })
         .collect();
     items.sort_by(|a, b| {
@@ -676,8 +722,11 @@ fn media_export_value(row: &PriceRuleRow) -> serde_json::Value {
 
 fn xml_response(body: String, content_type: &str) -> Response {
     let mut resp = Response::new(Body::from(body));
-    resp.headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_str(content_type).unwrap_or(HeaderValue::from_static("application/octet-stream")));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(content_type)
+            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+    );
     resp
 }
 
@@ -739,7 +788,9 @@ async fn import_rules(
             .map_err(|e| ApiError::bad_request(format!("读取请求体失败: {e}")))?;
         let body: ImportBody = serde_json::from_slice(&body_bytes)
             .map_err(|e| ApiError::bad_request(format!("JSON 解析失败: {e}")))?;
-        let url = body.url.ok_or_else(|| ApiError::bad_request("请输入 url"))?;
+        let url = body
+            .url
+            .ok_or_else(|| ApiError::bad_request("请输入 url"))?;
         let bytes = fetch_url(&state, &url).await?;
         (bytes, q.dry_run.unwrap_or(body.dry_run.unwrap_or(false)))
     };
@@ -835,7 +886,10 @@ async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
         .map_err(|e| ApiError::bad_request(format!("URL 返回异常状态: {e}")))?;
     if let Some(cl) = resp.content_length() {
         if cl > max_bytes {
-            return Err(ApiError::bad_request(format!("文件超过大小限制 {}MB", max_size_mb)));
+            return Err(ApiError::bad_request(format!(
+                "文件超过大小限制 {}MB",
+                max_size_mb
+            )));
         }
     }
     let bytes = resp
@@ -843,14 +897,18 @@ async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
         .await
         .map_err(|e| ApiError::internal(format!("读取响应失败: {e}")))?;
     if bytes.len() > max_bytes as usize {
-        return Err(ApiError::bad_request(format!("文件超过大小限制 {}MB", max_size_mb)));
+        return Err(ApiError::bad_request(format!(
+            "文件超过大小限制 {}MB",
+            max_size_mb
+        )));
     }
     Ok(bytes.to_vec())
 }
 
 /// SSRF 防护：仅 https；host 为 IP 时禁内网段；域名为 localhost/内网后缀时拒绝。
 async fn check_ssrf(url: &str) -> ApiResult<()> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| ApiError::bad_request(format!("URL 非法: {e}")))?;
+    let parsed =
+        reqwest::Url::parse(url).map_err(|e| ApiError::bad_request(format!("URL 非法: {e}")))?;
     if parsed.scheme() != "https" {
         return Err(ApiError::bad_request("仅允许 https URL"));
     }
@@ -998,8 +1056,19 @@ fn expand_item(item: &PriceExportItem, up_id: Uuid) -> Vec<ImportRow> {
     let mut out = Vec::new();
     let seg_for = |unit: &str| item.segments.as_ref().and_then(|m| m.get(unit)).cloned();
 
-    let mut push = |unit: &str, price: Decimal, dims: Option<serde_json::Value>, segs: Option<serde_json::Value>| {
-        out.push(make_row(up_id, &item.model_id, unit, &item.currency, price, dims, segs));
+    let mut push = |unit: &str,
+                    price: Decimal,
+                    dims: Option<serde_json::Value>,
+                    segs: Option<serde_json::Value>| {
+        out.push(make_row(
+            up_id,
+            &item.model_id,
+            unit,
+            &item.currency,
+            price,
+            dims,
+            segs,
+        ));
     };
     if let Some(p) = item.input_per_m {
         push("token_in", p, None, seg_for("token_in"));
@@ -1014,7 +1083,10 @@ fn expand_item(item: &PriceExportItem, up_id: Uuid) -> Vec<ImportRow> {
         push("token_cache_write", p, None, seg_for("token_cache_write"));
     }
     let media_rules = |v: &Option<serde_json::Value>| -> Vec<serde_json::Value> {
-        v.as_ref().and_then(|x| x.as_array()).cloned().unwrap_or_default()
+        v.as_ref()
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default()
     };
     for img in media_rules(&item.image) {
         let (price, dims, segs) = media_parts(&img);
@@ -1027,8 +1099,17 @@ fn expand_item(item: &PriceExportItem, up_id: Uuid) -> Vec<ImportRow> {
     out
 }
 
-fn media_parts(v: &serde_json::Value) -> (Decimal, Option<serde_json::Value>, Option<serde_json::Value>) {
-    let price = v.get("base_price").and_then(json_to_decimal).unwrap_or(Decimal::ZERO);
+fn media_parts(
+    v: &serde_json::Value,
+) -> (
+    Decimal,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+) {
+    let price = v
+        .get("base_price")
+        .and_then(json_to_decimal)
+        .unwrap_or(Decimal::ZERO);
     let dimensions = v.get("dimensions").cloned();
     let segments = v.get("segments").cloned();
     (price, dimensions, segments)
@@ -1060,7 +1141,12 @@ fn make_row(
 fn valid_unit(u: &str) -> bool {
     matches!(
         u,
-        "token_in" | "token_out" | "token_cache_write" | "token_cache_read" | "image" | "video_second"
+        "token_in"
+            | "token_out"
+            | "token_cache_write"
+            | "token_cache_read"
+            | "image"
+            | "video_second"
     )
 }
 
@@ -1096,7 +1182,10 @@ fn validate_row(row: ImportRow) -> Result<ImportRow, String> {
 type IdemKey = (Uuid, String, String, String, String);
 
 /// 逐行校验 + 文件内幂等键去重，返回待 upsert 行与报告。
-fn analyze_import(items: &[PriceExportItem], upstream_ids: &HashMap<String, Uuid>) -> (Vec<ImportRow>, ImportReport) {
+fn analyze_import(
+    items: &[PriceExportItem],
+    upstream_ids: &HashMap<String, Uuid>,
+) -> (Vec<ImportRow>, ImportReport) {
     let mut rows: Vec<ImportRow> = Vec::new();
     let mut seen: HashSet<IdemKey> = HashSet::new();
     let mut failed: Vec<FailedRow> = Vec::new();
@@ -1106,12 +1195,18 @@ fn analyze_import(items: &[PriceExportItem], upstream_ids: &HashMap<String, Uuid
 
     for (idx, item) in items.iter().enumerate() {
         let Some(up_id) = upstream_ids.get(&item.upstream).copied() else {
-            failed.push(FailedRow { index: idx, reason: format!("上游不存在: {}", item.upstream) });
+            failed.push(FailedRow {
+                index: idx,
+                reason: format!("上游不存在: {}", item.upstream),
+            });
             continue;
         };
         let frags = expand_item(item, up_id);
         if frags.is_empty() {
-            failed.push(FailedRow { index: idx, reason: "无可导入的价格项".into() });
+            failed.push(FailedRow {
+                index: idx,
+                reason: "无可导入的价格项".into(),
+            });
             continue;
         }
         // 校验每个候选行；任一失败 → 整条失败。
@@ -1132,7 +1227,15 @@ fn analyze_import(items: &[PriceExportItem], upstream_ids: &HashMap<String, Uuid
         }
         let keys: Vec<IdemKey> = valid
             .iter()
-            .map(|r| (r.upstream_id, r.model_id.clone(), r.unit.clone(), r.currency.clone(), r.dimension_key.clone()))
+            .map(|r| {
+                (
+                    r.upstream_id,
+                    r.model_id.clone(),
+                    r.unit.clone(),
+                    r.currency.clone(),
+                    r.dimension_key.clone(),
+                )
+            })
             .collect();
         if keys.iter().all(|k| seen.contains(k)) {
             skipped += 1;
@@ -1147,7 +1250,15 @@ fn analyze_import(items: &[PriceExportItem], upstream_ids: &HashMap<String, Uuid
         succeeded += 1;
     }
 
-    (rows, ImportReport { total, succeeded, skipped, failed })
+    (
+        rows,
+        ImportReport {
+            total,
+            succeeded,
+            skipped,
+            failed,
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,14 +1301,18 @@ fn validate_fields(
     segments: Option<&serde_json::Value>,
 ) -> ApiResult<()> {
     if !valid_unit(unit) {
-        return Err(ApiError::bad_request("unit 必须为 token_in/token_out/token_cache_write/token_cache_read/image/video_second"));
+        return Err(ApiError::bad_request(
+            "unit 必须为 token_in/token_out/token_cache_write/token_cache_read/image/video_second",
+        ));
     }
     if !valid_currency(currency) {
         return Err(ApiError::bad_request("currency 必须为 CNY/USD"));
     }
     if let Some(cb) = context_basis {
         if !matches!(cb, "prompt_tokens" | "total_tokens") {
-            return Err(ApiError::bad_request("context_basis 必须为 prompt_tokens/total_tokens"));
+            return Err(ApiError::bad_request(
+                "context_basis 必须为 prompt_tokens/total_tokens",
+            ));
         }
     }
     if base_price < Decimal::ZERO {
@@ -1250,7 +1365,10 @@ mod tests {
     #[test]
     fn dedup_idempotency_key_in_file() {
         // 同一 upstream×model×unit×currency×dimension_key 出现两次 → 后者跳过。
-        let items = vec![item("upstream-a", Some("3.0")), item("upstream-a", Some("4.0"))];
+        let items = vec![
+            item("upstream-a", Some("3.0")),
+            item("upstream-a", Some("4.0")),
+        ];
         let mut ids = HashMap::new();
         ids.insert("upstream-a".to_string(), Uuid::new_v4());
         let (rows, report) = analyze_import(&items, &ids);
@@ -1320,6 +1438,9 @@ mod tests {
         assert_eq!(img.dimension_key, "{\"image_size\":\"1024x1024\"}");
         let vid = rows.iter().find(|r| r.unit == "video_second").unwrap();
         assert_eq!(vid.base_price, dec("0.5"));
-        assert_eq!(vid.dimension_key, "{\"resolution\":\"720p\",\"task_type\":\"txt2vid\"}");
+        assert_eq!(
+            vid.dimension_key,
+            "{\"resolution\":\"720p\",\"task_type\":\"txt2vid\"}"
+        );
     }
 }

@@ -44,10 +44,13 @@ impl SseParser {
     pub fn finish(&mut self) -> Vec<String> {
         let mut out = Vec::new();
         if !self.buf.is_empty() {
-            let line = String::from_utf8_lossy(&self.buf).trim_end_matches(['\n', '\r']).to_string();
+            let line = String::from_utf8_lossy(&self.buf)
+                .trim_end_matches(['\n', '\r'])
+                .to_string();
             self.buf.clear();
             if let Some(rest) = line.strip_prefix("data:") {
-                self.data_lines.push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
+                self.data_lines
+                    .push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
             }
         }
         if !self.data_lines.is_empty() {

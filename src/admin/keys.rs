@@ -135,8 +135,12 @@ async fn create_key(
     // debug 开关：由 now + ttl 推导过期时间（显式传值且超上限则截断）
     let ttl_minutes = state.hot.load().gateway.log_debug_ttl_minutes;
     let now = Utc::now();
-    let (debug_enabled, debug_expires_at) =
-        resolve_debug(body.debug_enabled.unwrap_or(false), body.debug_expires_at, ttl_minutes, now);
+    let (debug_enabled, debug_expires_at) = resolve_debug(
+        body.debug_enabled.unwrap_or(false),
+        body.debug_expires_at,
+        ttl_minutes,
+        now,
+    );
 
     let name = body.name.unwrap_or_default();
     let enable_passthrough = body.allow_upstream_passthrough.unwrap_or(false);
@@ -166,7 +170,11 @@ async fn create_key(
     .await?;
 
     // 刷新快照 + 审计
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     auth::audit(
         &state,
         &admin.0,
@@ -200,9 +208,12 @@ async fn update_key(
     let quota_limit = body.quota_limit.unwrap_or(existing.quota_limit);
     let quota_unit = body.quota_unit.unwrap_or(existing.quota_unit.clone());
     let quota_window = body.quota_window.unwrap_or(existing.quota_window.clone());
-    let allow_passthrough = body.allow_upstream_passthrough.unwrap_or(existing.allow_upstream_passthrough);
-    let passthrough_upstreams =
-        body.passthrough_upstreams.unwrap_or_else(|| existing.passthrough_upstreams.clone());
+    let allow_passthrough = body
+        .allow_upstream_passthrough
+        .unwrap_or(existing.allow_upstream_passthrough);
+    let passthrough_upstreams = body
+        .passthrough_upstreams
+        .unwrap_or_else(|| existing.passthrough_upstreams.clone());
     let expires_at = body.expires_at.unwrap_or(existing.expires_at);
 
     validate_quota(quota_unit.as_deref(), quota_window.as_deref())?;
@@ -217,12 +228,18 @@ async fn update_key(
 
     // debug：仅当显式传 debug_enabled / debug_expires_at 时才重新推导，否则沿用现有状态。
     let debug_enabled = body.debug_enabled.unwrap_or(existing.debug_enabled);
-    let (debug_enabled, debug_expires_at) = if body.debug_enabled.is_some() || body.debug_expires_at.is_some() {
-        let ttl_minutes = state.hot.load().gateway.log_debug_ttl_minutes;
-        resolve_debug(debug_enabled, body.debug_expires_at.flatten(), ttl_minutes, Utc::now())
-    } else {
-        (existing.debug_enabled, existing.debug_expires_at)
-    };
+    let (debug_enabled, debug_expires_at) =
+        if body.debug_enabled.is_some() || body.debug_expires_at.is_some() {
+            let ttl_minutes = state.hot.load().gateway.log_debug_ttl_minutes;
+            resolve_debug(
+                debug_enabled,
+                body.debug_expires_at.flatten(),
+                ttl_minutes,
+                Utc::now(),
+            )
+        } else {
+            (existing.debug_enabled, existing.debug_expires_at)
+        };
 
     sqlx::query(
         "UPDATE api_keys SET name=$1, enabled=$2, models=$3, rpm=$4, tpm=$5, quota_limit=$6, \
@@ -246,7 +263,11 @@ async fn update_key(
     .execute(&state.db)
     .await?;
 
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     auth::audit(
         &state,
         &admin.0,
@@ -280,8 +301,21 @@ async fn delete_key(
     state.limiter.remove_key(id);
     state.quota_cache.remove(id);
 
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
-    auth::audit(&state, &admin.0, "key.delete", "key", Some(&id.to_string()), serde_json::json!({}), None).await?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
+    auth::audit(
+        &state,
+        &admin.0,
+        "key.delete",
+        "key",
+        Some(&id.to_string()),
+        serde_json::json!({}),
+        None,
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -305,7 +339,11 @@ async fn rotate_key(
         .execute(&state.db)
         .await?;
 
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     auth::audit(
         &state,
         &admin.0,
@@ -339,12 +377,16 @@ async fn fetch_key(state: &AppState, id: Uuid) -> ApiResult<ApiKeyRow> {
 fn validate_quota(unit: Option<&str>, window: Option<&str>) -> Result<(), ApiError> {
     if let Some(u) = unit {
         if !matches!(u, "tokens" | "cost_cny" | "cost_usd") {
-            return Err(ApiError::bad_request("quota_unit 必须为 tokens/cost_cny/cost_usd"));
+            return Err(ApiError::bad_request(
+                "quota_unit 必须为 tokens/cost_cny/cost_usd",
+            ));
         }
     }
     if let Some(w) = window {
         if !matches!(w, "daily" | "monthly" | "total") {
-            return Err(ApiError::bad_request("quota_window 必须为 daily/monthly/total"));
+            return Err(ApiError::bad_request(
+                "quota_window 必须为 daily/monthly/total",
+            ));
         }
     }
     Ok(())
@@ -367,11 +409,15 @@ fn validate_key_limits(
     const MAX_PASSTHROUGH: usize = 200;
 
     if name.chars().count() > MAX_NAME {
-        return Err(ApiError::bad_request(format!("name 不能超过 {MAX_NAME} 字符")));
+        return Err(ApiError::bad_request(format!(
+            "name 不能超过 {MAX_NAME} 字符"
+        )));
     }
     for v in [rpm, tpm].into_iter().flatten() {
         if !(0..=MAX_RATE).contains(&v) {
-            return Err(ApiError::bad_request(format!("rpm/tpm 必须在 0..={MAX_RATE}")));
+            return Err(ApiError::bad_request(format!(
+                "rpm/tpm 必须在 0..={MAX_RATE}"
+            )));
         }
     }
     if let Some(ql) = quota_limit {
@@ -384,21 +430,29 @@ fn validate_key_limits(
     }
     if let Some(ms) = models {
         if ms.len() > MAX_MODELS {
-            return Err(ApiError::bad_request(format!("模型白名单最多 {MAX_MODELS} 项")));
+            return Err(ApiError::bad_request(format!(
+                "模型白名单最多 {MAX_MODELS} 项"
+            )));
         }
         for m in ms {
             if m.chars().count() > MAX_ITEM_LEN {
-                return Err(ApiError::bad_request(format!("模型名不能超过 {MAX_ITEM_LEN} 字符")));
+                return Err(ApiError::bad_request(format!(
+                    "模型名不能超过 {MAX_ITEM_LEN} 字符"
+                )));
             }
         }
     }
     if let Some(ps) = passthrough {
         if ps.len() > MAX_PASSTHROUGH {
-            return Err(ApiError::bad_request(format!("透传上游最多 {MAX_PASSTHROUGH} 项")));
+            return Err(ApiError::bad_request(format!(
+                "透传上游最多 {MAX_PASSTHROUGH} 项"
+            )));
         }
         for p in ps {
             if p.chars().count() > MAX_ITEM_LEN {
-                return Err(ApiError::bad_request(format!("上游名不能超过 {MAX_ITEM_LEN} 字符")));
+                return Err(ApiError::bad_request(format!(
+                    "上游名不能超过 {MAX_ITEM_LEN} 字符"
+                )));
             }
         }
     }

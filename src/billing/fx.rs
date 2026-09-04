@@ -35,7 +35,11 @@ pub struct FxSet {
 /// - manual 无条件优先于 auto；
 /// - auto 行 fetched_at 超过 stale_max_minutes 剔除；fetched_at 为空视为过期；
 /// - 每个 (from,to) 先收敛为唯一可用直接项，再对缺失的反向键做逆汇率展开。
-pub(crate) fn build_fx_set(rows: &[FxRateRow], now: DateTime<Utc>, stale_max_minutes: u64) -> FxSet {
+pub(crate) fn build_fx_set(
+    rows: &[FxRateRow],
+    now: DateTime<Utc>,
+    stale_max_minutes: u64,
+) -> FxSet {
     let mut direct: HashMap<(String, String), FxRate> = HashMap::new();
     for row in rows {
         let allowed = match row.source.as_str() {
@@ -101,7 +105,12 @@ pub(crate) fn build_fx_set(rows: &[FxRateRow], now: DateTime<Utc>, stale_max_min
 
 impl FxSet {
     /// from==to → Some((amount, None))；无可用汇率 → None。
-    pub fn convert(&self, from: &str, to: &str, amount: Decimal) -> Option<(Decimal, Option<FxRate>)> {
+    pub fn convert(
+        &self,
+        from: &str,
+        to: &str,
+        amount: Decimal,
+    ) -> Option<(Decimal, Option<FxRate>)> {
         if from == to {
             return Some((amount, None));
         }
@@ -143,7 +152,10 @@ fn json_num_to_decimal(v: &serde_json::Value) -> Option<Decimal> {
 
 /// frankfurter/custom 同形状 JSON：`{"rates":{"CNY":7.2,...}}`。base 为计价基准币。
 /// 返回 (pairs 描述, (from,to,rate) 列表)。仅保留正值汇率。
-fn parse_rates_json(v: &serde_json::Value, base: &str) -> ApiResult<(Vec<String>, Vec<(String, String, Decimal)>)> {
+fn parse_rates_json(
+    v: &serde_json::Value,
+    base: &str,
+) -> ApiResult<(Vec<String>, Vec<(String, String, Decimal)>)> {
     let rates = v
         .get("rates")
         .ok_or_else(|| ApiError::internal("汇率响应缺少 rates 字段"))?;
@@ -165,7 +177,10 @@ fn parse_rates_json(v: &serde_json::Value, base: &str) -> ApiResult<(Vec<String>
 }
 
 /// 解析 ECB 每日汇率 XML（base=EUR）。过滤到 symbols（非空时）；返回 (pairs, (EUR,cur,rate)) 列表。
-fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<(String, String, Decimal)>)> {
+fn parse_ecb(
+    xml: &[u8],
+    symbols: &[String],
+) -> ApiResult<(Vec<String>, Vec<(String, String, Decimal)>)> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -178,21 +193,35 @@ fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<(Str
                     let mut currency: Option<String> = None;
                     let mut rate: Option<Decimal> = None;
                     for attr in e.attributes() {
-                        let attr = attr.map_err(|err| ApiError::internal(format!("ECB XML 属性解析失败: {err}")))?;
+                        let attr = attr.map_err(|err| {
+                            ApiError::internal(format!("ECB XML 属性解析失败: {err}"))
+                        })?;
                         match attr.key.as_ref() {
                             b"currency" => {
                                 currency = Some(
                                     attr.unescape_value()
-                                        .map_err(|err| ApiError::internal(format!("ECB XML 币种解码失败: {err}")))?
+                                        .map_err(|err| {
+                                            ApiError::internal(format!(
+                                                "ECB XML 币种解码失败: {err}"
+                                            ))
+                                        })?
                                         .to_string(),
                                 );
                             }
                             b"rate" => {
                                 rate = Some(
                                     attr.unescape_value()
-                                        .map_err(|err| ApiError::internal(format!("ECB XML 汇率解码失败: {err}")))?
+                                        .map_err(|err| {
+                                            ApiError::internal(format!(
+                                                "ECB XML 汇率解码失败: {err}"
+                                            ))
+                                        })?
                                         .parse::<Decimal>()
-                                        .map_err(|err| ApiError::internal(format!("ECB XML 汇率解析失败: {err}")))?,
+                                        .map_err(|err| {
+                                            ApiError::internal(format!(
+                                                "ECB XML 汇率解析失败: {err}"
+                                            ))
+                                        })?,
                                 );
                             }
                             _ => {}
@@ -200,7 +229,8 @@ fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<(Str
                     }
                     if let (Some(cur), Some(r)) = (currency, rate) {
                         if r > Decimal::ZERO
-                            && (symbols.is_empty() || symbols.iter().any(|s| s.eq_ignore_ascii_case(&cur)))
+                            && (symbols.is_empty()
+                                || symbols.iter().any(|s| s.eq_ignore_ascii_case(&cur)))
                         {
                             rates_out.push(("EUR".to_string(), cur, r));
                         }
@@ -220,7 +250,11 @@ fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<(Str
 }
 
 /// 带超时的请求：成功返回响应字节。
-async fn fetch_bytes(client: &reqwest::Client, url: &str, timeout: std::time::Duration) -> ApiResult<Vec<u8>> {
+async fn fetch_bytes(
+    client: &reqwest::Client,
+    url: &str,
+    timeout: std::time::Duration,
+) -> ApiResult<Vec<u8>> {
     let fut = async {
         let resp = client
             .get(url)
@@ -251,7 +285,8 @@ pub async fn fetch_and_store(
     cfg: &crate::config::FxAutoFetchCfg,
 ) -> ApiResult<serde_json::Value> {
     let timeout = std::time::Duration::from_secs(cfg.timeout_secs.max(1));
-    let (pairs, prices): (Vec<String>, Vec<(String, String, Decimal)>) = match cfg.provider.as_str() {
+    let (pairs, prices): (Vec<String>, Vec<(String, String, Decimal)>) = match cfg.provider.as_str()
+    {
         "ecb" => {
             let url = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml";
             let bytes = fetch_bytes(client, url, timeout).await?;
@@ -304,7 +339,13 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use std::str::FromStr;
 
-    fn row(from: &str, to: &str, rate: &str, source: &str, fetched_at: Option<DateTime<Utc>>) -> FxRateRow {
+    fn row(
+        from: &str,
+        to: &str,
+        rate: &str,
+        source: &str,
+        fetched_at: Option<DateTime<Utc>>,
+    ) -> FxRateRow {
         FxRateRow {
             currency_from: from.to_string(),
             currency_to: to.to_string(),
@@ -360,7 +401,10 @@ mod tests {
         assert_eq!(fxr.inverse, true);
         // 逆汇率 ≈ 1/7.2，用容差断言避免精度差异。
         let inv = fxr.rate;
-        assert!((inv - Decimal::from_str("0.138888888888888888889").unwrap()).abs() < Decimal::from_str("0.0000000001").unwrap());
+        assert!(
+            (inv - Decimal::from_str("0.138888888888888888889").unwrap()).abs()
+                < Decimal::from_str("0.0000000001").unwrap()
+        );
         // 72 * (1/7.2) ≈ 10
         assert!((v - Decimal::from(10)).abs() < Decimal::from_str("0.00000001").unwrap());
     }
@@ -402,7 +446,14 @@ mod tests {
 </gesmes:Envelope>"#;
         let (pairs, rates) = parse_ecb(xml, &["CNY".to_string()]).unwrap();
         assert_eq!(rates.len(), 1);
-        assert_eq!(rates[0], ("EUR".to_string(), "CNY".to_string(), Decimal::from_str("7.20").unwrap()));
+        assert_eq!(
+            rates[0],
+            (
+                "EUR".to_string(),
+                "CNY".to_string(),
+                Decimal::from_str("7.20").unwrap()
+            )
+        );
         // 全部汇率（symbols 为空时）
         let (_, all) = parse_ecb(xml, &[]).unwrap();
         assert_eq!(all.len(), 3);
@@ -415,6 +466,8 @@ mod tests {
         let (pairs, rates) = parse_rates_json(&v, "USD").unwrap();
         assert_eq!(rates.len(), 2);
         assert!(pairs.contains(&"USD->CNY".to_string()));
-        assert!(rates.iter().any(|(_, t, r)| t == "CNY" && r == &Decimal::from_str("7.2").unwrap()));
+        assert!(rates
+            .iter()
+            .any(|(_, t, r)| t == "CNY" && r == &Decimal::from_str("7.2").unwrap()));
     }
 }

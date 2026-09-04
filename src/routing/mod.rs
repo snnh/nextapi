@@ -103,7 +103,10 @@ pub enum BreakerState {
     /// 正常（记录连续失败数）
     Closed { failures: u32 },
     /// 熔断打开（冷却中，until 前拒绝请求；consecutive_opens 用于半开失败指数退避）
-    Open { until: DateTime<Utc>, consecutive_opens: u32 },
+    Open {
+        until: DateTime<Utc>,
+        consecutive_opens: u32,
+    },
     /// 半开（冷却到期，放行 1 个探测请求）
     HalfOpen { consecutive_opens: u32 },
 }
@@ -135,7 +138,13 @@ pub fn next_on_failure(
             let f = failures + 1;
             if f >= threshold {
                 let until = now + chrono::Duration::seconds(cooldown_secs(0));
-                (BreakerState::Open { until, consecutive_opens: 1 }, true)
+                (
+                    BreakerState::Open {
+                        until,
+                        consecutive_opens: 1,
+                    },
+                    true,
+                )
             } else {
                 (BreakerState::Closed { failures: f }, false)
             }
@@ -279,9 +288,11 @@ impl Breaker {
             }
 
             let db = match (&state, &next) {
-                (BreakerState::Open { .. }, BreakerState::Open { .. }) => Some(DbUpdate::FailuresOnly {
-                    failures: up.consecutive_failures.saturating_add(1) as i32,
-                }),
+                (BreakerState::Open { .. }, BreakerState::Open { .. }) => {
+                    Some(DbUpdate::FailuresOnly {
+                        failures: up.consecutive_failures.saturating_add(1) as i32,
+                    })
+                }
                 (_, BreakerState::Open { until, .. }) => Some(DbUpdate::Open {
                     until: *until,
                     failures: match &state {
@@ -293,7 +304,11 @@ impl Breaker {
             };
             (next, db)
         };
-        debug_assert_eq!(db.is_some(), matches!(next, BreakerState::Open { .. }), "DB 回写与开闸状态应一致");
+        debug_assert_eq!(
+            db.is_some(),
+            matches!(next, BreakerState::Open { .. }),
+            "DB 回写与开闸状态应一致"
+        );
         let _ = &next;
 
         if let Some(db) = db {
@@ -450,7 +465,10 @@ mod tests {
             route("early-p10-s1", "*", 10, 1, true, 1),
         ];
         let out = match_routes("gpt-4o", &routes);
-        let tags: Vec<&str> = out.iter().map(|r| r.override_model.as_deref().unwrap()).collect();
+        let tags: Vec<&str> = out
+            .iter()
+            .map(|r| r.override_model.as_deref().unwrap())
+            .collect();
         assert_eq!(
             tags,
             vec!["early-p10-s0", "early-p10-s1", "late-p10-s2", "late-p20"]
@@ -511,7 +529,10 @@ mod tests {
         let (s, wb) = next_on_failure(&BreakerState::Closed { failures: 1 }, 2, now);
         assert!(wb);
         match s {
-            BreakerState::Open { until, consecutive_opens } => {
+            BreakerState::Open {
+                until,
+                consecutive_opens,
+            } => {
                 assert_eq!(consecutive_opens, 1);
                 assert_eq!(until, now + Duration::seconds(60));
             }
@@ -522,10 +543,19 @@ mod tests {
     #[test]
     fn next_on_failure_halfopen_backoff() {
         let now = Utc::now();
-        let (s, wb) = next_on_failure(&BreakerState::HalfOpen { consecutive_opens: 1 }, 5, now);
+        let (s, wb) = next_on_failure(
+            &BreakerState::HalfOpen {
+                consecutive_opens: 1,
+            },
+            5,
+            now,
+        );
         assert!(wb);
         match s {
-            BreakerState::Open { until, consecutive_opens } => {
+            BreakerState::Open {
+                until,
+                consecutive_opens,
+            } => {
                 assert_eq!(consecutive_opens, 2);
                 // 60s × 2^1 = 120s
                 assert_eq!(until, now + Duration::seconds(120));
@@ -533,9 +563,18 @@ mod tests {
             _ => panic!("期望 Open"),
         }
         // 连续打开次数再 +1 → 240s
-        let (s2, _) = next_on_failure(&BreakerState::HalfOpen { consecutive_opens: 2 }, 5, now);
+        let (s2, _) = next_on_failure(
+            &BreakerState::HalfOpen {
+                consecutive_opens: 2,
+            },
+            5,
+            now,
+        );
         match s2 {
-            BreakerState::Open { until, consecutive_opens } => {
+            BreakerState::Open {
+                until,
+                consecutive_opens,
+            } => {
                 assert_eq!(consecutive_opens, 3);
                 assert_eq!(until, now + Duration::seconds(240));
             }
@@ -547,10 +586,20 @@ mod tests {
     fn next_on_failure_open_stays_open() {
         let now = Utc::now();
         let until = now + Duration::seconds(500);
-        let (s, wb) = next_on_failure(&BreakerState::Open { until, consecutive_opens: 3 }, 5, now);
+        let (s, wb) = next_on_failure(
+            &BreakerState::Open {
+                until,
+                consecutive_opens: 3,
+            },
+            5,
+            now,
+        );
         assert!(wb); // 仅需回写 DB consecutive_failures
         match s {
-            BreakerState::Open { until: u, consecutive_opens } => {
+            BreakerState::Open {
+                until: u,
+                consecutive_opens,
+            } => {
                 assert_eq!(consecutive_opens, 3);
                 assert_eq!(u, until); // until 不变
             }
@@ -617,16 +666,21 @@ mod tests {
         let id = up.id;
 
         // 半开探测失败：consecutive_opens=1 → Open{opens:2, until≈now+120s}
-        br.states
-            .lock()
-            .unwrap()
-            .insert(id, BreakerState::HalfOpen { consecutive_opens: 1 });
+        br.states.lock().unwrap().insert(
+            id,
+            BreakerState::HalfOpen {
+                consecutive_opens: 1,
+            },
+        );
         let before = Utc::now();
         br.on_failure(&pool, &up).await;
         let after = Utc::now();
         let guard = br.states.lock().unwrap();
         match guard.get(&id).unwrap() {
-            BreakerState::Open { until, consecutive_opens } => {
+            BreakerState::Open {
+                until,
+                consecutive_opens,
+            } => {
                 assert_eq!(*consecutive_opens, 2);
                 let secs = (*until - before).num_seconds();
                 assert!(
@@ -646,10 +700,12 @@ mod tests {
         let id = up.id;
 
         // 刚进入 HalfOpen（<120s）→ 拒绝
-        br.states
-            .lock()
-            .unwrap()
-            .insert(id, BreakerState::HalfOpen { consecutive_opens: 1 });
+        br.states.lock().unwrap().insert(
+            id,
+            BreakerState::HalfOpen {
+                consecutive_opens: 1,
+            },
+        );
         br.halfopen_since.lock().unwrap().insert(id, Utc::now());
         assert!(!br.allow(&up));
 
@@ -672,7 +728,10 @@ mod tests {
         assert!(!br.allow(&up));
 
         // on_failure 遇到 manual 直接返回，不改变内存状态
-        br.states.lock().unwrap().insert(up.id, BreakerState::Closed { failures: 0 });
+        br.states
+            .lock()
+            .unwrap()
+            .insert(up.id, BreakerState::Closed { failures: 0 });
         br.on_failure(&pool, &up).await;
         assert!(matches!(
             &*br.states.lock().unwrap().get(&up.id).unwrap(),

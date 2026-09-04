@@ -131,8 +131,9 @@ fn write_all(path: &Path, data: &[u8]) -> ApiResult<()> {
 /// 先经 serde_json::Value 序列化，保证解码端 `serde_json::to_string(&Value)` 与之字节一致
 /// （serde_json 的 Object 默认按键排序，直接序列化结构体为字段声明序，两者不一致会导致 crc 失配）。
 pub fn encode_line(ev: &LogEvent) -> String {
-    let event_json = serde_json::to_string(&serde_json::to_value(ev).unwrap_or_else(|_| serde_json::json!({})))
-        .unwrap_or_else(|_| "{}".into());
+    let event_json =
+        serde_json::to_string(&serde_json::to_value(ev).unwrap_or_else(|_| serde_json::json!({})))
+            .unwrap_or_else(|_| "{}".into());
     let crc = crc32fast::hash(event_json.as_bytes());
     format!("{{\"crc\":{crc},\"event\":{event_json}}}")
 }
@@ -196,7 +197,10 @@ fn cleanup_archived(dir: &Path) {
             if !p.is_file() {
                 continue;
             }
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             if !name.ends_with(".archived") {
                 continue;
             }

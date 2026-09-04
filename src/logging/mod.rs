@@ -148,7 +148,9 @@ impl LogSink {
                 let fx_stale_max_minutes = self.fx_stale_max_minutes;
                 tokio::spawn(async move {
                     let batch = [ev];
-                    if let Err(e) = insert_batch(&pool, &batch, &billing_tz, fx_stale_max_minutes).await {
+                    if let Err(e) =
+                        insert_batch(&pool, &batch, &billing_tz, fx_stale_max_minutes).await
+                    {
                         tracing::warn!("直写日志失败，写 WAL 兜底: {e}");
                         if let Err(we) = wal.append(&batch).await {
                             tracing::error!("直写兜底 WAL 追加失败，数据丢弃: {we}");
@@ -476,10 +478,11 @@ pub async fn insert_batch(
     // 查询各 key 的 quota_unit/quota_window（仅累加 tokens 单位）
     let mut key_quota: HashMap<Uuid, (Option<String>, Option<String>)> = HashMap::new();
     if !distinct_keys.is_empty() {
-        let rows = sqlx::query("SELECT id, quota_unit, quota_window FROM api_keys WHERE id = ANY($1)")
-            .bind(&distinct_keys)
-            .fetch_all(&mut *tx)
-            .await?;
+        let rows =
+            sqlx::query("SELECT id, quota_unit, quota_window FROM api_keys WHERE id = ANY($1)")
+                .bind(&distinct_keys)
+                .fetch_all(&mut *tx)
+                .await?;
         for row in rows {
             let id: Uuid = row.get("id");
             let unit: Option<String> = row.get("quota_unit");
@@ -492,7 +495,9 @@ pub async fn insert_batch(
     let mut quota_tokens: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
     for ev in &priced {
         let Some(key_id) = ev.key_id else { continue };
-        let Some((unit, window)) = key_quota.get(&key_id) else { continue };
+        let Some((unit, window)) = key_quota.get(&key_id) else {
+            continue;
+        };
         if unit.as_deref() != Some("tokens") {
             continue;
         }
@@ -530,7 +535,9 @@ pub async fn insert_batch(
     let mut quota_cost_usd: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
     for ev in &priced {
         let Some(key_id) = ev.key_id else { continue };
-        let Some((unit, window)) = key_quota.get(&key_id) else { continue };
+        let Some((unit, window)) = key_quota.get(&key_id) else {
+            continue;
+        };
         let window = window.as_deref().unwrap_or("total");
         let period_start = window_start(window, billing_tz, ev.ts);
         match unit.as_deref() {
@@ -623,7 +630,10 @@ mod tests {
     fn build_unnest_sql_numbering() {
         let casts = vec!["text[]", "timestamptz[]", "uuid[]"];
         let sql = build_unnest_sql(&casts);
-        assert_eq!(sql, "SELECT * FROM UNNEST($1::text[], $2::timestamptz[], $3::uuid[])");
+        assert_eq!(
+            sql,
+            "SELECT * FROM UNNEST($1::text[], $2::timestamptz[], $3::uuid[])"
+        );
     }
 
     #[test]

@@ -36,7 +36,9 @@ impl ApiKeyRow {
         match &self.models {
             None => true,
             Some(list) if list.is_empty() => true,
-            Some(list) => list.iter().any(|p| crate::routing::pattern_matches(p, model)),
+            Some(list) => list
+                .iter()
+                .any(|p| crate::routing::pattern_matches(p, model)),
         }
     }
 
@@ -47,7 +49,11 @@ impl ApiKeyRow {
 
     /// debug 模式是否生效（开启且未过期）。
     pub fn debug_active(&self) -> bool {
-        self.debug_enabled && self.debug_expires_at.map(|e| e > Utc::now()).unwrap_or(false)
+        self.debug_enabled
+            && self
+                .debug_expires_at
+                .map(|e| e > Utc::now())
+                .unwrap_or(false)
     }
 }
 
@@ -109,10 +115,20 @@ impl UpstreamRow {
             .extra
             .get("protocol_priority")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_str()).filter_map(|s| s.parse().ok()).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str())
+                    .filter_map(|s| s.parse().ok())
+                    .collect()
+            })
             .unwrap_or_default();
         if custom.is_empty() {
-            vec![Protocol::OpenaiChat, Protocol::Anthropic, Protocol::Gemini, Protocol::OpenaiResponses]
+            vec![
+                Protocol::OpenaiChat,
+                Protocol::Anthropic,
+                Protocol::Gemini,
+                Protocol::OpenaiResponses,
+            ]
         } else {
             custom
         }
@@ -120,7 +136,9 @@ impl UpstreamRow {
 
     /// 解析覆盖规则（未配置 = 完全原样转发）。
     pub fn overrides(&self) -> Option<Overrides> {
-        self.extra.get("overrides").and_then(|v| serde_json::from_value(v.clone()).ok())
+        self.extra
+            .get("overrides")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
     }
 }
 
@@ -161,7 +179,11 @@ pub struct ProxyRow {
 impl ProxyRow {
     /// 生成代理 URL（http://user:pass@host:port / socks5://...）。
     pub fn proxy_url(&self) -> String {
-        let scheme = if self.kind == "socks5" { "socks5" } else { "http" };
+        let scheme = if self.kind == "socks5" {
+            "socks5"
+        } else {
+            "http"
+        };
         match (&self.username, &self.password_plain) {
             (Some(u), Some(p)) => format!("{scheme}://{u}:{p}@{}:{}", self.host, self.port),
             (Some(u), None) => format!("{scheme}://{u}@{}:{}", self.host, self.port),

@@ -81,7 +81,9 @@ pub struct PricingResult {
 /// dimension_key 归一化：对象按键排序紧凑 JSON；空/{} /null → ""。
 /// serde_json 默认 Map 走 BTreeMap，序列化时键已排序，故对 Object 直接 to_string()。
 pub fn normalize_dimension_key(dimensions: Option<&serde_json::Value>) -> String {
-    let Some(v) = dimensions else { return String::new(); };
+    let Some(v) = dimensions else {
+        return String::new();
+    };
     match v {
         serde_json::Value::Null => String::new(),
         serde_json::Value::Object(m) if m.is_empty() => String::new(),
@@ -143,7 +145,9 @@ fn unit_quantity(unit: &str, input: &PricingInput) -> Option<Decimal> {
 /// token 类 cost 需除以 1_000_000；其余单位直接相乘。
 fn unit_cost_divisor(unit: &str) -> Decimal {
     match unit {
-        "token_in" | "token_out" | "token_cache_write" | "token_cache_read" => Decimal::from(1_000_000),
+        "token_in" | "token_out" | "token_cache_write" | "token_cache_read" => {
+            Decimal::from(1_000_000)
+        }
         _ => Decimal::ONE,
     }
 }
@@ -303,14 +307,27 @@ pub fn price_with_rules(
         let input_dim = input_dimension_key(unit, input);
 
         // 该 unit 的全部启用规则（调用方已过滤 enabled，这里再兜底一次），并先过滤生效期。
-        let unit_rules: Vec<&PriceRuleRow> = rules.iter().filter(|r| r.unit == unit && r.enabled).collect();
-        let active: Vec<&PriceRuleRow> =
-            unit_rules.iter().copied().filter(|r| in_effect(r, input.at)).collect();
+        let unit_rules: Vec<&PriceRuleRow> = rules
+            .iter()
+            .filter(|r| r.unit == unit && r.enabled)
+            .collect();
+        let active: Vec<&PriceRuleRow> = unit_rules
+            .iter()
+            .copied()
+            .filter(|r| in_effect(r, input.at))
+            .collect();
         // 层级：精确 dimension_key → 回落 ''。
-        let mut cands: Vec<&PriceRuleRow> =
-            active.iter().copied().filter(|r| r.dimension_key == input_dim).collect();
+        let mut cands: Vec<&PriceRuleRow> = active
+            .iter()
+            .copied()
+            .filter(|r| r.dimension_key == input_dim)
+            .collect();
         if cands.is_empty() && !input_dim.is_empty() {
-            cands = active.iter().copied().filter(|r| r.dimension_key.is_empty()).collect();
+            cands = active
+                .iter()
+                .copied()
+                .filter(|r| r.dimension_key.is_empty())
+                .collect();
         }
         if cands.is_empty() {
             continue;
@@ -334,7 +351,8 @@ pub fn price_with_rules(
 
         let div = unit_cost_divisor(unit);
         for (cur, rule) in best_by_cur {
-            let (price, seg_name) = match_segment(rule, input, &weekday, minutes).unwrap_or((rule.base_price, None));
+            let (price, seg_name) =
+                match_segment(rule, input, &weekday, minutes).unwrap_or((rule.base_price, None));
             let cost = price * quantity / div;
             lines.push(PricedLine {
                 unit: unit.to_string(),
@@ -405,8 +423,16 @@ pub fn price_with_rules(
 
     PricingResult {
         lines,
-        cost_cny: if cny_obtained { Some(cost_cny_accum) } else { None },
-        cost_usd: if usd_obtained { Some(cost_usd_accum) } else { None },
+        cost_cny: if cny_obtained {
+            Some(cost_cny_accum)
+        } else {
+            None
+        },
+        cost_usd: if usd_obtained {
+            Some(cost_usd_accum)
+        } else {
+            None
+        },
         price_used: serde_json::Value::Array(price_used),
         fx_snapshot: serde_json::Value::Array(fx_used),
         priced,
@@ -460,7 +486,9 @@ pub async fn price_batch(
         if ev.status >= 400 || ev.pricing_source.is_some() || !has_usage(ev) {
             continue;
         }
-        let Some(up_id) = ev.upstream_id else { continue };
+        let Some(up_id) = ev.upstream_id else {
+            continue;
+        };
         let key = (up_id, ev.model.clone());
         if seen.insert(key.clone()) {
             pairs.push(key);
@@ -489,7 +517,10 @@ pub async fn price_batch(
 
     let mut rules_by: HashMap<(Uuid, String), Vec<PriceRuleRow>> = HashMap::new();
     for r in rows {
-        rules_by.entry((r.upstream_id, r.model_id.clone())).or_default().push(r);
+        rules_by
+            .entry((r.upstream_id, r.model_id.clone()))
+            .or_default()
+            .push(r);
     }
 
     let mut unpriced = 0u64;
@@ -498,19 +529,38 @@ pub async fn price_batch(
         if ev.status >= 400 || ev.pricing_source.is_some() || !has_usage(ev) {
             continue;
         }
-        let Some(up_id) = ev.upstream_id else { continue };
+        let Some(up_id) = ev.upstream_id else {
+            continue;
+        };
         let rules = rules_by.get(&(up_id, ev.model.clone()));
         let input = input_from_event(ev);
-        let result = price_with_rules(rules.map(|v| v.as_slice()).unwrap_or(&[]), &fx_set, &input, billing_tz);
+        let result = price_with_rules(
+            rules.map(|v| v.as_slice()).unwrap_or(&[]),
+            &fx_set,
+            &input,
+            billing_tz,
+        );
         if !result.priced {
             unpriced += 1;
         }
         // 回填计价字段（契约 §0）：priced → pricing_source='bound'；未定价保持全 NULL。
         ev.cost_cny = result.cost_cny;
         ev.cost_usd = result.cost_usd;
-        ev.pricing_source = if result.priced { Some("bound".into()) } else { None };
-        ev.price_used = if result.priced { Some(result.price_used) } else { None };
-        ev.fx_snapshot = if result.priced { Some(result.fx_snapshot) } else { None };
+        ev.pricing_source = if result.priced {
+            Some("bound".into())
+        } else {
+            None
+        };
+        ev.price_used = if result.priced {
+            Some(result.price_used)
+        } else {
+            None
+        };
+        ev.fx_snapshot = if result.priced {
+            Some(result.fx_snapshot)
+        } else {
+            None
+        };
     }
     Ok(unpriced)
 }
@@ -592,7 +642,10 @@ mod tests {
     /// 以给定时区构造本地时刻（返回 UTC）。
     fn local_dt(tz: &str, y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Utc> {
         let tz: chrono_tz::Tz = tz.parse().unwrap();
-        tz.with_ymd_and_hms(y, mo, d, h, mi, 0).single().unwrap().with_timezone(&Utc)
+        tz.with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[test]
@@ -627,7 +680,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("3.0").unwrap());
@@ -638,18 +695,29 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(40000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(40000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("3.5").unwrap());
-        assert_eq!(res.lines[0].matched_segment.as_deref(), Some("long_context"));
+        assert_eq!(
+            res.lines[0].matched_segment.as_deref(),
+            Some("long_context")
+        );
 
         // 高峰 + 长上下文（复合）→ peak_long 4.0
         let at = local_dt("Asia/Shanghai", 2026, 1, 7, 10, 0);
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(40000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(40000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("4.0").unwrap());
@@ -660,7 +728,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("1.5").unwrap());
@@ -672,7 +744,11 @@ mod tests {
         let res = price_with_rules(
             &[r2],
             &fxs,
-            &PricingInput { at: local_dt("Asia/Shanghai", 2026, 1, 5, 10, 0), prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at: local_dt("Asia/Shanghai", 2026, 1, 5, 10, 0),
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("0.75").unwrap());
@@ -691,7 +767,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at: local_dt("Asia/Shanghai", 2026, 1, 5, 23, 30), prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at: local_dt("Asia/Shanghai", 2026, 1, 5, 23, 30),
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("2.0").unwrap());
@@ -700,7 +780,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at: local_dt("Asia/Shanghai", 2026, 1, 6, 1, 30), prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at: local_dt("Asia/Shanghai", 2026, 1, 6, 1, 30),
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("2.0").unwrap());
@@ -709,7 +793,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at: local_dt("Asia/Shanghai", 2026, 1, 5, 12, 0), prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at: local_dt("Asia/Shanghai", 2026, 1, 5, 12, 0),
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("1.0").unwrap());
@@ -730,7 +818,11 @@ mod tests {
             let res = price_with_rules(
                 &rules,
                 &fxs,
-                &PricingInput { at, prompt_tokens: Some(v), ..Default::default() },
+                &PricingInput {
+                    at,
+                    prompt_tokens: Some(v),
+                    ..Default::default()
+                },
                 "Asia/Shanghai",
             );
             assert_eq!(res.lines[0].price, Decimal::from_str("5.0").unwrap());
@@ -740,7 +832,11 @@ mod tests {
             let res = price_with_rules(
                 &rules,
                 &fxs,
-                &PricingInput { at, prompt_tokens: Some(v), ..Default::default() },
+                &PricingInput {
+                    at,
+                    prompt_tokens: Some(v),
+                    ..Default::default()
+                },
                 "Asia/Shanghai",
             );
             assert_eq!(res.lines[0].price, Decimal::from_str("1.0").unwrap());
@@ -760,7 +856,12 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(30), completion_tokens: Some(30), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(30),
+                completion_tokens: Some(30),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("5.0").unwrap());
@@ -768,7 +869,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(30), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(30),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("1.0").unwrap());
@@ -776,8 +881,12 @@ mod tests {
 
     #[test]
     fn normalize_dimension_key_sorted() {
-        let a = normalize_dimension_key(Some(&serde_json::json!({"task_type":"txt2vid","resolution":"720p"})));
-        let b = normalize_dimension_key(Some(&serde_json::json!({"resolution":"720p","task_type":"txt2vid"})));
+        let a = normalize_dimension_key(Some(
+            &serde_json::json!({"task_type":"txt2vid","resolution":"720p"}),
+        ));
+        let b = normalize_dimension_key(Some(
+            &serde_json::json!({"resolution":"720p","task_type":"txt2vid"}),
+        ));
         assert_eq!(a, b);
         assert_eq!(a, "{\"resolution\":\"720p\",\"task_type\":\"txt2vid\"}");
         assert_eq!(normalize_dimension_key(None), "");
@@ -799,7 +908,12 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, images: Some(2), image_size: Some("1024x1024".into()), ..Default::default() },
+            &PricingInput {
+                at,
+                images: Some(2),
+                image_size: Some("1024x1024".into()),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("2.0").unwrap());
@@ -809,7 +923,12 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, images: Some(2), image_size: Some("512x512".into()), ..Default::default() },
+            &PricingInput {
+                at,
+                images: Some(2),
+                image_size: Some("512x512".into()),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("3.0").unwrap());
@@ -827,7 +946,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at: local_dt("Asia/Shanghai", 2026, 1, 5, 12, 0), prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at: local_dt("Asia/Shanghai", 2026, 1, 5, 12, 0),
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].price, Decimal::from_str("2.0").unwrap());
@@ -845,7 +968,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, video_seconds: Some(Decimal::from_str("2.5").unwrap()), ..Default::default() },
+            &PricingInput {
+                at,
+                video_seconds: Some(Decimal::from_str("2.5").unwrap()),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].quantity, Decimal::from(3));
@@ -855,7 +982,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, video_seconds: Some(Decimal::from_str("0.2").unwrap()), ..Default::default() },
+            &PricingInput {
+                at,
+                video_seconds: Some(Decimal::from_str("0.2").unwrap()),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines[0].quantity, Decimal::from(1));
@@ -873,7 +1004,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert_eq!(res.lines.len(), 2);
@@ -887,9 +1022,12 @@ mod tests {
         // cost_cny = 0.003 + 0.001*7.2 = 0.0102
         assert_eq!(res.cost_cny.unwrap(), Decimal::from_str("0.0102").unwrap());
         // cost_usd = 0.001 + 0.003/7.2
-        let usd_expected =
-            Decimal::from_str("0.001").unwrap() + Decimal::from_str("0.003").unwrap() / Decimal::from_str("7.2").unwrap();
-        assert!((res.cost_usd.unwrap() - usd_expected).abs() < Decimal::from_str("0.0000000001").unwrap());
+        let usd_expected = Decimal::from_str("0.001").unwrap()
+            + Decimal::from_str("0.003").unwrap() / Decimal::from_str("7.2").unwrap();
+        assert!(
+            (res.cost_usd.unwrap() - usd_expected).abs()
+                < Decimal::from_str("0.0000000001").unwrap()
+        );
         // 实际用到两次换算（USD→CNY、CNY→USD）
         assert_eq!(res.fx_snapshot.as_array().unwrap().len(), 2);
     }
@@ -904,7 +1042,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert!(res.cost_cny.is_some());
@@ -923,7 +1065,11 @@ mod tests {
         let res = price_with_rules(
             &rules,
             &fxs,
-            &PricingInput { at, prompt_tokens: Some(1000), ..Default::default() },
+            &PricingInput {
+                at,
+                prompt_tokens: Some(1000),
+                ..Default::default()
+            },
             "Asia/Shanghai",
         );
         assert!(res.cost_usd.is_some());
@@ -939,11 +1085,31 @@ mod tests {
         r.effective_to = Some(t1);
         let rules = vec![r];
         let fxs = fx_set(&[]);
-        let input = |at| PricingInput { at, prompt_tokens: Some(1000), ..Default::default() };
+        let input = |at| PricingInput {
+            at,
+            prompt_tokens: Some(1000),
+            ..Default::default()
+        };
 
         assert!(price_with_rules(&rules, &fxs, &input(t0), "Asia/Shanghai").priced);
         assert!(price_with_rules(&rules, &fxs, &input(t1), "Asia/Shanghai").priced);
-        assert!(!price_with_rules(&rules, &fxs, &input(t0 - chrono::Duration::seconds(1)), "Asia/Shanghai").priced);
-        assert!(!price_with_rules(&rules, &fxs, &input(t1 + chrono::Duration::seconds(1)), "Asia/Shanghai").priced);
+        assert!(
+            !price_with_rules(
+                &rules,
+                &fxs,
+                &input(t0 - chrono::Duration::seconds(1)),
+                "Asia/Shanghai"
+            )
+            .priced
+        );
+        assert!(
+            !price_with_rules(
+                &rules,
+                &fxs,
+                &input(t1 + chrono::Duration::seconds(1)),
+                "Asia/Shanghai"
+            )
+            .priced
+        );
     }
 }

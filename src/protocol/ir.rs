@@ -358,7 +358,12 @@ mod tests {
             name: Some("get_".into()),
             arguments: Some("{\"ci".into()),
         });
-        agg.feed(&IrToolCallDelta { index: 1, id: Some("call_2".into()), name: Some("other".into()), arguments: None });
+        agg.feed(&IrToolCallDelta {
+            index: 1,
+            id: Some("call_2".into()),
+            name: Some("other".into()),
+            arguments: None,
+        });
         agg.feed(&IrToolCallDelta {
             index: 0,
             id: None,
@@ -382,7 +387,10 @@ mod tests {
 
     #[test]
     fn protocol_roundtrip() {
-        assert_eq!("openai_chat".parse::<Protocol>().unwrap(), Protocol::OpenaiChat);
+        assert_eq!(
+            "openai_chat".parse::<Protocol>().unwrap(),
+            Protocol::OpenaiChat
+        );
         assert_eq!(Protocol::Gemini.as_str(), "gemini");
         assert!("unknown".parse::<Protocol>().is_err());
     }

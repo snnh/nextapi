@@ -72,7 +72,11 @@ pub struct ServerCfg {
 
 impl Default for ServerCfg {
     fn default() -> Self {
-        Self { listen: "0.0.0.0:8080".into(), admin_jwt_secret: String::new(), debug: false }
+        Self {
+            listen: "0.0.0.0:8080".into(),
+            admin_jwt_secret: String::new(),
+            debug: false,
+        }
     }
 }
 
@@ -163,7 +167,11 @@ pub struct AdminCfg {
 
 impl Default for AdminCfg {
     fn default() -> Self {
-        Self { username: "admin".into(), initial_password: String::new(), password_hash: String::new() }
+        Self {
+            username: "admin".into(),
+            initial_password: String::new(),
+            password_hash: String::new(),
+        }
     }
 }
 
@@ -226,7 +234,13 @@ pub struct PriceImportCfg {
 
 impl Default for PriceImportCfg {
     fn default() -> Self {
-        Self { allow_url: true, max_size_mb: 1, timeout_secs: 10, use_proxy: false, proxy_id: String::new() }
+        Self {
+            allow_url: true,
+            max_size_mb: 1,
+            timeout_secs: 10,
+            use_proxy: false,
+            proxy_id: String::new(),
+        }
     }
 }
 
@@ -243,7 +257,13 @@ pub struct MediaDownloadCfg {
 
 impl Default for MediaDownloadCfg {
     fn default() -> Self {
-        Self { enabled: false, max_size_mb: 10, timeout_secs: 30, use_proxy: false, proxy_id: String::new() }
+        Self {
+            enabled: false,
+            max_size_mb: 10,
+            timeout_secs: 30,
+            use_proxy: false,
+            proxy_id: String::new(),
+        }
     }
 }
 
@@ -319,7 +339,13 @@ pub struct UpdateCheckCfg {
 
 impl Default for UpdateCheckCfg {
     fn default() -> Self {
-        Self { enabled: false, repo: String::new(), interval_hours: 24, use_proxy: false, proxy_id: String::new() }
+        Self {
+            enabled: false,
+            repo: String::new(),
+            interval_hours: 24,
+            use_proxy: false,
+            proxy_id: String::new(),
+        }
     }
 }
 
@@ -333,7 +359,10 @@ pub struct MediaPollerCfg {
 
 impl Default for MediaPollerCfg {
     fn default() -> Self {
-        Self { interval_secs: 5, max_age_hours: 24 }
+        Self {
+            interval_secs: 5,
+            max_age_hours: 24,
+        }
     }
 }
 
@@ -378,11 +407,19 @@ pub fn load_file(path: &str) -> Result<ConfigFile, ConfigError> {
 }
 
 /// 将 JSON 值递归扁平化为点分键列表（对象展开，数组/标量为叶子）。
-fn flatten_json(value: &serde_json::Value, prefix: &str, out: &mut Vec<(String, serde_json::Value)>) {
+fn flatten_json(
+    value: &serde_json::Value,
+    prefix: &str,
+    out: &mut Vec<(String, serde_json::Value)>,
+) {
     match value {
         serde_json::Value::Object(map) => {
             for (k, v) in map {
-                let key = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
                 flatten_json(v, &key, out);
             }
         }
@@ -505,7 +542,10 @@ pub fn watch(
 
     // 监听父目录而非文件本身，避免编辑器原子重命名导致监听丢失
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
-    let dir = target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let dir = target
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     let (event_tx, event_rx) = mpsc::channel::<Result<notify::Event, notify::Error>>();
     let mut watcher = RecommendedWatcher::new(
@@ -519,9 +559,8 @@ pub fn watch(
     // 后台线程做 500ms 尾沿 debounce：仅当事件涉及目标文件时通知一次
     std::thread::spawn(move || {
         const DEBOUNCE: Duration = Duration::from_millis(500);
-        let is_target = |p: &PathBuf| {
-            std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == target
-        };
+        let is_target =
+            |p: &PathBuf| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == target;
         let mut pending = false;
         let mut last: Option<Instant> = None;
         loop {
@@ -570,9 +609,18 @@ mod tests {
         let flat = hot_flat(&hot);
         let map: std::collections::BTreeMap<_, _> = flat.clone().into_iter().collect();
 
-        assert_eq!(map.get("gateway.display_currency").unwrap(), &serde_json::json!("USD"));
-        assert_eq!(map.get("gateway.default_rate_limit_rpm").unwrap(), &serde_json::json!(600));
-        assert_eq!(map.get("proxy.no_proxy").unwrap(), &serde_json::json!(["a.com", "b.com"]));
+        assert_eq!(
+            map.get("gateway.display_currency").unwrap(),
+            &serde_json::json!("USD")
+        );
+        assert_eq!(
+            map.get("gateway.default_rate_limit_rpm").unwrap(),
+            &serde_json::json!(600)
+        );
+        assert_eq!(
+            map.get("proxy.no_proxy").unwrap(),
+            &serde_json::json!(["a.com", "b.com"])
+        );
 
         // 输出按键名确定性排序
         let keys: Vec<&String> = flat.iter().map(|(k, _)| k).collect();
@@ -607,7 +655,10 @@ mod tests {
     #[test]
     fn apply_overrides_bad_value_errors() {
         let base = HotConfig::default();
-        let res = apply_overrides(&base, &[("gateway.display_currency".into(), serde_json::json!(123))]);
+        let res = apply_overrides(
+            &base,
+            &[("gateway.display_currency".into(), serde_json::json!(123))],
+        );
         match res {
             Err(ConfigError::BadValue { key, value }) => {
                 assert_eq!(key, "gateway.display_currency");

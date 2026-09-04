@@ -75,7 +75,10 @@ fn parse_response_role(role: Option<&str>, ctx: &mut ConvCtx) -> IrRole {
         Some("assistant") => IrRole::Assistant,
         Some("system") => IrRole::System,
         Some(other) => {
-            ctx.degrade("input.message.role", format!("未知角色，按 user 处理: {other}"));
+            ctx.degrade(
+                "input.message.role",
+                format!("未知角色，按 user 处理: {other}"),
+            );
             IrRole::User
         }
         _ => IrRole::User,
@@ -110,7 +113,10 @@ fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
             let url = if let Some(s) = url_val.as_str() {
                 s.to_string()
             } else if let Some(o) = url_val.as_object() {
-                o.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string()
+                o.get("url")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or_default()
+                    .to_string()
             } else {
                 String::new()
             };
@@ -131,8 +137,14 @@ fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
                 .or_else(|| p["file_id"].as_str())
                 .unwrap_or_default()
                 .to_string();
-            let url = p["file_url"].as_str().or_else(|| p["url"].as_str()).map(String::from);
-            let data = p["file_data"].as_str().or_else(|| p["data"].as_str()).map(String::from);
+            let url = p["file_url"]
+                .as_str()
+                .or_else(|| p["url"].as_str())
+                .map(String::from);
+            let data = p["file_data"]
+                .as_str()
+                .or_else(|| p["data"].as_str())
+                .map(String::from);
             if name.is_empty() && url.is_none() && data.is_none() {
                 ctx.degrade("input.file", "input_file 无内容");
                 return None;
@@ -140,7 +152,10 @@ fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
             Some(IrPart::File { name, url, data })
         }
         other => {
-            ctx.degrade("input.content.part.type", format!("未知 part 类型: {other}"));
+            ctx.degrade(
+                "input.content.part.type",
+                format!("未知 part 类型: {other}"),
+            );
             None
         }
     }
@@ -157,7 +172,10 @@ fn split_data_url(rest: &str) -> (String, String) {
             (media, after.to_string())
         }
     } else if let Some(comma) = rest.find(',') {
-        ("application/octet-stream".into(), rest[comma + 1..].to_string())
+        (
+            "application/octet-stream".into(),
+            rest[comma + 1..].to_string(),
+        )
     } else {
         ("application/octet-stream".into(), rest.to_string())
     }
@@ -202,15 +220,16 @@ fn parse_input_item(item: &Value, ctx: &mut ConvCtx) -> Result<Option<IrMessage>
                 role: IrRole::Assistant,
                 ..Default::default()
             };
-            msg.tool_calls.push(IrToolCall { id, name, arguments });
+            msg.tool_calls.push(IrToolCall {
+                id,
+                name,
+                arguments,
+            });
             Ok(Some(msg))
         }
         "function_call_output" => {
             let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
-            let output = item["output"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
+            let output = item["output"].as_str().unwrap_or_default().to_string();
             let msg = IrMessage {
                 role: IrRole::Tool,
                 tool_call_id: Some(call_id),
@@ -256,12 +275,19 @@ fn parse_response_tools(v: &Value, ctx: &mut ConvCtx) -> Result<Vec<IrTool>, Con
         if t["type"].as_str().unwrap_or_default() != "function" {
             ctx.degrade(
                 "tools",
-                format!("非 function 类型工具定义，丢弃: {}", t["type"].as_str().unwrap_or_default()),
+                format!(
+                    "非 function 类型工具定义，丢弃: {}",
+                    t["type"].as_str().unwrap_or_default()
+                ),
             );
             continue;
         }
         // 平铺：{type,name,description,parameters}；嵌套：{type,function:{...}} 皆可容错解析
-        let f = if t.get("function").is_some() { &t["function"] } else { t };
+        let f = if t.get("function").is_some() {
+            &t["function"]
+        } else {
+            t
+        };
         let name = f["name"].as_str().unwrap_or_default().to_string();
         if name.is_empty() {
             ctx.degrade("tools", "function 工具缺 name");
@@ -351,7 +377,10 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
     // 有状态/Responses 专属字段：作为入口转其他协议时记为降级能力（值仍保留到 extra）
     for f in ["previous_response_id", "store", "include", "background"] {
         if v.get(f).is_some() {
-            ctx.degrade(f, "Responses 有状态/专属字段，无法映射为 IR，原样保留到 extra");
+            ctx.degrade(
+                f,
+                "Responses 有状态/专属字段，无法映射为 IR，原样保留到 extra",
+            );
         }
     }
 
@@ -391,9 +420,10 @@ fn ir_part_to_input_part(p: &IrPart, ctx: &mut ConvCtx) -> Value {
     match p {
         IrPart::Text { text } => json_build(&[("type", "input_text"), ("text", text)]),
         IrPart::ImageUrl { url } => json_build(&[("type", "input_image"), ("image_url", url)]),
-        IrPart::ImageInline { media_type, data } => {
-            json_build(&[("type", "input_image"), ("image_url", &format!("data:{media_type};base64,{data}"))])
-        }
+        IrPart::ImageInline { media_type, data } => json_build(&[
+            ("type", "input_image"),
+            ("image_url", &format!("data:{media_type};base64,{data}")),
+        ]),
         IrPart::InputAudio { .. } => {
             ctx.degrade("content.input_audio", "Responses 不支持 input_audio，丢弃");
             json_build(&[("type", "input_text"), ("text", "")])
@@ -426,7 +456,11 @@ fn json_build(pairs: &[(&str, &str)]) -> Value {
 
 /// 构造 Responses 输入 message item（roles：user/assistant）。
 fn request_message_item(role: IrRole, content: &IrContent, ctx: &mut ConvCtx) -> Value {
-    let role_str = if role == IrRole::Assistant { "assistant" } else { "user" };
+    let role_str = if role == IrRole::Assistant {
+        "assistant"
+    } else {
+        "user"
+    };
     let parts = match content {
         IrContent::Text(s) => vec![json_build(&[("type", "input_text"), ("text", s)])],
         IrContent::Parts(ps) => ps.iter().map(|p| ir_part_to_input_part(p, ctx)).collect(),
@@ -510,7 +544,11 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
             }
             IrRole::User | IrRole::Assistant => {
                 if m.content.is_some() {
-                    input_items.push(request_message_item(m.role, m.content.as_ref().unwrap(), ctx));
+                    input_items.push(request_message_item(
+                        m.role,
+                        m.content.as_ref().unwrap(),
+                        ctx,
+                    ));
                 }
                 for tc in &m.tool_calls {
                     input_items.push(function_call_input_item(tc));
@@ -519,8 +557,14 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
             IrRole::Tool => {
                 let mut o = Map::new();
                 o.insert("type".into(), Value::String("function_call_output".into()));
-                o.insert("call_id".into(), Value::String(m.tool_call_id.clone().unwrap_or_default()));
-                o.insert("output".into(), Value::String(content_as_text(m.content.as_ref())));
+                o.insert(
+                    "call_id".into(),
+                    Value::String(m.tool_call_id.clone().unwrap_or_default()),
+                );
+                o.insert(
+                    "output".into(),
+                    Value::String(content_as_text(m.content.as_ref())),
+                );
                 input_items.push(Value::Object(o));
             }
         }
@@ -531,7 +575,10 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     body.insert("input".into(), Value::Array(input_items));
 
     if !req.tools.is_empty() {
-        body.insert("tools".into(), Value::Array(req.tools.iter().map(response_tool_from_ir).collect()));
+        body.insert(
+            "tools".into(),
+            Value::Array(req.tools.iter().map(response_tool_from_ir).collect()),
+        );
     }
     if let Some(tc) = &req.tool_choice {
         body.insert("tool_choice".into(), tc.clone());
@@ -585,12 +632,16 @@ fn parse_responses_usage(u: &Value) -> IrUsage {
             }
         }
         if !rest.is_empty() {
-            usage.extra.insert("input_tokens_details".into(), Value::Object(rest));
+            usage
+                .extra
+                .insert("input_tokens_details".into(), Value::Object(rest));
         }
     }
     if let Some(details) = u.get("output_tokens_details").and_then(|d| d.as_object()) {
         if let Some(rt) = details.get("reasoning_tokens").and_then(|r| r.as_u64()) {
-            usage.extra.insert("reasoning_tokens".into(), Value::from(rt));
+            usage
+                .extra
+                .insert("reasoning_tokens".into(), Value::from(rt));
         }
         let mut rest = Map::new();
         for (k, val) in details {
@@ -599,14 +650,20 @@ fn parse_responses_usage(u: &Value) -> IrUsage {
             }
         }
         if !rest.is_empty() {
-            usage.extra.insert("output_tokens_details".into(), Value::Object(rest));
+            usage
+                .extra
+                .insert("output_tokens_details".into(), Value::Object(rest));
         }
     }
     if let Some(o) = u.as_object() {
         for (k, val) in o {
             if !matches!(
                 k.as_str(),
-                "input_tokens" | "output_tokens" | "total_tokens" | "input_tokens_details" | "output_tokens_details"
+                "input_tokens"
+                    | "output_tokens"
+                    | "total_tokens"
+                    | "input_tokens_details"
+                    | "output_tokens_details"
             ) {
                 usage.extra.insert(k.clone(), val.clone());
             }
@@ -624,7 +681,9 @@ fn append_message_text(msg: &mut IrMessage, text: &str) {
         Some(IrContent::Text(s)) => s.push_str(text),
         Some(IrContent::Parts(ps)) => match ps.last_mut() {
             Some(IrPart::Text { text: t }) => t.push_str(text),
-            _ => ps.push(IrPart::Text { text: text.to_string() }),
+            _ => ps.push(IrPart::Text {
+                text: text.to_string(),
+            }),
         },
         None => msg.content = Some(IrContent::Text(text.to_string())),
     }
@@ -657,7 +716,10 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
                             if let Some(t) = part["text"].as_str() {
                                 text.push_str(t);
                             } else {
-                                ctx.degrade("output.message.content.part", "未知 message content part，忽略");
+                                ctx.degrade(
+                                    "output.message.content.part",
+                                    "未知 message content part，忽略",
+                                );
                             }
                         }
                         append_message_text(&mut msg, &text);
@@ -670,8 +732,13 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
                         .unwrap_or_default()
                         .to_string();
                     let name = item["name"].as_str().unwrap_or_default().to_string();
-                    let arguments = parse_arguments_any(item.get("arguments").unwrap_or(&Value::Null));
-                    msg.tool_calls.push(IrToolCall { id, name, arguments });
+                    let arguments =
+                        parse_arguments_any(item.get("arguments").unwrap_or(&Value::Null));
+                    msg.tool_calls.push(IrToolCall {
+                        id,
+                        name,
+                        arguments,
+                    });
                 }
                 "reasoning" => {
                     // summary 文本拼接
@@ -708,7 +775,8 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
     });
     if status == Some("incomplete") {
         if let Some(details) = v.get("incomplete_details") {
-            resp.extra.insert("incomplete_details".into(), details.clone());
+            resp.extra
+                .insert("incomplete_details".into(), details.clone());
         }
     }
 
@@ -743,9 +811,15 @@ fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     if let Some(cached) = u.cache_read_tokens {
         input_details.insert("cached_tokens".into(), Value::from(cached));
     }
-    if let Some(d) = u.extra.get("input_tokens_details").and_then(|v| v.as_object()) {
+    if let Some(d) = u
+        .extra
+        .get("input_tokens_details")
+        .and_then(|v| v.as_object())
+    {
         for (k, val) in d {
-            input_details.entry(k.clone()).or_insert_with(|| val.clone());
+            input_details
+                .entry(k.clone())
+                .or_insert_with(|| val.clone());
         }
     }
     if !input_details.is_empty() {
@@ -756,13 +830,22 @@ fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     if let Some(rt) = u.extra.get("reasoning_tokens") {
         output_details.insert("reasoning_tokens".into(), rt.clone());
     }
-    if let Some(d) = u.extra.get("output_tokens_details").and_then(|v| v.as_object()) {
+    if let Some(d) = u
+        .extra
+        .get("output_tokens_details")
+        .and_then(|v| v.as_object())
+    {
         for (k, val) in d {
-            output_details.entry(k.clone()).or_insert_with(|| val.clone());
+            output_details
+                .entry(k.clone())
+                .or_insert_with(|| val.clone());
         }
     }
     if !output_details.is_empty() {
-        out.insert("output_tokens_details".into(), Value::Object(output_details));
+        out.insert(
+            "output_tokens_details".into(),
+            Value::Object(output_details),
+        );
     }
 
     for (k, val) in &u.extra {
@@ -772,7 +855,10 @@ fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     }
 
     if u.cache_write_tokens.is_some() {
-        ctx.degrade("usage.cache_write_tokens", "Responses 无 cache_write_tokens 映射");
+        ctx.degrade(
+            "usage.cache_write_tokens",
+            "Responses 无 cache_write_tokens 映射",
+        );
     }
     Value::Object(out)
 }
@@ -795,7 +881,10 @@ fn json_build_item_message(role: IrRole, content: Vec<Value>) -> Value {
     o.insert("id".into(), Value::String(format!("msg_{}", rand_suffix())));
     o.insert("type".into(), Value::String("message".into()));
     o.insert("status".into(), Value::String("completed".into()));
-    o.insert("role".into(), Value::String(role_to_response_str(role).into()));
+    o.insert(
+        "role".into(),
+        Value::String(role_to_response_str(role).into()),
+    );
     o.insert("content".into(), Value::Array(content));
     Value::Object(o)
 }
@@ -849,7 +938,17 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
     body.insert("model".into(), Value::String(resp.model.clone()));
 
     let has_incomplete = resp.extra.contains_key("incomplete_details");
-    body.insert("status".into(), Value::String(if has_incomplete { "incomplete" } else { "completed" }.into()));
+    body.insert(
+        "status".into(),
+        Value::String(
+            if has_incomplete {
+                "incomplete"
+            } else {
+                "completed"
+            }
+            .into(),
+        ),
+    );
     if let Some(details) = resp.extra.get("incomplete_details") {
         body.insert("incomplete_details".into(), details.clone());
     }
@@ -858,7 +957,10 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
     for ch in &resp.choices {
         let msg = &ch.message;
         if let Some(content) = &msg.content {
-            output.push(output_message_item(msg.role, &content_as_text(Some(content))));
+            output.push(output_message_item(
+                msg.role,
+                &content_as_text(Some(content)),
+            ));
         }
         for tc in &msg.tool_calls {
             output.push(output_function_call_item(tc));
@@ -931,7 +1033,11 @@ struct FnItemState {
 }
 
 /// SSE data 载荷 → IR chunk；无业务内容（created/output_item.added/空 delta/完成帧 等）返回 Ok(None)。
-pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Option<IrChunk>, ConvertError> {
+pub fn chunk_to_ir(
+    data: &str,
+    st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Option<IrChunk>, ConvertError> {
     let v: Value = serde_json::from_str(data).map_err(|e| ConvertError::Parse(e.to_string()))?;
     let _obj = v
         .as_object()
@@ -1035,7 +1141,11 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
                 delta: IrDelta {
                     tool_calls: vec![IrToolCallDelta {
                         index,
-                        id: if call_id.is_empty() { None } else { Some(call_id) },
+                        id: if call_id.is_empty() {
+                            None
+                        } else {
+                            Some(call_id)
+                        },
                         name: if name.is_empty() { None } else { Some(name) },
                         arguments: Some(text.to_string()),
                     }],
@@ -1047,7 +1157,11 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
         }
         "response.completed" | "response.incomplete" => {
             let resp = &v["response"];
-            let finish = if etype == "response.completed" { "completed" } else { "incomplete" };
+            let finish = if etype == "response.completed" {
+                "completed"
+            } else {
+                "incomplete"
+            };
             let mut chunk = base_chunk(st);
             chunk.choices.push(IrChunkChoice {
                 index: 0,
@@ -1101,7 +1215,10 @@ fn json_build_event(type_: &str, payload: Value) -> Value {
 fn encode_output_item_added_message(st: &StreamState) -> Result<String, ConvertError> {
     let item = json_build_item_message(IrRole::Assistant, vec![]);
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.output_item.added".into()));
+    o.insert(
+        "type".into(),
+        Value::String("response.output_item.added".into()),
+    );
     o.insert("output_index".into(), Value::from(st.message_output_index));
     o.insert("item".into(), item);
     json_to_string(&Value::Object(o))
@@ -1110,7 +1227,10 @@ fn encode_output_item_added_message(st: &StreamState) -> Result<String, ConvertE
 /// 构造 output_text.delta 事件。
 fn encode_output_text_delta(st: &StreamState, text: &str) -> Result<String, ConvertError> {
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.output_text.delta".into()));
+    o.insert(
+        "type".into(),
+        Value::String("response.output_text.delta".into()),
+    );
     o.insert("item_id".into(), Value::String(st.message_item_id.clone()));
     o.insert("output_index".into(), Value::from(st.message_output_index));
     o.insert("content_index".into(), Value::from(0));
@@ -1131,25 +1251,46 @@ fn encode_output_item_added_reasoning(st: &StreamState) -> Result<String, Conver
     item.insert("status".into(), Value::String("in_progress".into()));
     item.insert("summary".into(), Value::Array(summary));
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.output_item.added".into()));
-    o.insert("output_index".into(), Value::from(st.reasoning_output_index));
+    o.insert(
+        "type".into(),
+        Value::String("response.output_item.added".into()),
+    );
+    o.insert(
+        "output_index".into(),
+        Value::from(st.reasoning_output_index),
+    );
     o.insert("item".into(), Value::Object(item));
     json_to_string(&Value::Object(o))
 }
 
 /// 构造 reasoning_summary_text.delta 事件。
-fn encode_reasoning_summary_text_delta(st: &StreamState, text: &str) -> Result<String, ConvertError> {
+fn encode_reasoning_summary_text_delta(
+    st: &StreamState,
+    text: &str,
+) -> Result<String, ConvertError> {
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.reasoning_summary_text.delta".into()));
-    o.insert("item_id".into(), Value::String(st.reasoning_item_id.clone()));
-    o.insert("output_index".into(), Value::from(st.reasoning_output_index));
+    o.insert(
+        "type".into(),
+        Value::String("response.reasoning_summary_text.delta".into()),
+    );
+    o.insert(
+        "item_id".into(),
+        Value::String(st.reasoning_item_id.clone()),
+    );
+    o.insert(
+        "output_index".into(),
+        Value::from(st.reasoning_output_index),
+    );
     o.insert("summary_index".into(), Value::from(0));
     o.insert("delta".into(), Value::String(text.to_string()));
     json_to_string(&Value::Object(o))
 }
 
 /// 构造 function_call output_item.added 事件。
-fn encode_output_item_added_function_call(st: &StreamState, idx: u32) -> Result<String, ConvertError> {
+fn encode_output_item_added_function_call(
+    st: &StreamState,
+    idx: u32,
+) -> Result<String, ConvertError> {
     let state = st.tool_items.get(&idx).cloned().unwrap_or_default();
     let mut item = Map::new();
     item.insert("id".into(), Value::String(state.item_id));
@@ -1159,17 +1300,27 @@ fn encode_output_item_added_function_call(st: &StreamState, idx: u32) -> Result<
     item.insert("name".into(), Value::String(state.name));
     item.insert("arguments".into(), Value::String(state.arguments));
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.output_item.added".into()));
+    o.insert(
+        "type".into(),
+        Value::String("response.output_item.added".into()),
+    );
     o.insert("output_index".into(), Value::from(state.output_index));
     o.insert("item".into(), Value::Object(item));
     json_to_string(&Value::Object(o))
 }
 
 /// 构造 function_call_arguments.delta 事件。
-fn encode_function_call_arguments_delta(st: &StreamState, idx: u32, text: &str) -> Result<String, ConvertError> {
+fn encode_function_call_arguments_delta(
+    st: &StreamState,
+    idx: u32,
+    text: &str,
+) -> Result<String, ConvertError> {
     let state = st.tool_items.get(&idx).cloned().unwrap_or_default();
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.function_call_arguments.delta".into()));
+    o.insert(
+        "type".into(),
+        Value::String("response.function_call_arguments.delta".into()),
+    );
     o.insert("item_id".into(), Value::String(state.item_id));
     o.insert("output_index".into(), Value::from(state.output_index));
     o.insert("delta".into(), Value::String(text.to_string()));
@@ -1216,7 +1367,11 @@ fn output_function_call_item_from_state(t: &FnItemState) -> Value {
 }
 
 /// 构造 response.completed 事件。
-fn encode_response_completed(st: &StreamState, chunk: &IrChunk, ctx: &mut ConvCtx) -> Result<String, ConvertError> {
+fn encode_response_completed(
+    st: &StreamState,
+    chunk: &IrChunk,
+    ctx: &mut ConvCtx,
+) -> Result<String, ConvertError> {
     let resp = build_completed_response(st, chunk.usage.as_ref(), ctx);
     json_to_string(&Value::Object({
         let mut o = Map::new();
@@ -1227,7 +1382,11 @@ fn encode_response_completed(st: &StreamState, chunk: &IrChunk, ctx: &mut ConvCt
 }
 
 /// IR chunk → Responses 事件 JSON 字符串列表。事件序列保证合法（created→…→completed）。
-pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+pub fn chunk_from_ir(
+    chunk: &IrChunk,
+    st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Vec<String>, ConvertError> {
     let mut events: Vec<String> = Vec::new();
 
     // 首个 chunk 产出 response.created 并记录骨架
@@ -1294,7 +1453,11 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -
     }
 
     // finish_reason 或 usage → response.completed
-    let has_finish = chunk.choices.first().map(|c| c.finish_reason.is_some()).unwrap_or(false);
+    let has_finish = chunk
+        .choices
+        .first()
+        .map(|c| c.finish_reason.is_some())
+        .unwrap_or(false);
     let has_usage = chunk.usage.is_some();
     if (has_finish || has_usage) && !st.completed {
         st.completed = true;
@@ -1327,7 +1490,12 @@ mod tests {
 
     fn event_types(evs: &[String]) -> Vec<String> {
         evs.iter()
-            .map(|e| serde_json::from_str::<Value>(e).unwrap()["type"].as_str().unwrap().to_string())
+            .map(|e| {
+                serde_json::from_str::<Value>(e).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -1349,11 +1517,16 @@ mod tests {
         assert_eq!(req.temperature, Some(0.7));
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, IrRole::System);
-        assert_eq!(req.messages[0].content, Some(IrContent::Text("You are helpful.".into())));
+        assert_eq!(
+            req.messages[0].content,
+            Some(IrContent::Text("You are helpful.".into()))
+        );
         assert_eq!(req.messages[1].role, IrRole::User);
         assert_eq!(
             req.messages[1].content,
-            Some(IrContent::Parts(vec![IrPart::Text { text: "Hello".into() }]))
+            Some(IrContent::Parts(vec![IrPart::Text {
+                text: "Hello".into()
+            }]))
         );
 
         // IR → Responses
@@ -1392,7 +1565,10 @@ mod tests {
         assert_eq!(req.messages[1].tool_calls[0].arguments, "{\"city\":\"bj\"}");
         assert_eq!(req.messages[2].role, IrRole::Tool);
         assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("call_1"));
-        assert_eq!(req.messages[2].content, Some(IrContent::Text("sunny".into())));
+        assert_eq!(
+            req.messages[2].content,
+            Some(IrContent::Text("sunny".into()))
+        );
 
         // IR → Responses
         let back = request_from_ir(&req, &mut c).unwrap();
@@ -1429,9 +1605,25 @@ mod tests {
             other => panic!("应为 Parts: {other:?}"),
         };
         assert_eq!(parts.len(), 3);
-        assert_eq!(parts[0], IrPart::Text { text: "what is this?".into() });
-        assert_eq!(parts[1], IrPart::ImageUrl { url: "https://example.com/a.png".into() });
-        assert_eq!(parts[2], IrPart::ImageInline { media_type: "image/png".into(), data: "AAAABBBB".into() });
+        assert_eq!(
+            parts[0],
+            IrPart::Text {
+                text: "what is this?".into()
+            }
+        );
+        assert_eq!(
+            parts[1],
+            IrPart::ImageUrl {
+                url: "https://example.com/a.png".into()
+            }
+        );
+        assert_eq!(
+            parts[2],
+            IrPart::ImageInline {
+                media_type: "image/png".into(),
+                data: "AAAABBBB".into()
+            }
+        );
 
         // IR → Responses：input_image 回写
         let back = request_from_ir(&req, &mut c).unwrap();
@@ -1525,7 +1717,10 @@ mod tests {
         assert_eq!(resp.id, "resp_1");
         assert_eq!(resp.created, 123);
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
-        assert_eq!(resp.choices[0].message.content, Some(IrContent::Text("hi there".into())));
+        assert_eq!(
+            resp.choices[0].message.content,
+            Some(IrContent::Text("hi there".into()))
+        );
         let usage = resp.usage.as_ref().unwrap();
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 5);
@@ -1545,7 +1740,10 @@ mod tests {
         assert_eq!(back["usage"]["output_tokens"], 5);
         assert_eq!(back["usage"]["total_tokens"], 15);
         assert_eq!(back["usage"]["input_tokens_details"]["cached_tokens"], 3);
-        assert_eq!(back["usage"]["output_tokens_details"]["reasoning_tokens"], 2);
+        assert_eq!(
+            back["usage"]["output_tokens_details"]["reasoning_tokens"],
+            2
+        );
     }
 
     #[test]
@@ -1587,17 +1785,30 @@ mod tests {
             created: 123,
             choices: vec![IrChunkChoice {
                 index: 0,
-                delta: IrDelta { role: Some(IrRole::Assistant), content: Some("Hello".into()), ..Default::default() },
+                delta: IrDelta {
+                    role: Some(IrRole::Assistant),
+                    content: Some("Hello".into()),
+                    ..Default::default()
+                },
                 finish_reason: None,
             }],
             ..Default::default()
         };
         let ev1 = chunk_from_ir(&ch1, &mut st, &mut c).unwrap();
-        assert_eq!(event_types(&ev1), ["response.created", "response.output_item.added", "response.output_text.delta"]);
+        assert_eq!(
+            event_types(&ev1),
+            [
+                "response.created",
+                "response.output_item.added",
+                "response.output_text.delta"
+            ]
+        );
 
         // 2. 工具调用（新 index）
         let ch2 = IrChunk {
-            id: "resp_1".into(), model: "gpt-4o".into(), created: 123,
+            id: "resp_1".into(),
+            model: "gpt-4o".into(),
+            created: 123,
             choices: vec![IrChunkChoice {
                 index: 0,
                 delta: IrDelta {
@@ -1614,7 +1825,13 @@ mod tests {
             ..Default::default()
         };
         let ev2 = chunk_from_ir(&ch2, &mut st, &mut c).unwrap();
-        assert_eq!(event_types(&ev2), ["response.output_item.added", "response.function_call_arguments.delta"]);
+        assert_eq!(
+            event_types(&ev2),
+            [
+                "response.output_item.added",
+                "response.function_call_arguments.delta"
+            ]
+        );
         // function_call item 的 call_id/name
         let added_item = serde_json::from_str::<Value>(&ev2[0]).unwrap();
         assert_eq!(added_item["item"]["type"], "function_call");
@@ -1623,11 +1840,17 @@ mod tests {
 
         // 3. 工具参数增量（复用 index 0）
         let ch3 = IrChunk {
-            id: "resp_1".into(), model: "gpt-4o".into(), created: 123,
+            id: "resp_1".into(),
+            model: "gpt-4o".into(),
+            created: 123,
             choices: vec![IrChunkChoice {
                 index: 0,
                 delta: IrDelta {
-                    tool_calls: vec![IrToolCallDelta { index: 0, arguments: Some(":\"bj\"}".into()), ..Default::default() }],
+                    tool_calls: vec![IrToolCallDelta {
+                        index: 0,
+                        arguments: Some(":\"bj\"}".into()),
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 },
                 finish_reason: None,
@@ -1635,12 +1858,21 @@ mod tests {
             ..Default::default()
         };
         let ev3 = chunk_from_ir(&ch3, &mut st, &mut c).unwrap();
-        assert_eq!(event_types(&ev3), ["response.function_call_arguments.delta"]);
+        assert_eq!(
+            event_types(&ev3),
+            ["response.function_call_arguments.delta"]
+        );
 
         // 4. 完成 + usage
         let ch4 = IrChunk {
-            id: "resp_1".into(), model: "gpt-4o".into(), created: 123,
-            choices: vec![IrChunkChoice { index: 0, delta: IrDelta::default(), finish_reason: Some("stop".into()) }],
+            id: "resp_1".into(),
+            model: "gpt-4o".into(),
+            created: 123,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta::default(),
+                finish_reason: Some("stop".into()),
+            }],
             usage: Some(IrUsage {
                 prompt_tokens: 10,
                 completion_tokens: 5,
@@ -1656,7 +1888,10 @@ mod tests {
         assert_eq!(completed["response"]["status"], "completed");
         assert_eq!(completed["response"]["usage"]["input_tokens"], 10);
         assert_eq!(completed["response"]["usage"]["output_tokens"], 5);
-        assert_eq!(completed["response"]["usage"]["input_tokens_details"]["cached_tokens"], 3);
+        assert_eq!(
+            completed["response"]["usage"]["input_tokens_details"]["cached_tokens"],
+            3
+        );
         // completed 的 output 骨架包含 message + function_call
         let out = completed["response"]["output"].as_array().unwrap();
         assert_eq!(out.len(), 2);
@@ -1670,13 +1905,21 @@ mod tests {
         // 回放：把用户侧事件喂回 chunk_to_ir，重建内容/工具/usage
         let mut st2 = StreamState::default();
         let mut chunks: Vec<IrChunk> = Vec::new();
-        for e in ev1.iter().chain(ev2.iter()).chain(ev3.iter()).chain(ev4.iter()) {
+        for e in ev1
+            .iter()
+            .chain(ev2.iter())
+            .chain(ev3.iter())
+            .chain(ev4.iter())
+        {
             if let Some(ch) = chunk_to_ir(e, &mut st2, &mut c).unwrap() {
                 chunks.push(ch);
             }
         }
         // 文本增量
-        assert!(chunks.iter().any(|ch| ch.choices.iter().any(|c| c.delta.content.as_deref() == Some("Hello"))));
+        assert!(chunks.iter().any(|ch| ch
+            .choices
+            .iter()
+            .any(|c| c.delta.content.as_deref() == Some("Hello"))));
         // 工具参数增量（两个片段）
         let tool_args: Vec<&str> = chunks
             .iter()
@@ -1750,7 +1993,9 @@ mod tests {
             "item_id": "fc_x",
             "delta": "{}"
         });
-        let ch2 = chunk_to_ir(&delta2.to_string(), &mut st2, &mut c).unwrap().unwrap();
+        let ch2 = chunk_to_ir(&delta2.to_string(), &mut st2, &mut c)
+            .unwrap()
+            .unwrap();
         let tc2 = &ch2.choices[0].delta.tool_calls[0];
         assert_eq!(tc2.id.as_deref(), Some("fc_x"));
         assert_eq!(tc2.name.as_deref(), Some("lookup"));

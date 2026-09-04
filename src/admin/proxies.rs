@@ -165,7 +165,11 @@ async fn create_proxy(
     .await?;
 
     // 刷新内存快照（写路径失效刷新，网关/外联 client 从快照取代理行）
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
 
     auth::audit(
         &state,
@@ -218,7 +222,12 @@ async fn update_proxy(
                     "未设置 NEXTAPI_SECRET_KEY，无法保存代理密码",
                 ));
             }
-            Some(state.crypto.encrypt(&plain).map_err(|e| ApiError::bad_request(e.to_string()))?)
+            Some(
+                state
+                    .crypto
+                    .encrypt(&plain)
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
+            )
         }
     };
 
@@ -239,7 +248,11 @@ async fn update_proxy(
     .await?;
 
     // 刷新内存快照（写路径失效刷新）
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
 
     auth::audit(
         &state,
@@ -271,7 +284,11 @@ async fn delete_proxy(
     }
 
     // 刷新内存快照（写路径失效刷新，避免已删代理仍被路由使用）
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
 
     auth::audit(
         &state,
@@ -326,17 +343,23 @@ async fn test_proxy(
     };
 
     let started = std::time::Instant::now();
-    let resp = client.get(&probe_url).timeout(Duration::from_secs(10)).send().await;
+    let resp = client
+        .get(&probe_url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     match resp {
         Ok(r) => {
             let status = r.status().as_u16();
-            Ok(Json(serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms })))
+            Ok(Json(
+                serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms }),
+            ))
         }
-        Err(e) => {
-            Ok(Json(serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })))
-        }
+        Err(e) => Ok(Json(
+            serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
+        )),
     }
 }
 
@@ -348,13 +371,17 @@ fn validate_proxy(name: &str, kind: &str, host: &str, port: u16) -> Result<(), A
         return Err(ApiError::bad_request("代理名称不能为空"));
     }
     if name.chars().count() > MAX_NAME {
-        return Err(ApiError::bad_request(format!("name 不能超过 {MAX_NAME} 字符")));
+        return Err(ApiError::bad_request(format!(
+            "name 不能超过 {MAX_NAME} 字符"
+        )));
     }
     if host.trim().is_empty() {
         return Err(ApiError::bad_request("代理主机不能为空"));
     }
     if host.chars().count() > MAX_HOST {
-        return Err(ApiError::bad_request(format!("host 不能超过 {MAX_HOST} 字符")));
+        return Err(ApiError::bad_request(format!(
+            "host 不能超过 {MAX_HOST} 字符"
+        )));
     }
     if !matches!(kind, "http" | "https" | "socks5") {
         return Err(ApiError::bad_request("代理类型必须为 http/https/socks5"));
@@ -366,22 +393,31 @@ fn validate_proxy(name: &str, kind: &str, host: &str, port: u16) -> Result<(), A
 }
 
 /// username/no_proxy 边界校验（review P2）：防存储膨胀。
-fn validate_proxy_extras(username: Option<&str>, no_proxy: Option<&[String]>) -> Result<(), ApiError> {
+fn validate_proxy_extras(
+    username: Option<&str>,
+    no_proxy: Option<&[String]>,
+) -> Result<(), ApiError> {
     const MAX_USERNAME: usize = 128;
     const MAX_NO_PROXY: usize = 100;
     const MAX_ITEM: usize = 255;
     if let Some(u) = username {
         if u.chars().count() > MAX_USERNAME {
-            return Err(ApiError::bad_request(format!("username 不能超过 {MAX_USERNAME} 字符")));
+            return Err(ApiError::bad_request(format!(
+                "username 不能超过 {MAX_USERNAME} 字符"
+            )));
         }
     }
     if let Some(np) = no_proxy {
         if np.len() > MAX_NO_PROXY {
-            return Err(ApiError::bad_request(format!("no_proxy 最多 {MAX_NO_PROXY} 项")));
+            return Err(ApiError::bad_request(format!(
+                "no_proxy 最多 {MAX_NO_PROXY} 项"
+            )));
         }
         for item in np {
             if item.chars().count() > MAX_ITEM {
-                return Err(ApiError::bad_request(format!("no_proxy 项不能超过 {MAX_ITEM} 字符")));
+                return Err(ApiError::bad_request(format!(
+                    "no_proxy 项不能超过 {MAX_ITEM} 字符"
+                )));
             }
         }
     }
@@ -406,19 +442,27 @@ fn password_semantics(password: Option<&str>) -> PasswordSemantics {
 }
 
 /// 创建路径的加密：password 为 None/空 → None；非空但密钥缺失 → BadRequest。
-fn encrypt_password_option(state: &AppState, password: Option<&str>) -> Result<Option<String>, ApiError> {
+fn encrypt_password_option(
+    state: &AppState,
+    password: Option<&str>,
+) -> Result<Option<String>, ApiError> {
     match password {
         Some(pw) if !pw.is_empty() => {
             // 掩码字面量是「保持原值」的保留语义，创建路径无旧值可保持 → 拒绝（review P2-13）
             if pw == "***" {
-                return Err(ApiError::bad_request("\"***\" 为掩码保留值，不能作为真实密码"));
+                return Err(ApiError::bad_request(
+                    "\"***\" 为掩码保留值，不能作为真实密码",
+                ));
             }
             if !state.crypto.is_available() {
                 return Err(ApiError::bad_request(
                     "未设置 NEXTAPI_SECRET_KEY，无法保存代理密码",
                 ));
             }
-            let enc = state.crypto.encrypt(pw).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            let enc = state
+                .crypto
+                .encrypt(pw)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
             Ok(Some(enc))
         }
         _ => Ok(None),

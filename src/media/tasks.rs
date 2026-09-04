@@ -112,7 +112,9 @@ fn is_expired(created_at: DateTime<Utc>, now: DateTime<Utc>, max_age_hours: u64)
 
 /// 从任务查询结果 raw.output.results[].url 提取 [{url}]（纯函数，可测）。
 fn extract_image_urls(raw: &Option<serde_json::Value>) -> Vec<serde_json::Value> {
-    let Some(raw) = raw else { return Vec::new(); };
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     if let Some(results) = raw.pointer("/output/results").and_then(|v| v.as_array()) {
         for item in results {
@@ -174,7 +176,8 @@ async fn poll_once(
     .await?;
     let snap = state.cache.snapshot();
     for task in tasks {
-        if let Err(e) = process_task(state, &task, &snap, max_age_hours, billing_tz, fx_stale).await {
+        if let Err(e) = process_task(state, &task, &snap, max_age_hours, billing_tz, fx_stale).await
+        {
             tracing::warn!("处理媒体任务失败 {task_id}: {e}", task_id = task.id);
         }
     }
@@ -222,11 +225,15 @@ async fn process_task(
     // no_proxy 并集命中直连；未配置直连）。
     let (default_proxy_id, global_no_proxy) = {
         let hot = state.hot.load();
-        (hot.proxy.default_proxy_id.clone(), hot.proxy.no_proxy.clone())
+        (
+            hot.proxy.default_proxy_id.clone(),
+            hot.proxy.no_proxy.clone(),
+        )
     };
     let mut lists: Vec<Vec<String>> = vec![global_no_proxy];
     let eff_proxy_id = if up.use_proxy {
-        up.proxy_id.or_else(|| Uuid::parse_str(&default_proxy_id).ok())
+        up.proxy_id
+            .or_else(|| Uuid::parse_str(&default_proxy_id).ok())
     } else {
         None
     };
@@ -253,7 +260,10 @@ async fn process_task(
     {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!("媒体任务状态查询失败（留待下轮） {task_id}: {e}", task_id = task.id);
+            tracing::warn!(
+                "媒体任务状态查询失败（留待下轮） {task_id}: {e}",
+                task_id = task.id
+            );
             return Ok(());
         }
     };
@@ -295,7 +305,11 @@ async fn finalize_succeeded(
         Ok(r) => (
             r.cost_cny,
             r.cost_usd,
-            if r.priced { Some("bound".to_string()) } else { None },
+            if r.priced {
+                Some("bound".to_string())
+            } else {
+                None
+            },
             if r.priced { Some(r.price_used) } else { None },
             if r.priced { Some(r.fx_snapshot) } else { None },
         ),
@@ -331,7 +345,9 @@ async fn finalize_succeeded(
 
     let request_id = format!(
         "{}-done",
-        task.request_id.clone().unwrap_or_else(|| task.id.to_string())
+        task.request_id
+            .clone()
+            .unwrap_or_else(|| task.id.to_string())
     );
     let ev = LogEvent {
         request_id,
@@ -371,11 +387,7 @@ async fn finalize_succeeded(
 }
 
 /// 失败/取消（已归一到 failed）→ 状态 failed + error；LogEvent status=502 不计价。
-async fn finalize_failed(
-    state: &AppState,
-    task: &MediaTaskRow,
-    st: &TaskStatus,
-) -> ApiResult<()> {
+async fn finalize_failed(state: &AppState, task: &MediaTaskRow, st: &TaskStatus) -> ApiResult<()> {
     let error = truncate_msg(&st.error.clone().unwrap_or_else(|| "任务失败".to_string()));
     let updated = sqlx::query(
         "UPDATE media_tasks SET status='failed', error=$2, raw=$3, finished_at=now(), updated_at=now() \
@@ -392,7 +404,9 @@ async fn finalize_failed(
 
     let request_id = format!(
         "{}-done",
-        task.request_id.clone().unwrap_or_else(|| task.id.to_string())
+        task.request_id
+            .clone()
+            .unwrap_or_else(|| task.id.to_string())
     );
     let ev = LogEvent {
         request_id,
@@ -432,11 +446,7 @@ async fn finalize_failed(
 }
 
 /// pending/processing：仅同步状态（状态守卫，防覆盖已定稿任务）。
-async fn sync_status(
-    state: &AppState,
-    task: &MediaTaskRow,
-    st: &TaskStatus,
-) -> ApiResult<()> {
+async fn sync_status(state: &AppState, task: &MediaTaskRow, st: &TaskStatus) -> ApiResult<()> {
     sqlx::query(
         "UPDATE media_tasks SET status=$2, updated_at=now() \
          WHERE id=$1 AND status IN ('pending','processing')",
@@ -454,14 +464,20 @@ async fn sync_status(
 
 /// 构造 JSON 响应（Content-Type: application/json）。
 fn json_response(status: u16, body: serde_json::Value) -> Response {
-    let status = axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
+    let status =
+        axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
     (status, Json(body)).into_response()
 }
 
 /// 错误响应（OpenAI 形状错误体）。
 fn err_response(status: u16, message: &str) -> Response {
-    let status = axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
-    (status, Json(json!({ "error": { "message": message, "type": "nextapi_error" } }))).into_response()
+    let status =
+        axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
+    (
+        status,
+        Json(json!({ "error": { "message": message, "type": "nextapi_error" } })),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------

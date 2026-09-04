@@ -29,7 +29,9 @@ pub struct EntityCache {
 
 impl EntityCache {
     pub fn new() -> Self {
-        Self { inner: RwLock::new(Arc::new(Snapshot::default())) }
+        Self {
+            inner: RwLock::new(Arc::new(Snapshot::default())),
+        }
     }
 
     /// 读取当前快照（请求路径用，零锁读）。

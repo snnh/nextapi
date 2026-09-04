@@ -7,11 +7,7 @@
 //!
 //! 全部 SQL 使用运行时校验（sqlx::query / query_as），不使用 query! 宏。
 
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -108,7 +104,10 @@ async fn replace_routes(
         if r.model_pattern.chars().count() > 255 {
             return Err(ApiError::bad_request("model_pattern 不能超过 255 字符"));
         }
-        if r.override_model.as_deref().map_or(false, |m| m.chars().count() > 255) {
+        if r.override_model
+            .as_deref()
+            .map_or(false, |m| m.chars().count() > 255)
+        {
             return Err(ApiError::bad_request("override_model 不能超过 255 字符"));
         }
         if r.retry_status_codes.as_ref().map_or(0, Vec::len) > 20 {
@@ -129,9 +128,14 @@ async fn replace_routes(
 
     // 3. 事务内替换
     let mut tx = state.db.begin().await?;
-    sqlx::query("DELETE FROM model_routes").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM model_routes")
+        .execute(&mut *tx)
+        .await?;
     for r in &routes {
-        let retry_codes: &[i32] = r.retry_status_codes.as_deref().unwrap_or(&[429, 500, 502, 503, 504]);
+        let retry_codes: &[i32] = r
+            .retry_status_codes
+            .as_deref()
+            .unwrap_or(&[429, 500, 502, 503, 504]);
         sqlx::query(
             "INSERT INTO model_routes \
              (model_pattern, upstream_id, override_model, priority, weight, enabled, retries, \
@@ -154,7 +158,11 @@ async fn replace_routes(
     tx.commit().await?;
 
     // 4. 刷新快照 + 审计 + 返回新列表
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     auth::audit(
         &state,
         &admin.0,

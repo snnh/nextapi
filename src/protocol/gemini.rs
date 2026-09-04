@@ -71,9 +71,16 @@ fn parse_generation_config(gc: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) {
     }
     if let Some(seqs) = gc.get("stopSequences") {
         if let Some(arr) = seqs.as_array() {
-            req.stop = Some(arr.iter().filter_map(|s| s.as_str().map(String::from)).collect());
+            req.stop = Some(
+                arr.iter()
+                    .filter_map(|s| s.as_str().map(String::from))
+                    .collect(),
+            );
         } else {
-            ctx.degrade("generationConfig.stopSequences", "stopSequences 非数组，忽略");
+            ctx.degrade(
+                "generationConfig.stopSequences",
+                "stopSequences 非数组，忽略",
+            );
         }
     }
     // responseMimeType/responseSchema → response_format（从简：json 模式 → json_object）
@@ -81,7 +88,8 @@ fn parse_generation_config(gc: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) {
     let schema = gc.get("responseSchema");
     if mime == Some("application/json") {
         if let Some(s) = schema {
-            req.response_format = Some(serde_json::json!({"type": "json_schema", "json_schema": s}));
+            req.response_format =
+                Some(serde_json::json!({"type": "json_schema", "json_schema": s}));
         } else {
             req.response_format = Some(serde_json::json!({"type": "json_object"}));
         }
@@ -104,7 +112,13 @@ fn parse_tools(v: &Value, ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertError
                 });
             }
         } else {
-            ctx.degrade("tools", format!("非 functionDeclarations 工具，丢弃: {}", t["type"].as_str().unwrap_or_default()));
+            ctx.degrade(
+                "tools",
+                format!(
+                    "非 functionDeclarations 工具，丢弃: {}",
+                    t["type"].as_str().unwrap_or_default()
+                ),
+            );
         }
     }
     Ok(out)
@@ -128,7 +142,11 @@ fn collect_system_text(parts: &Value, ctx: &mut ConvCtx) -> String {
 }
 
 /// 解析单条 Gemini `content`（role + parts）→ 可能产出多条 IR 消息（text/media 主消息 + functionResponse 的 Tool 消息）。
-fn parse_content(c: &Value, ctx: &mut ConvCtx, messages: &mut Vec<IrMessage>) -> Result<(), ConvertError> {
+fn parse_content(
+    c: &Value,
+    ctx: &mut ConvCtx,
+    messages: &mut Vec<IrMessage>,
+) -> Result<(), ConvertError> {
     if !c.is_object() {
         return Err(ConvertError::Parse("content 不是对象".into()));
     }
@@ -162,7 +180,11 @@ fn parse_content(c: &Value, ctx: &mut ConvCtx, messages: &mut Vec<IrMessage>) ->
                 let uri = fd["fileUri"].as_str().unwrap_or_default();
                 media_parts.push(IrPart::File {
                     name: fd["displayName"].as_str().unwrap_or_default().to_string(),
-                    url: if uri.is_empty() { None } else { Some(uri.to_string()) },
+                    url: if uri.is_empty() {
+                        None
+                    } else {
+                        Some(uri.to_string())
+                    },
                     data: fd["data"].as_str().map(String::from),
                 });
             } else if let Some(fc) = p.get("functionCall") {
@@ -170,7 +192,11 @@ fn parse_content(c: &Value, ctx: &mut ConvCtx, messages: &mut Vec<IrMessage>) ->
                 let arguments = args_to_string(&fc["args"]);
                 let id = format!("{name}_{fc_seq}");
                 fc_seq += 1;
-                tool_calls.push(IrToolCall { id, name, arguments });
+                tool_calls.push(IrToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
             } else if let Some(fr) = p.get("functionResponse") {
                 let name = fr["name"].as_str().unwrap_or_default().to_string();
                 let response = args_to_string(&fr["response"]);
@@ -206,7 +232,8 @@ fn parse_content(c: &Value, ctx: &mut ConvCtx, messages: &mut Vec<IrMessage>) ->
         reasoning_content: reasoning,
         ..Default::default()
     };
-    let has_content = msg.content.is_some() || !msg.tool_calls.is_empty() || msg.reasoning_content.is_some();
+    let has_content =
+        msg.content.is_some() || !msg.tool_calls.is_empty() || msg.reasoning_content.is_some();
     if has_content {
         messages.push(msg);
     }
@@ -367,9 +394,16 @@ fn message_to_content(m: &IrMessage, ctx: &mut ConvCtx) -> Option<Value> {
 
     if m.role == IrRole::Tool {
         // 工具结果 → user role 的 functionResponse part
-        let name = m.name.clone().or_else(|| m.tool_call_id.clone()).unwrap_or_default();
+        let name = m
+            .name
+            .clone()
+            .or_else(|| m.tool_call_id.clone())
+            .unwrap_or_default();
         if m.name.is_none() {
-            ctx.degrade("tool_response_name", "Gemini functionResponse 需函数名，使用 tool_call_id 代替");
+            ctx.degrade(
+                "tool_response_name",
+                "Gemini functionResponse 需函数名，使用 tool_call_id 代替",
+            );
         }
         let response = response_content_to_value(m.content.as_ref(), ctx);
         parts.push(serde_json::json!({"functionResponse": {"name": name, "response": response}}));
@@ -414,7 +448,10 @@ fn response_content_to_value(content: Option<&IrContent>, ctx: &mut ConvCtx) -> 
     let s = match content {
         Some(IrContent::Text(s)) => s.clone(),
         Some(inner) => {
-            ctx.degrade("tool_response_content", "functionResponse 内容非纯文本，序列化处理");
+            ctx.degrade(
+                "tool_response_content",
+                "functionResponse 内容非纯文本，序列化处理",
+            );
             serde_json::to_string(inner).unwrap_or_default()
         }
         None => String::new(),
@@ -425,7 +462,10 @@ fn response_content_to_value(content: Option<&IrContent>, ctx: &mut ConvCtx) -> 
     match serde_json::from_str::<Value>(&s) {
         Ok(v) => v,
         Err(_) => {
-            ctx.degrade("tool_response_json", "functionResponse 内容非合法 JSON，按字符串携带");
+            ctx.degrade(
+                "tool_response_json",
+                "functionResponse 内容非合法 JSON，按字符串携带",
+            );
             Value::String(s)
         }
     }
@@ -473,7 +513,10 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         ctx.degrade("user", "Gemini 无 user 字段，忽略");
     }
     if req.stream {
-        ctx.degrade("stream", "Gemini 流式经独立端点（streamGenerateContent），body 不含 stream");
+        ctx.degrade(
+            "stream",
+            "Gemini 流式经独立端点（streamGenerateContent），body 不含 stream",
+        );
     }
     if !req.ext.extra.is_empty() {
         for k in req.ext.extra.keys() {
@@ -484,14 +527,21 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     body.remove("model");
 
     // system 消息 → systemInstruction
-    let system_msgs: Vec<&IrMessage> = req.messages.iter().filter(|m| m.role == IrRole::System).collect();
+    let system_msgs: Vec<&IrMessage> = req
+        .messages
+        .iter()
+        .filter(|m| m.role == IrRole::System)
+        .collect();
     if !system_msgs.is_empty() {
         let mut parts: Vec<Value> = Vec::new();
         for m in &system_msgs {
             parts.extend(system_msg_to_instruction_parts(m, ctx));
         }
         if !parts.is_empty() {
-            body.insert("systemInstruction".into(), serde_json::json!({"parts": parts}));
+            body.insert(
+                "systemInstruction".into(),
+                serde_json::json!({"parts": parts}),
+            );
         }
     }
 
@@ -512,24 +562,43 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         gc.insert("maxOutputTokens".into(), Value::from(mt));
     }
     if let Some(t) = req.temperature {
-        gc.insert("temperature".into(), serde_json::Number::from_f64(t).map(Value::Number).unwrap_or(Value::Null));
+        gc.insert(
+            "temperature".into(),
+            serde_json::Number::from_f64(t)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
     }
     if let Some(tp) = req.top_p {
-        gc.insert("topP".into(), serde_json::Number::from_f64(tp).map(Value::Number).unwrap_or(Value::Null));
+        gc.insert(
+            "topP".into(),
+            serde_json::Number::from_f64(tp)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
     }
     if let Some(k) = req.ext.top_k {
         gc.insert("topK".into(), Value::from(k));
     }
     if let Some(stop) = &req.stop {
-        gc.insert("stopSequences".into(), Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()));
+        gc.insert(
+            "stopSequences".into(),
+            Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()),
+        );
     }
     if let Some(rf) = &req.response_format {
         match rf["type"].as_str() {
             Some("json_object") => {
-                gc.insert("responseMimeType".into(), Value::String("application/json".into()));
+                gc.insert(
+                    "responseMimeType".into(),
+                    Value::String("application/json".into()),
+                );
             }
             Some("json_schema") => {
-                gc.insert("responseMimeType".into(), Value::String("application/json".into()));
+                gc.insert(
+                    "responseMimeType".into(),
+                    Value::String("application/json".into()),
+                );
                 if let Some(s) = rf.get("json_schema") {
                     gc.insert("responseSchema".into(), s.clone());
                 }
@@ -544,7 +613,10 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     // tools
     if !req.tools.is_empty() {
         let fds: Vec<Value> = req.tools.iter().map(tool_to_json).collect();
-        body.insert("tools".into(), serde_json::json!([{"functionDeclarations": fds}]));
+        body.insert(
+            "tools".into(),
+            serde_json::json!([{"functionDeclarations": fds}]),
+        );
     }
 
     Ok(Value::Object(body))
@@ -561,14 +633,20 @@ fn parse_usage_metadata(u: &Value) -> IrUsage {
     usage.cache_read_tokens = u["cachedContentTokenCount"].as_u64();
     usage.total_tokens = u["totalTokenCount"].as_u64();
     if let Some(t) = u["thoughtsTokenCount"].as_u64() {
-        usage.extra.insert("thoughtsTokenCount".into(), Value::from(t));
+        usage
+            .extra
+            .insert("thoughtsTokenCount".into(), Value::from(t));
     }
     // 其余未知字段原样保留
     if let Some(o) = u.as_object() {
         for (k, val) in o {
             if !matches!(
                 k.as_str(),
-                "promptTokenCount" | "candidatesTokenCount" | "cachedContentTokenCount" | "totalTokenCount" | "thoughtsTokenCount"
+                "promptTokenCount"
+                    | "candidatesTokenCount"
+                    | "cachedContentTokenCount"
+                    | "totalTokenCount"
+                    | "thoughtsTokenCount"
             ) {
                 usage.extra.entry(k.clone()).or_insert_with(|| val.clone());
             }
@@ -605,7 +683,11 @@ fn parse_response_content(content: &Value, ctx: &mut ConvCtx) -> IrMessage {
                 let arguments = args_to_string(&fc["args"]);
                 let id = format!("{name}_{fc_seq}");
                 fc_seq += 1;
-                tool_calls.push(IrToolCall { id, name, arguments });
+                tool_calls.push(IrToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
             } else {
                 ctx.degrade("response.content.part", "未知响应 part 结构，丢弃");
             }
@@ -647,7 +729,10 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
             .ok_or_else(|| ConvertError::Parse("candidates 不是数组".into()))?;
         for (i, c) in arr.iter().enumerate() {
             let mut ch = IrChoice::default();
-            ch.index = c["index"].as_u64().and_then(|x| u32::try_from(x).ok()).unwrap_or(i as u32);
+            ch.index = c["index"]
+                .as_u64()
+                .and_then(|x| u32::try_from(x).ok())
+                .unwrap_or(i as u32);
             // 候选无 content 时容错（保留空 assistant 消息）
             if let Some(content) = c.get("content") {
                 ch.message = parse_response_content(content, ctx);
@@ -656,7 +741,8 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
                 ch.finish_reason = Some(normalize_finish_reason(fr));
                 // 原始值进响应级 extra
                 if i == 0 {
-                    resp.extra.insert("gemini_finish_reason".into(), Value::String(fr.to_string()));
+                    resp.extra
+                        .insert("gemini_finish_reason".into(), Value::String(fr.to_string()));
                 }
             }
             resp.choices.push(ch);
@@ -697,7 +783,10 @@ fn reverse_finish_reason(fr: &str) -> String {
 fn usage_metadata_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     let mut out = u.extra.clone();
     out.insert("promptTokenCount".into(), Value::from(u.prompt_tokens));
-    out.insert("candidatesTokenCount".into(), Value::from(u.completion_tokens));
+    out.insert(
+        "candidatesTokenCount".into(),
+        Value::from(u.completion_tokens),
+    );
     if let Some(t) = u.total_tokens {
         out.insert("totalTokenCount".into(), Value::from(t));
     }
@@ -705,7 +794,10 @@ fn usage_metadata_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
         out.insert("cachedContentTokenCount".into(), Value::from(c));
     }
     if u.cache_write_tokens.is_some() {
-        ctx.degrade("usage.cache_write_tokens", "Gemini 无 cache_write_tokens 对应字段");
+        ctx.degrade(
+            "usage.cache_write_tokens",
+            "Gemini 无 cache_write_tokens 对应字段",
+        );
     }
     Value::Object(out)
 }
@@ -759,7 +851,10 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
         cand.insert("content".into(), Value::Object(content));
         cand.insert("index".into(), Value::from(ch.index));
         if let Some(fr) = &ch.finish_reason {
-            cand.insert("finishReason".into(), Value::String(reverse_finish_reason(fr)));
+            cand.insert(
+                "finishReason".into(),
+                Value::String(reverse_finish_reason(fr)),
+            );
         }
         candidates.push(Value::Object(cand));
     }
@@ -792,12 +887,19 @@ pub struct StreamState {
 }
 
 fn delta_is_empty(d: &IrDelta) -> bool {
-    d.role.is_none() && d.content.is_none() && d.reasoning_content.is_none() && d.tool_calls.is_empty()
+    d.role.is_none()
+        && d.content.is_none()
+        && d.reasoning_content.is_none()
+        && d.tool_calls.is_empty()
 }
 
 /// SSE data 载荷 → IR chunk；无业务内容（空帧/无增量）返回 Ok(None)。
 /// Gemini 流式 data 为完整 generateContent 响应 JSON（增量式）。
-pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Option<IrChunk>, ConvertError> {
+pub fn chunk_to_ir(
+    data: &str,
+    st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Option<IrChunk>, ConvertError> {
     let v: Value = serde_json::from_str(data).map_err(|e| ConvertError::Parse(e.to_string()))?;
     let obj = v
         .as_object()
@@ -807,7 +909,11 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
     let mut delta = IrDelta::default();
     let mut finish_reason: Option<String> = None;
 
-    if let Some(c) = v.get("candidates").and_then(|c| c.as_array()).and_then(|a| a.first()) {
+    if let Some(c) = v
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+    {
         // content + parts
         if let Some(content) = c.get("content") {
             if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
@@ -848,7 +954,9 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
         }
         if let Some(fr) = c["finishReason"].as_str() {
             finish_reason = Some(normalize_finish_reason(fr));
-            chunk.extra.insert("gemini_finish_reason".into(), Value::String(fr.to_string()));
+            chunk
+                .extra
+                .insert("gemini_finish_reason".into(), Value::String(fr.to_string()));
         }
     }
 
@@ -898,7 +1006,11 @@ fn flush_unfinished_tools(st: &mut StreamState, parts: &mut Vec<Value>) {
 }
 
 /// IR chunk → Gemini 流式响应 JSON 字符串（单条）。
-pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+pub fn chunk_from_ir(
+    chunk: &IrChunk,
+    st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Vec<String>, ConvertError> {
     let mut delta = IrDelta::default();
     let mut finish_reason: Option<String> = None;
     if let Some(c) = chunk.choices.first() {
@@ -934,7 +1046,9 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -
         if !st.emitted_tools.contains(&i) {
             if let (Some(name), Some(args_str)) = (st.tool_names.get(&i), st.tool_args.get(&i)) {
                 if let Ok(args_val) = serde_json::from_str::<Value>(args_str) {
-                    parts.push(serde_json::json!({"functionCall": {"name": name, "args": args_val}}));
+                    parts.push(
+                        serde_json::json!({"functionCall": {"name": name, "args": args_val}}),
+                    );
                     st.emitted_tools.insert(i);
                 }
             }
@@ -956,11 +1070,17 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -
     cand.insert("content".into(), Value::Object(content));
     cand.insert("index".into(), Value::from(0));
     if let Some(fr) = &finish_reason {
-        cand.insert("finishReason".into(), Value::String(reverse_finish_reason(fr)));
+        cand.insert(
+            "finishReason".into(),
+            Value::String(reverse_finish_reason(fr)),
+        );
     }
 
     let mut body = Map::new();
-    body.insert("candidates".into(), serde_json::json!([Value::Object(cand)]));
+    body.insert(
+        "candidates".into(),
+        serde_json::json!([Value::Object(cand)]),
+    );
     if let Some(u) = &usage {
         body.insert("usageMetadata".into(), usage_metadata_to_json(u, ctx));
     }
@@ -971,7 +1091,8 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, ctx: &mut ConvCtx) -
         }
     }
 
-    let s = serde_json::to_string(&Value::Object(body)).map_err(|e| ConvertError::Parse(e.to_string()))?;
+    let s = serde_json::to_string(&Value::Object(body))
+        .map_err(|e| ConvertError::Parse(e.to_string()))?;
     Ok(vec![s])
 }
 
@@ -1017,18 +1138,30 @@ mod tests {
         assert_eq!(req.model, "", "model 留空由上层注入");
         assert_eq!(req.messages.len(), 3);
         assert_eq!(req.messages[0].role, IrRole::System);
-        assert_eq!(req.messages[0].content, Some(IrContent::Text("You are helpful.".into())));
+        assert_eq!(
+            req.messages[0].content,
+            Some(IrContent::Text("You are helpful.".into()))
+        );
         assert_eq!(req.messages[1].role, IrRole::User);
-        assert_eq!(req.messages[1].content, Some(IrContent::Text("Hello".into())));
+        assert_eq!(
+            req.messages[1].content,
+            Some(IrContent::Text("Hello".into()))
+        );
         assert_eq!(req.messages[2].role, IrRole::Assistant);
-        assert_eq!(req.messages[2].content, Some(IrContent::Text("Hi there".into())));
+        assert_eq!(
+            req.messages[2].content,
+            Some(IrContent::Text("Hi there".into()))
+        );
         assert_eq!(req.max_tokens, Some(100));
         assert_eq!(req.temperature, Some(0.7));
         assert_eq!(req.top_p, Some(0.9));
 
         let back = request_from_ir(&req, &mut c).unwrap();
         assert!(back.get("model").is_none(), "model 不写入 body");
-        assert_eq!(back["systemInstruction"]["parts"][0]["text"], "You are helpful.");
+        assert_eq!(
+            back["systemInstruction"]["parts"][0]["text"],
+            "You are helpful."
+        );
         assert_eq!(back["contents"][0]["role"], "user");
         assert_eq!(back["contents"][0]["parts"][0]["text"], "Hello");
         assert_eq!(back["contents"][1]["role"], "model");
@@ -1057,11 +1190,23 @@ mod tests {
             other => panic!("应为 Parts: {other:?}"),
         };
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[1], IrPart::ImageInline { media_type: "image/png".into(), data: "AAAABBBB".into() });
+        assert_eq!(
+            parts[1],
+            IrPart::ImageInline {
+                media_type: "image/png".into(),
+                data: "AAAABBBB".into()
+            }
+        );
 
         let back = request_from_ir(&req, &mut c).unwrap();
-        assert_eq!(back["contents"][0]["parts"][1]["inlineData"]["mimeType"], "image/png");
-        assert_eq!(back["contents"][0]["parts"][1]["inlineData"]["data"], "AAAABBBB");
+        assert_eq!(
+            back["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+            "image/png"
+        );
+        assert_eq!(
+            back["contents"][0]["parts"][1]["inlineData"]["data"],
+            "AAAABBBB"
+        );
     }
 
     // ---------- functionDeclarations + functionCall + functionResponse ----------
@@ -1098,18 +1243,36 @@ mod tests {
         // functionResponse → Tool 消息
         assert_eq!(req.messages[2].role, IrRole::Tool);
         assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("get_weather"));
-        assert_eq!(req.messages[2].content, Some(IrContent::Text("{\"temperature\":25}".into())));
+        assert_eq!(
+            req.messages[2].content,
+            Some(IrContent::Text("{\"temperature\":25}".into()))
+        );
 
         // IR → Gemini
         let back = request_from_ir(&req, &mut c).unwrap();
-        assert_eq!(back["tools"][0]["functionDeclarations"][0]["name"], "get_weather");
+        assert_eq!(
+            back["tools"][0]["functionDeclarations"][0]["name"],
+            "get_weather"
+        );
         assert_eq!(back["contents"][0]["parts"][0]["text"], "weather in bj?");
         assert_eq!(back["contents"][1]["role"], "model");
-        assert_eq!(back["contents"][1]["parts"][0]["functionCall"]["name"], "get_weather");
-        assert_eq!(back["contents"][1]["parts"][0]["functionCall"]["args"]["city"], "bj");
+        assert_eq!(
+            back["contents"][1]["parts"][0]["functionCall"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            back["contents"][1]["parts"][0]["functionCall"]["args"]["city"],
+            "bj"
+        );
         assert_eq!(back["contents"][2]["role"], "user");
-        assert_eq!(back["contents"][2]["parts"][0]["functionResponse"]["name"], "get_weather");
-        assert_eq!(back["contents"][2]["parts"][0]["functionResponse"]["response"]["temperature"], 25);
+        assert_eq!(
+            back["contents"][2]["parts"][0]["functionResponse"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            back["contents"][2]["parts"][0]["functionResponse"]["response"]["temperature"],
+            25
+        );
     }
 
     // ---------- generationConfig 全字段映射（含 topK 进 ext） ----------
@@ -1133,15 +1296,24 @@ mod tests {
         assert_eq!(req.top_p, Some(0.95));
         assert_eq!(req.ext.top_k, Some(40));
         assert_eq!(req.stop, Some(vec!["END".to_string(), "STOP".to_string()]));
-        assert_eq!(req.response_format, Some(serde_json::json!({"type": "json_object"})));
+        assert_eq!(
+            req.response_format,
+            Some(serde_json::json!({"type": "json_object"}))
+        );
 
         let back = request_from_ir(&req, &mut c).unwrap();
         assert_eq!(back["generationConfig"]["maxOutputTokens"], 256);
         assert_eq!(back["generationConfig"]["temperature"], 0.5);
         assert_eq!(back["generationConfig"]["topP"], 0.95);
         assert_eq!(back["generationConfig"]["topK"], 40);
-        assert_eq!(back["generationConfig"]["stopSequences"], serde_json::json!(["END", "STOP"]));
-        assert_eq!(back["generationConfig"]["responseMimeType"], "application/json");
+        assert_eq!(
+            back["generationConfig"]["stopSequences"],
+            serde_json::json!(["END", "STOP"])
+        );
+        assert_eq!(
+            back["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
     }
 
     // ---------- usageMetadata 提取（含 cached） ----------
@@ -1171,8 +1343,14 @@ mod tests {
         let resp = response_to_ir(&j, &mut c).unwrap();
         assert_eq!(resp.choices.len(), 1);
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
-        assert_eq!(resp.choices[0].message.content, Some(IrContent::Text("hi there".into())));
-        assert_eq!(resp.choices[0].message.reasoning_content.as_deref(), Some("thinking..."));
+        assert_eq!(
+            resp.choices[0].message.content,
+            Some(IrContent::Text("hi there".into()))
+        );
+        assert_eq!(
+            resp.choices[0].message.reasoning_content.as_deref(),
+            Some("thinking...")
+        );
         assert_eq!(resp.extra["gemini_finish_reason"], "STOP");
 
         let u = resp.usage.as_ref().unwrap();
@@ -1186,9 +1364,18 @@ mod tests {
         let back = response_from_ir(&resp, &mut c).unwrap();
         assert_eq!(back["candidates"][0]["content"]["role"], "model");
         // 思考 part 在正文之前
-        assert_eq!(back["candidates"][0]["content"]["parts"][0]["thought"], true);
-        assert_eq!(back["candidates"][0]["content"]["parts"][0]["text"], "thinking...");
-        assert_eq!(back["candidates"][0]["content"]["parts"][1]["text"], "hi there");
+        assert_eq!(
+            back["candidates"][0]["content"]["parts"][0]["thought"],
+            true
+        );
+        assert_eq!(
+            back["candidates"][0]["content"]["parts"][0]["text"],
+            "thinking..."
+        );
+        assert_eq!(
+            back["candidates"][0]["content"]["parts"][1]["text"],
+            "hi there"
+        );
         assert_eq!(back["candidates"][0]["finishReason"], "STOP");
         assert_eq!(back["usageMetadata"]["promptTokenCount"], 10);
         assert_eq!(back["usageMetadata"]["cachedContentTokenCount"], 3);
@@ -1202,12 +1389,16 @@ mod tests {
         let mut st = StreamState::default();
 
         let d1 = serde_json::json!({"candidates": [{"content": {"role": "model", "parts": [{"text": "Hello"}]}}]});
-        let c1 = chunk_to_ir(&serde_json::to_string(&d1).unwrap(), &mut st, &mut c).unwrap().unwrap();
+        let c1 = chunk_to_ir(&serde_json::to_string(&d1).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
         assert_eq!(c1.choices[0].delta.role, Some(IrRole::Assistant));
         assert_eq!(c1.choices[0].delta.content.as_deref(), Some("Hello"));
 
         let d2 = serde_json::json!({"candidates": [{"content": {"role": "model", "parts": [{"text": " world"}]}}]});
-        let c2 = chunk_to_ir(&serde_json::to_string(&d2).unwrap(), &mut st, &mut c).unwrap().unwrap();
+        let c2 = chunk_to_ir(&serde_json::to_string(&d2).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
         assert_eq!(c2.choices[0].delta.content.as_deref(), Some(" world"));
 
         // IR chunk → Gemini 流帧
@@ -1227,7 +1418,9 @@ mod tests {
         let d1 = serde_json::json!({"candidates": [{"content": {"role": "model", "parts": [
             {"functionCall": {"name": "get_weather", "args": {"city": "bj"}}}
         ]}}]});
-        let c1 = chunk_to_ir(&serde_json::to_string(&d1).unwrap(), &mut st, &mut c).unwrap().unwrap();
+        let c1 = chunk_to_ir(&serde_json::to_string(&d1).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
         let tc = &c1.choices[0].delta.tool_calls[0];
         assert_eq!(tc.index, 0);
         assert_eq!(tc.name.as_deref(), Some("get_weather"));
@@ -1253,8 +1446,14 @@ mod tests {
         let chunk2 = serde_json::from_value::<IrChunk>(frag2).unwrap();
         let out2 = chunk_from_ir(&chunk2, &mut st2, &mut c).unwrap();
         let v2: Value = serde_json::from_str(&out2[0]).unwrap();
-        assert_eq!(v2["candidates"][0]["content"]["parts"][0]["functionCall"]["name"], "get_weather");
-        assert_eq!(v2["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["city"], "bj");
+        assert_eq!(
+            v2["candidates"][0]["content"]["parts"][0]["functionCall"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            v2["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["city"],
+            "bj"
+        );
 
         // finish_reason 强制冲刷未完成聚合
         let frag3 = serde_json::json!({
@@ -1265,11 +1464,17 @@ mod tests {
         let v3: Value = serde_json::from_str(&out3[0]).unwrap();
         assert_eq!(v3["candidates"][0]["finishReason"], "STOP");
         // 未完成聚合被冲刷为一个 functionCall part
-        assert_eq!(v3["candidates"][0]["content"]["parts"][0]["functionCall"]["name"], "other_tool");
+        assert_eq!(
+            v3["candidates"][0]["content"]["parts"][0]["functionCall"]["name"],
+            "other_tool"
+        );
 
         // stream_end：无未完成聚合 → 空
         let mut empty_st = StreamState::default();
-        assert_eq!(stream_end(&mut empty_st, &mut c).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            stream_end(&mut empty_st, &mut c).unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     // ---------- URL 图片降级记录 ----------
@@ -1279,9 +1484,9 @@ mod tests {
             model: "m".into(),
             messages: vec![IrMessage {
                 role: IrRole::User,
-                content: Some(IrContent::Parts(vec![
-                    IrPart::ImageUrl { url: "https://example.com/a.png".into() },
-                ])),
+                content: Some(IrContent::Parts(vec![IrPart::ImageUrl {
+                    url: "https://example.com/a.png".into(),
+                }])),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1289,7 +1494,10 @@ mod tests {
         let mut c = ctx();
         let back = request_from_ir(&req, &mut c).unwrap();
         // 以 fileData(fileUri) 携带
-        assert_eq!(back["contents"][0]["parts"][0]["fileData"]["fileUri"], "https://example.com/a.png");
+        assert_eq!(
+            back["contents"][0]["parts"][0]["fileData"]["fileUri"],
+            "https://example.com/a.png"
+        );
         // 记录降级
         assert!(c.degraded.iter().any(|d| d.field == "image_url"));
     }

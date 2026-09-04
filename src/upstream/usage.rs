@@ -25,7 +25,9 @@ pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
         Protocol::OpenaiChat => {
             let usage = v.get("usage");
             u.prompt_tokens = usage.and_then(|u| u.get("prompt_tokens")).and_then(token);
-            u.completion_tokens = usage.and_then(|u| u.get("completion_tokens")).and_then(token);
+            u.completion_tokens = usage
+                .and_then(|u| u.get("completion_tokens"))
+                .and_then(token);
             // chat：prompt_tokens_details.cached_tokens → cache_read（读侧命中缓存）
             u.cache_read_tokens = usage
                 .and_then(|u| u.get("prompt_tokens_details"))
@@ -57,8 +59,12 @@ pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
         }
         Protocol::Gemini => {
             let usage = v.get("usageMetadata");
-            u.prompt_tokens = usage.and_then(|u| u.get("promptTokenCount")).and_then(token);
-            u.completion_tokens = usage.and_then(|u| u.get("candidatesTokenCount")).and_then(token);
+            u.prompt_tokens = usage
+                .and_then(|u| u.get("promptTokenCount"))
+                .and_then(token);
+            u.completion_tokens = usage
+                .and_then(|u| u.get("candidatesTokenCount"))
+                .and_then(token);
             u.cache_read_tokens = usage
                 .and_then(|u| u.get("cachedContentTokenCount"))
                 .and_then(token);
@@ -90,7 +96,9 @@ pub fn extract_sse_usage(p: Protocol, sse_text: &str) -> Usage {
     let mut a_cache_read: Option<i64> = None;
 
     for line in sse_text.lines() {
-        let Some(v) = parse_sse_data(line) else { continue };
+        let Some(v) = parse_sse_data(line) else {
+            continue;
+        };
         match p {
             Protocol::Anthropic => {
                 let ev_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -126,7 +134,10 @@ pub fn extract_sse_usage(p: Protocol, sse_text: &str) -> Usage {
                 // 最后出现且有实际 token 的 usage 优先（include_usage 注入的末尾空 choices chunk）
                 if v.get("usage").is_some() {
                     let u = extract_json_usage(Protocol::OpenaiChat, &v);
-                    if u.prompt_tokens.is_some() || u.completion_tokens.is_some() || u.cache_read_tokens.is_some() {
+                    if u.prompt_tokens.is_some()
+                        || u.completion_tokens.is_some()
+                        || u.cache_read_tokens.is_some()
+                    {
                         last = u;
                     }
                 }
@@ -143,7 +154,10 @@ pub fn extract_sse_usage(p: Protocol, sse_text: &str) -> Usage {
             raw.insert("output_tokens".into(), serde_json::Value::from(x));
         }
         if let Some(x) = a_cache_write {
-            raw.insert("cache_creation_input_tokens".into(), serde_json::Value::from(x));
+            raw.insert(
+                "cache_creation_input_tokens".into(),
+                serde_json::Value::from(x),
+            );
         }
         if let Some(x) = a_cache_read {
             raw.insert("cache_read_input_tokens".into(), serde_json::Value::from(x));
@@ -153,7 +167,11 @@ pub fn extract_sse_usage(p: Protocol, sse_text: &str) -> Usage {
             completion_tokens: a_output,
             cache_write_tokens: a_cache_write,
             cache_read_tokens: a_cache_read,
-            raw: if raw.is_empty() { None } else { Some(serde_json::Value::Object(raw)) },
+            raw: if raw.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Object(raw))
+            },
         };
     }
 

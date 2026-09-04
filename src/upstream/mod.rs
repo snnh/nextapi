@@ -52,7 +52,9 @@ pub struct ClientPools {
 
 impl ClientPools {
     pub fn new() -> Self {
-        Self { inner: Mutex::new(HashMap::new()) }
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
     }
 
     /// 取上游对应的客户端：
@@ -61,7 +63,12 @@ impl ClientPools {
     /// - use_proxy=true 且 proxy_id 为空 → 跟随系统默认代理 default_proxy_id（空 = 直连）。
     ///
     /// `no_proxy` 命中判定由调用方（gateway）在决定代理前用 `no_proxy_match` 做，此处仅按代理选择。
-    pub fn client_for(&self, up: &UpstreamRow, snap: &Snapshot, default_proxy_id: &str) -> reqwest::Client {
+    pub fn client_for(
+        &self,
+        up: &UpstreamRow,
+        snap: &Snapshot,
+        default_proxy_id: &str,
+    ) -> reqwest::Client {
         let key = if !up.use_proxy {
             "direct".to_string()
         } else if let Some(pid) = up.proxy_id {
@@ -144,7 +151,9 @@ pub fn no_proxy_match(lists: &[Vec<String>], url: &str) -> bool {
     if host.is_empty() {
         return false;
     }
-    lists.iter().any(|list| list.iter().any(|pat| no_proxy_pattern_match(pat, host)))
+    lists
+        .iter()
+        .any(|list| list.iter().any(|pat| no_proxy_pattern_match(pat, host)))
 }
 
 fn no_proxy_pattern_match(pattern: &str, host: &str) -> bool {
@@ -183,7 +192,11 @@ fn cidr_match(host: &str, cidr: &str) -> bool {
             if prefix > 32 {
                 return false;
             }
-            let mask = if prefix == 0 { 0u32 } else { u32::MAX << (32 - prefix) };
+            let mask = if prefix == 0 {
+                0u32
+            } else {
+                u32::MAX << (32 - prefix)
+            };
             (u32::from(h) & mask) == (u32::from(n) & mask)
         }
         (IpAddr::V6(h), IpAddr::V6(n)) => {
@@ -279,7 +292,11 @@ pub fn apply_auth(headers: &mut reqwest::header::HeaderMap, p: Protocol, api_key
 /// 透传改写（就地修改 body）：
 /// 1. 模型名重写（Gemini 在 URL 不在 body，跳过）；
 /// 2. 请求体 add/set 覆盖（支持嵌套路径 "a.b.c"；set 覆盖已有、add 仅缺失时写入）。
-pub fn rewrite_body(body: &mut serde_json::Value, upstream_model: Option<&str>, overrides: Option<&Overrides>) {
+pub fn rewrite_body(
+    body: &mut serde_json::Value,
+    upstream_model: Option<&str>,
+    overrides: Option<&Overrides>,
+) {
     if let Some(m) = upstream_model {
         body["model"] = serde_json::Value::String(m.to_string());
     }
@@ -330,13 +347,11 @@ fn set_nested_segs(cur: &mut serde_json::Value, segs: &[&str], value: serde_json
         serde_json::Value::Object(obj) => {
             let child = match obj.entry(segs[0].to_string()) {
                 serde_json::map::Entry::Occupied(o) => o.into_mut(),
-                serde_json::map::Entry::Vacant(v) => {
-                    v.insert(if next_is_index {
-                        serde_json::Value::Array(Default::default())
-                    } else {
-                        serde_json::Value::Object(Default::default())
-                    })
-                }
+                serde_json::map::Entry::Vacant(v) => v.insert(if next_is_index {
+                    serde_json::Value::Array(Default::default())
+                } else {
+                    serde_json::Value::Object(Default::default())
+                }),
             };
             if child.is_array() && !next_is_index {
                 // 现存数组上无法用非索引键写入 → 忽略，绝不把数组转成对象（review P2-4）
@@ -391,7 +406,10 @@ fn path_exists(cur: &serde_json::Value, segs: &[&str]) -> bool {
 }
 
 /// 请求头 add/set 覆盖（headers 为即将发往上游的头）。
-pub fn apply_header_overrides(headers: &mut reqwest::header::HeaderMap, overrides: Option<&Overrides>) {
+pub fn apply_header_overrides(
+    headers: &mut reqwest::header::HeaderMap,
+    overrides: Option<&Overrides>,
+) {
     let Some(o) = overrides else { return };
     for (k, v) in &o.headers.set {
         apply_header_one(headers, k, v, true);
@@ -401,7 +419,12 @@ pub fn apply_header_overrides(headers: &mut reqwest::header::HeaderMap, override
     }
 }
 
-fn apply_header_one(headers: &mut reqwest::header::HeaderMap, name: &str, value: &serde_json::Value, overwrite: bool) {
+fn apply_header_one(
+    headers: &mut reqwest::header::HeaderMap,
+    name: &str,
+    value: &serde_json::Value,
+    overwrite: bool,
+) {
     let Ok(hname) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
         tracing::warn!("无效请求头名 `{name}` 跳过覆盖");
         return;
@@ -434,9 +457,15 @@ pub async fn execute_nonstream(
 ) -> Result<serde_json::Value, UpstreamError> {
     let resp = post_json(client, url, headers, body, timeout_ms).await?;
     let status = resp.status();
-    let bytes = resp.bytes().await.map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
     if !status.is_success() {
-        return Err(UpstreamError::Status(status.as_u16(), truncate_text(&bytes, 2048)));
+        return Err(UpstreamError::Status(
+            status.as_u16(),
+            truncate_text(&bytes, 2048),
+        ));
     }
     serde_json::from_slice(&bytes).map_err(|e| UpstreamError::BodyRead(e.to_string()))
 }
@@ -454,8 +483,14 @@ pub async fn execute_stream(
     let resp = post_json(client, url, headers, body, timeout_ms).await?;
     let status = resp.status();
     if !status.is_success() {
-        let bytes = resp.bytes().await.map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
-        return Err(UpstreamError::Status(status.as_u16(), truncate_text(&bytes, 2048)));
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| UpstreamError::BodyRead(e.to_string()))?;
+        return Err(UpstreamError::Status(
+            status.as_u16(),
+            truncate_text(&bytes, 2048),
+        ));
     }
     Ok(resp)
 }
@@ -503,10 +538,16 @@ pub fn rewrite_sse_payload(data: &str, model: &str, request_id: &str) -> String 
         Ok(mut v) => {
             if let Some(obj) = v.as_object_mut() {
                 if obj.contains_key("model") {
-                    obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::Value::String(model.to_string()),
+                    );
                 }
                 if obj.contains_key("id") {
-                    obj.insert("id".to_string(), serde_json::Value::String(request_id.to_string()));
+                    obj.insert(
+                        "id".to_string(),
+                        serde_json::Value::String(request_id.to_string()),
+                    );
                 }
             }
             encode_event(&v.to_string())
@@ -546,7 +587,10 @@ pub fn sse_passthrough_stream(
                         let out = rewrite_sse_payload(&ev, &st.gateway_model, &st.request_id);
                         st.queue.push_back(Ok(Bytes::from(out.into_bytes())));
                     }
-                    st.queue.push_back(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    st.queue.push_back(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    )));
                 }
                 None => {
                     st.done = true;
@@ -600,7 +644,10 @@ pub fn sse_convert_stream(
                     for ev in st.parser.finish() {
                         process_convert_frame(&mut st, &ev);
                     }
-                    st.queue.push_back(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    st.queue.push_back(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    )));
                 }
                 None => {
                     st.done = true;
@@ -612,7 +659,8 @@ pub fn sse_convert_stream(
                     match stream_end(st.to, &mut st.to_state, &mut ctx) {
                         Ok(events) => {
                             for ev in events {
-                                st.queue.push_back(Ok(Bytes::from(encode_event(&ev).into_bytes())));
+                                st.queue
+                                    .push_back(Ok(Bytes::from(encode_event(&ev).into_bytes())));
                             }
                         }
                         Err(e) => tracing::warn!("转换终止事件失败: {e}"),
@@ -642,7 +690,8 @@ fn process_convert_frame(st: &mut ConvertState, data: &str) {
         Ok(Some(chunk)) => match chunk_from_ir(st.to, &chunk, &mut st.to_state, &mut ctx) {
             Ok(events) => {
                 for ev in events {
-                    st.queue.push_back(Ok(Bytes::from(encode_event(&ev).into_bytes())));
+                    st.queue
+                        .push_back(Ok(Bytes::from(encode_event(&ev).into_bytes())));
                 }
             }
             Err(e) => tracing::warn!("转换帧写 IR→输出失败: {e}"),
@@ -655,7 +704,10 @@ fn process_convert_frame(st: &mut ConvertState, data: &str) {
 
 fn log_degraded(ctx: &ConvCtx) {
     if !ctx.degraded.is_empty() {
-        tracing::warn!("转换降级字段: {}", ctx.degraded_header().unwrap_or_default());
+        tracing::warn!(
+            "转换降级字段: {}",
+            ctx.degraded_header().unwrap_or_default()
+        );
     }
 }
 
@@ -684,11 +736,23 @@ mod tests {
 
     #[test]
     fn endpoint_path_variant() {
-        assert_eq!(endpoint_path(Protocol::OpenaiChat, "m", false), "/chat/completions");
-        assert_eq!(endpoint_path(Protocol::OpenaiResponses, "m", false), "/responses");
+        assert_eq!(
+            endpoint_path(Protocol::OpenaiChat, "m", false),
+            "/chat/completions"
+        );
+        assert_eq!(
+            endpoint_path(Protocol::OpenaiResponses, "m", false),
+            "/responses"
+        );
         assert_eq!(endpoint_path(Protocol::Anthropic, "m", false), "/messages");
-        assert_eq!(endpoint_path(Protocol::Gemini, "m", false), "/models/m:generateContent");
-        assert_eq!(endpoint_path(Protocol::Gemini, "m", true), "/models/m:streamGenerateContent?alt=sse");
+        assert_eq!(
+            endpoint_path(Protocol::Gemini, "m", false),
+            "/models/m:generateContent"
+        );
+        assert_eq!(
+            endpoint_path(Protocol::Gemini, "m", true),
+            "/models/m:streamGenerateContent?alt=sse"
+        );
     }
 
     #[test]
@@ -729,9 +793,15 @@ mod tests {
     fn apply_auth_openai() {
         let mut h = HeaderMap::new();
         apply_auth(&mut h, Protocol::OpenaiChat, Some("sk-1"));
-        assert_eq!(h.get("authorization").unwrap().to_str().unwrap(), "Bearer sk-1");
+        assert_eq!(
+            h.get("authorization").unwrap().to_str().unwrap(),
+            "Bearer sk-1"
+        );
         apply_auth(&mut h, Protocol::OpenaiResponses, Some("sk-2"));
-        assert_eq!(h.get("authorization").unwrap().to_str().unwrap(), "Bearer sk-2");
+        assert_eq!(
+            h.get("authorization").unwrap().to_str().unwrap(),
+            "Bearer sk-2"
+        );
     }
 
     #[test]
@@ -739,7 +809,10 @@ mod tests {
         let mut h = HeaderMap::new();
         apply_auth(&mut h, Protocol::Anthropic, Some("key"));
         assert_eq!(h.get("x-api-key").unwrap().to_str().unwrap(), "key");
-        assert_eq!(h.get("anthropic-version").unwrap().to_str().unwrap(), "2023-06-01");
+        assert_eq!(
+            h.get("anthropic-version").unwrap().to_str().unwrap(),
+            "2023-06-01"
+        );
     }
 
     #[test]
@@ -762,7 +835,8 @@ mod tests {
         let mut b = json!({ "model": "old", "temperature": 0 });
         let overrides: Overrides = serde_json::from_value(json!({
             "body": { "set": { "a": 1, "b.c": "x", "d.e.f": [1, 2] } }
-        })).unwrap();
+        }))
+        .unwrap();
         rewrite_body(&mut b, Some("new-model"), Some(&overrides));
         assert_eq!(b["model"], json!("new-model"));
         assert_eq!(b["a"], json!(1));
@@ -775,7 +849,8 @@ mod tests {
         let mut b = json!({ "b": { "c": "old" } });
         let overrides: Overrides = serde_json::from_value(json!({
             "body": { "set": { "b.c": "new" } }
-        })).unwrap();
+        }))
+        .unwrap();
         rewrite_body(&mut b, None, Some(&overrides));
         assert_eq!(b["b"]["c"], json!("new"));
     }
@@ -785,7 +860,8 @@ mod tests {
         let mut b = json!({ "a": 1, "b": { "c": 2 } });
         let overrides: Overrides = serde_json::from_value(json!({
             "body": { "add": { "a": 99, "b.c": 99, "x.y": 5 } }
-        })).unwrap();
+        }))
+        .unwrap();
         rewrite_body(&mut b, None, Some(&overrides));
         // 已存在 → 不改
         assert_eq!(b["a"], json!(1));
@@ -803,7 +879,8 @@ mod tests {
                 "set": { "x-existing": "n", "x-new": "y" },
                 "add": { "x-existing": "ignored", "x-only-add": "z" }
             }
-        })).unwrap();
+        }))
+        .unwrap();
         apply_header_overrides(&mut h, Some(&overrides));
         assert_eq!(h.get("x-existing").unwrap().to_str().unwrap(), "n");
         assert_eq!(h.get("x-new").unwrap().to_str().unwrap(), "y");
@@ -815,7 +892,8 @@ mod tests {
         let mut h = HeaderMap::new();
         let overrides: Overrides = serde_json::from_value(json!({
             "headers": { "set": { "bad name": "x", "ok": "1" } }
-        })).unwrap();
+        }))
+        .unwrap();
         apply_header_overrides(&mut h, Some(&overrides));
         assert!(h.get("bad name").is_none());
         assert_eq!(h.get("ok").unwrap().to_str().unwrap(), "1");
@@ -824,17 +902,41 @@ mod tests {
     #[test]
     fn no_proxy_match_forms() {
         // CIDR
-        assert!(no_proxy_match(&[vec!["10.0.0.0/8".into()]], "http://10.1.2.3/x"));
-        assert!(!no_proxy_match(&[vec!["10.0.0.0/8".into()]], "http://192.168.1.1/x"));
+        assert!(no_proxy_match(
+            &[vec!["10.0.0.0/8".into()]],
+            "http://10.1.2.3/x"
+        ));
+        assert!(!no_proxy_match(
+            &[vec!["10.0.0.0/8".into()]],
+            "http://192.168.1.1/x"
+        ));
         // 域名（含子域）
-        assert!(no_proxy_match(&[vec!["example.com".into()]], "https://api.example.com/x"));
-        assert!(no_proxy_match(&[vec!["example.com".into()]], "https://example.com/x"));
-        assert!(!no_proxy_match(&[vec!["example.com".into()]], "https://badexample.com/x"));
+        assert!(no_proxy_match(
+            &[vec!["example.com".into()]],
+            "https://api.example.com/x"
+        ));
+        assert!(no_proxy_match(
+            &[vec!["example.com".into()]],
+            "https://example.com/x"
+        ));
+        assert!(!no_proxy_match(
+            &[vec!["example.com".into()]],
+            "https://badexample.com/x"
+        ));
         // * 后缀通配
-        assert!(no_proxy_match(&[vec!["*.example.com".into()]], "https://a.example.com/x"));
-        assert!(!no_proxy_match(&[vec!["*.example.com".into()]], "https://example.com/x"));
+        assert!(no_proxy_match(
+            &[vec!["*.example.com".into()]],
+            "https://a.example.com/x"
+        ));
+        assert!(!no_proxy_match(
+            &[vec!["*.example.com".into()]],
+            "https://example.com/x"
+        ));
         // 多列表取并集
-        assert!(no_proxy_match(&[vec!["a.com".into()], vec!["b.com".into()]], "https://sub.b.com/x"));
+        assert!(no_proxy_match(
+            &[vec!["a.com".into()], vec!["b.com".into()]],
+            "https://sub.b.com/x"
+        ));
     }
 
     #[test]
@@ -842,18 +944,26 @@ mod tests {
         // 模型存在 → 改写；id 存在 → 改写
         let out = rewrite_sse_payload(r#"{"model":"m1","id":"r1","choices":[]}"#, "gm", "rid");
         assert!(out.starts_with("data: "));
-        let v: serde_json::Value = serde_json::from_str(out.trim_start_matches("data: ").trim_end()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(out.trim_start_matches("data: ").trim_end()).unwrap();
         assert_eq!(v["model"], json!("gm"));
         assert_eq!(v["id"], json!("rid"));
         // 无 model/id → 不改
         let out2 = rewrite_sse_payload(r#"{"choices":[]}"#, "gm", "rid");
-        let v2: serde_json::Value = serde_json::from_str(out2.trim_start_matches("data: ").trim_end()).unwrap();
+        let v2: serde_json::Value =
+            serde_json::from_str(out2.trim_start_matches("data: ").trim_end()).unwrap();
         assert!(v2.get("model").is_none());
         assert!(v2.get("id").is_none());
         // [DONE] 原样
-        assert_eq!(rewrite_sse_payload("[DONE]", "gm", "rid"), "data: [DONE]\n\n");
+        assert_eq!(
+            rewrite_sse_payload("[DONE]", "gm", "rid"),
+            "data: [DONE]\n\n"
+        );
         // 解析失败原样放行
-        assert_eq!(rewrite_sse_payload("not-json", "gm", "rid"), "data: not-json\n\n");
+        assert_eq!(
+            rewrite_sse_payload("not-json", "gm", "rid"),
+            "data: not-json\n\n"
+        );
     }
 
     #[test]

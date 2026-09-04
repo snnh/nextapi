@@ -117,12 +117,20 @@ fn segments_to_xml(seg_arr: &serde_json::Value) -> String {
 }
 
 /// 从 item.segments 取值（按 unit 名取分段数组）。
-fn unit_segments<'a>(segments: Option<&'a serde_json::Value>, unit: &str) -> Option<&'a serde_json::Value> {
+fn unit_segments<'a>(
+    segments: Option<&'a serde_json::Value>,
+    unit: &str,
+) -> Option<&'a serde_json::Value> {
     segments.and_then(|m| m.get(unit))
 }
 
 /// 生成一个 token 列的 XML 节点；无价格时返回空串。
-fn token_col_xml(tag: &str, unit: &str, price: Option<Decimal>, segments: Option<&serde_json::Value>) -> String {
+fn token_col_xml(
+    tag: &str,
+    unit: &str,
+    price: Option<Decimal>,
+    segments: Option<&serde_json::Value>,
+) -> String {
     let Some(p) = price else {
         return String::new();
     };
@@ -152,7 +160,10 @@ fn media_xml(tag: &str, rules: Option<&serde_json::Value>) -> String {
             out.push_str(&format!("<price>{}</price>", json_value_text(p)));
         }
         if let Some(dk) = item.get("dimension_key").and_then(|v| v.as_str()) {
-            out.push_str(&format!("<dimension_key>{}</dimension_key>", xml_escape(dk)));
+            out.push_str(&format!(
+                "<dimension_key>{}</dimension_key>",
+                xml_escape(dk)
+            ));
         }
         if let Some(dims) = item.get("dimensions") {
             out.push_str(&dimensions_xml(dims));
@@ -202,9 +213,18 @@ pub fn export_xml(items: &[PriceExportItem]) -> String {
     out.push_str("<prices schema=\"nextapi-prices/v1\">");
     for item in items {
         out.push_str("<price>");
-        out.push_str(&format!("<model_id>{}</model_id>", xml_escape(&item.model_id)));
-        out.push_str(&format!("<upstream>{}</upstream>", xml_escape(&item.upstream)));
-        out.push_str(&format!("<currency>{}</currency>", xml_escape(&item.currency)));
+        out.push_str(&format!(
+            "<model_id>{}</model_id>",
+            xml_escape(&item.model_id)
+        ));
+        out.push_str(&format!(
+            "<upstream>{}</upstream>",
+            xml_escape(&item.upstream)
+        ));
+        out.push_str(&format!(
+            "<currency>{}</currency>",
+            xml_escape(&item.currency)
+        ));
         for (tag, unit) in TOKEN_COLS {
             let price = match *tag {
                 "input_per_m" => item.input_per_m,
@@ -295,12 +315,22 @@ fn parse_tree(bytes: &[u8]) -> ApiResult<XNode> {
             Ok(Event::Start(e)) => {
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 let attrs = read_attrs(&e)?;
-                stack.push(XNode { name, attrs, children: Vec::new(), text: String::new() });
+                stack.push(XNode {
+                    name,
+                    attrs,
+                    children: Vec::new(),
+                    text: String::new(),
+                });
             }
             Ok(Event::Empty(e)) => {
                 let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 let attrs = read_attrs(&e)?;
-                let node = XNode { name, attrs, children: Vec::new(), text: String::new() };
+                let node = XNode {
+                    name,
+                    attrs,
+                    children: Vec::new(),
+                    text: String::new(),
+                };
                 push_child(&mut stack, &mut root, node);
             }
             Ok(Event::Text(e)) => {
@@ -429,7 +459,11 @@ pub fn parse_xml(bytes: &[u8]) -> ApiResult<Vec<PriceExportItem>> {
     }
     let mut items = Vec::new();
     for price in root.children.iter().filter(|c| c.name == "price") {
-        let text_of = |name: &str| child(price, name).map(|c| c.text.trim().to_string()).unwrap_or_default();
+        let text_of = |name: &str| {
+            child(price, name)
+                .map(|c| c.text.trim().to_string())
+                .unwrap_or_default()
+        };
         let mut item = PriceExportItem {
             model_id: text_of("model_id"),
             upstream: text_of("upstream"),

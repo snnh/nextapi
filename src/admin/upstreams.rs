@@ -184,12 +184,25 @@ async fn create_upstream(
     admin: AdminUsername,
     Json(body): Json<CreateUpstreamReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    validate_upstream(&body.name, &body.base_url, body.protocols.as_deref(), body.timeout_ms, body.breaker_threshold)?;
+    validate_upstream(
+        &body.name,
+        &body.base_url,
+        body.protocols.as_deref(),
+        body.timeout_ms,
+        body.breaker_threshold,
+    )?;
 
     let api_key_enc = encrypt_create_api_key(&state, body.api_key.as_deref())?;
-    let protocols = body.protocols.clone().unwrap_or_else(|| vec!["openai_chat".to_string()]);
+    let protocols = body
+        .protocols
+        .clone()
+        .unwrap_or_else(|| vec!["openai_chat".to_string()]);
     let enabled = body.enabled.unwrap_or(true);
-    let disabled_by = if enabled { None } else { Some("manual".to_string()) };
+    let disabled_by = if enabled {
+        None
+    } else {
+        Some("manual".to_string())
+    };
     let timeout_ms = body.timeout_ms.unwrap_or(300000);
     let breaker_threshold = body.breaker_threshold.unwrap_or(5);
     let extra = body.extra.clone().unwrap_or_else(|| serde_json::json!({}));
@@ -216,7 +229,11 @@ async fn create_upstream(
     .fetch_one(&state.db)
     .await?;
 
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     auth::audit(
         &state,
         &admin.0,
@@ -253,7 +270,13 @@ async fn update_upstream(
     let proxy_id = body.proxy_id.or(row.proxy_id);
     let extra = body.extra.unwrap_or_else(|| row.extra.clone());
 
-    validate_upstream(&name, &base_url, Some(&protocols), Some(timeout_ms), Some(breaker_threshold))?;
+    validate_upstream(
+        &name,
+        &base_url,
+        Some(&protocols),
+        Some(timeout_ms),
+        Some(breaker_threshold),
+    )?;
 
     // api_key：未传/掩码保持、空串清除、其他加密更新
     let api_key_enc = match api_key_semantics(body.api_key.as_deref()) {
@@ -261,9 +284,16 @@ async fn update_upstream(
         ApiKeySemantics::Clear => None,
         ApiKeySemantics::Set(plain) => {
             if !state.crypto.is_available() {
-                return Err(ApiError::bad_request("未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key"));
+                return Err(ApiError::bad_request(
+                    "未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key",
+                ));
             }
-            Some(state.crypto.encrypt(&plain).map_err(|e| ApiError::bad_request(e.to_string()))?)
+            Some(
+                state
+                    .crypto
+                    .encrypt(&plain)
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?,
+            )
         }
     };
 
@@ -272,10 +302,18 @@ async fn update_upstream(
         if enabled {
             (None, None, 0)
         } else {
-            (Some("manual".to_string()), row.cooldown_until, row.consecutive_failures)
+            (
+                Some("manual".to_string()),
+                row.cooldown_until,
+                row.consecutive_failures,
+            )
         }
     } else {
-        (row.disabled_by, row.cooldown_until, row.consecutive_failures)
+        (
+            row.disabled_by,
+            row.cooldown_until,
+            row.consecutive_failures,
+        )
     };
 
     sqlx::query(
@@ -303,7 +341,11 @@ async fn update_upstream(
     .execute(&state.db)
     .await?;
 
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
     // 启停切换后清除内存熔断状态
     if body.enabled.is_some() {
         state.breaker.reset(id);
@@ -340,8 +382,21 @@ async fn delete_upstream(
     // 清理熔断状态（删除上游后不再保留冷却/半开残留，review P3）
     state.breaker.reset(id);
 
-    state.cache.reload(&state.db, &state.crypto).await.map_err(ApiError::internal)?;
-    auth::audit(&state, &admin.0, "upstream.delete", "upstream", Some(&id.to_string()), serde_json::json!({}), None).await?;
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
+    auth::audit(
+        &state,
+        &admin.0,
+        "upstream.delete",
+        "upstream",
+        Some(&id.to_string()),
+        serde_json::json!({}),
+        None,
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -355,8 +410,15 @@ async fn test_upstream(
     let up = snap.upstreams.get(&id).cloned().ok_or(ApiError::NotFound)?;
 
     // 取该上游的客户端（按代理/直连分池）+ 探测协议
-    let client = state.client_pools.client_for(&up, &snap, &state.hot.load().proxy.default_proxy_id);
-    let proto = up.protocol_list().first().copied().unwrap_or(Protocol::OpenaiChat);
+    let client =
+        state
+            .client_pools
+            .client_for(&up, &snap, &state.hot.load().proxy.default_proxy_id);
+    let proto = up
+        .protocol_list()
+        .first()
+        .copied()
+        .unwrap_or(Protocol::OpenaiChat);
 
     let url = format!("{}/models", up.base_url.trim_end_matches('/'));
     let mut headers = reqwest::header::HeaderMap::new();
@@ -364,23 +426,33 @@ async fn test_upstream(
     upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
 
     let started = std::time::Instant::now();
-    let resp = client.get(&url).headers(headers).timeout(Duration::from_secs(10)).send().await;
+    let resp = client
+        .get(&url)
+        .headers(headers)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
     let latency_ms = started.elapsed().as_millis() as u64;
 
     match resp {
         Ok(r) => {
             let status = r.status().as_u16();
-            Ok(Json(serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms })))
+            Ok(Json(
+                serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms }),
+            ))
         }
-        Err(e) => {
-            Ok(Json(serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })))
-        }
+        Err(e) => Ok(Json(
+            serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
+        )),
     }
 }
 
 /// 图片上游协议值（契约 m6：upstreams.protocols 新增四个 images_* 值，其余校验不变）。
 fn is_images_protocol(p: &str) -> bool {
-    matches!(p, "images_openai" | "images_gemini" | "images_dashscope_sync" | "images_dashscope_async")
+    matches!(
+        p,
+        "images_openai" | "images_gemini" | "images_dashscope_sync" | "images_dashscope_async"
+    )
 }
 
 /// 校验上游：名称/地址非空、协议可解析（或属于图片协议白名单）、超时/熔断阈值 > 0。
@@ -399,21 +471,29 @@ fn validate_upstream(
         return Err(ApiError::bad_request("上游名称不能为空"));
     }
     if name.chars().count() > MAX_NAME {
-        return Err(ApiError::bad_request(format!("name 不能超过 {MAX_NAME} 字符")));
+        return Err(ApiError::bad_request(format!(
+            "name 不能超过 {MAX_NAME} 字符"
+        )));
     }
     if base_url.trim().is_empty() {
         return Err(ApiError::bad_request("上游 base_url 不能为空"));
     }
     if base_url.chars().count() > MAX_URL {
-        return Err(ApiError::bad_request(format!("base_url 不能超过 {MAX_URL} 字符")));
+        return Err(ApiError::bad_request(format!(
+            "base_url 不能超过 {MAX_URL} 字符"
+        )));
     }
     if let Some(ps) = protocols {
         if ps.len() > MAX_PROTOCOLS {
-            return Err(ApiError::bad_request(format!("protocols 最多 {MAX_PROTOCOLS} 项")));
+            return Err(ApiError::bad_request(format!(
+                "protocols 最多 {MAX_PROTOCOLS} 项"
+            )));
         }
         for p in ps {
             if p.parse::<Protocol>().is_err() && !is_images_protocol(p) {
-                return Err(ApiError::bad_request(format!("protocols 包含非法协议: {p}")));
+                return Err(ApiError::bad_request(format!(
+                    "protocols 包含非法协议: {p}"
+                )));
             }
         }
     }
@@ -437,17 +517,27 @@ fn validate_upstream(
 }
 
 /// 创建路径的 api_key 加密：非空即加密（密钥缺失 → BadRequest）；空/None → None。
-fn encrypt_create_api_key(state: &AppState, api_key: Option<&str>) -> Result<Option<String>, ApiError> {
+fn encrypt_create_api_key(
+    state: &AppState,
+    api_key: Option<&str>,
+) -> Result<Option<String>, ApiError> {
     match api_key {
         Some(ak) if !ak.is_empty() => {
             // 掩码字面量是「保持原值」的保留语义，创建路径无旧值可保持 → 拒绝（review P2-13）
             if ak == "***" {
-                return Err(ApiError::bad_request("\"***\" 为掩码保留值，不能作为真实密钥"));
+                return Err(ApiError::bad_request(
+                    "\"***\" 为掩码保留值，不能作为真实密钥",
+                ));
             }
             if !state.crypto.is_available() {
-                return Err(ApiError::bad_request("未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key"));
+                return Err(ApiError::bad_request(
+                    "未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key",
+                ));
             }
-            let enc = state.crypto.encrypt(ak).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            let enc = state
+                .crypto
+                .encrypt(ak)
+                .map_err(|e| ApiError::bad_request(e.to_string()))?;
             Ok(Some(enc))
         }
         _ => Ok(None),
@@ -493,15 +583,32 @@ mod tests {
         assert_eq!(api_key_semantics(None), ApiKeySemantics::Keep);
         assert_eq!(api_key_semantics(Some("***")), ApiKeySemantics::Keep);
         assert_eq!(api_key_semantics(Some("")), ApiKeySemantics::Clear);
-        assert_eq!(api_key_semantics(Some("new-key")), ApiKeySemantics::Set("new-key".into()));
+        assert_eq!(
+            api_key_semantics(Some("new-key")),
+            ApiKeySemantics::Set("new-key".into())
+        );
     }
 
     #[test]
     fn validate_upstream_cases() {
-        assert!(validate_upstream("u", "https://x.com", Some(&["openai_chat".into()]), Some(300_000), Some(5)).is_ok());
+        assert!(validate_upstream(
+            "u",
+            "https://x.com",
+            Some(&["openai_chat".into()]),
+            Some(300_000),
+            Some(5)
+        )
+        .is_ok());
         assert!(validate_upstream("", "https://x.com", None, None, None).is_err());
         assert!(validate_upstream("u", "", None, None, None).is_err());
-        assert!(validate_upstream("u", "https://x.com", Some(&["bad_proto".into()]), None, None).is_err());
+        assert!(validate_upstream(
+            "u",
+            "https://x.com",
+            Some(&["bad_proto".into()]),
+            None,
+            None
+        )
+        .is_err());
         assert!(validate_upstream("u", "https://x.com", None, Some(0), None).is_err());
         assert!(validate_upstream("u", "https://x.com", None, None, Some(-1)).is_err());
     }
@@ -509,8 +616,16 @@ mod tests {
     #[test]
     fn validate_upstream_accepts_images_protocols() {
         // 契约 m6：新增四个 images_* 协议值放行
-        for p in ["images_openai", "images_gemini", "images_dashscope_sync", "images_dashscope_async"] {
-            assert!(validate_upstream("u", "https://x.com", Some(&[p.into()]), None, None).is_ok(), "应放行 {p}");
+        for p in [
+            "images_openai",
+            "images_gemini",
+            "images_dashscope_sync",
+            "images_dashscope_async",
+        ] {
+            assert!(
+                validate_upstream("u", "https://x.com", Some(&[p.into()]), None, None).is_ok(),
+                "应放行 {p}"
+            );
         }
         // 常规协议 + 图片协议混合放行
         assert!(validate_upstream(
@@ -522,6 +637,13 @@ mod tests {
         )
         .is_ok());
         // 仍拒绝非法协议（图片协议拼错）
-        assert!(validate_upstream("u", "https://x.com", Some(&["images_bad".into()]), None, None).is_err());
+        assert!(validate_upstream(
+            "u",
+            "https://x.com",
+            Some(&["images_bad".into()]),
+            None,
+            None
+        )
+        .is_err());
     }
 }

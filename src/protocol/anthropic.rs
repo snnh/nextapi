@@ -113,7 +113,10 @@ fn parse_system(sys: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) -> Result<(
         for block in arr {
             match block["type"].as_str().unwrap_or_default() {
                 "text" => buf.push_str(block["text"].as_str().unwrap_or_default()),
-                other => ctx.degrade("system.block.type", format!("未知 system block 类型: {other}")),
+                other => ctx.degrade(
+                    "system.block.type",
+                    format!("未知 system block 类型: {other}"),
+                ),
             }
             if let Some(cc) = block.get("cache_control") {
                 if req.ext.cache_control.is_none() {
@@ -141,7 +144,11 @@ fn parse_system(sys: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) -> Result<(
 
 /// 解析单条 Anthropic message（user/assistant）。
 /// 由于 `tool_result` block 会展开为独立 Tool 消息，此函数返回 Vec<IrMessage>。
-fn parse_anth_message(msg: &Value, ext: &mut IrExt, ctx: &mut ConvCtx) -> Result<Vec<IrMessage>, ConvertError> {
+fn parse_anth_message(
+    msg: &Value,
+    ext: &mut IrExt,
+    ctx: &mut ConvCtx,
+) -> Result<Vec<IrMessage>, ConvertError> {
     if !msg.is_object() {
         return Err(ConvertError::Parse("message 不是对象".into()));
     }
@@ -192,7 +199,10 @@ fn parse_anth_message(msg: &Value, ext: &mut IrExt, ctx: &mut ConvCtx) -> Result
                         "url" => parts.push(IrPart::ImageUrl {
                             url: src["url"].as_str().unwrap_or_default().to_string(),
                         }),
-                        other => ctx.degrade("content.block.image.source", format!("未知图片源类型: {other}")),
+                        other => ctx.degrade(
+                            "content.block.image.source",
+                            format!("未知图片源类型: {other}"),
+                        ),
                     }
                 }
                 "tool_use" => tool_calls.push(IrToolCall {
@@ -201,7 +211,10 @@ fn parse_anth_message(msg: &Value, ext: &mut IrExt, ctx: &mut ConvCtx) -> Result
                     arguments: input_to_arguments(&block["input"]),
                 }),
                 "tool_result" => {
-                    let tid = block["tool_use_id"].as_str().unwrap_or_default().to_string();
+                    let tid = block["tool_use_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
                     tool_msgs.push(IrMessage {
                         role: IrRole::Tool,
                         tool_call_id: Some(tid),
@@ -229,7 +242,8 @@ fn parse_anth_message(msg: &Value, ext: &mut IrExt, ctx: &mut ConvCtx) -> Result
             reasoning_content: reasoning,
             ..Default::default()
         };
-        if main.content.is_some() || !main.tool_calls.is_empty() || main.reasoning_content.is_some() {
+        if main.content.is_some() || !main.tool_calls.is_empty() || main.reasoning_content.is_some()
+        {
             out.push(main);
         }
         out.extend(tool_msgs);
@@ -298,7 +312,8 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
             .as_array()
             .ok_or_else(|| ConvertError::Parse("messages 不是数组".into()))?;
         for m in arr {
-            req.messages.extend(parse_anth_message(m, &mut req.ext, ctx)?);
+            req.messages
+                .extend(parse_anth_message(m, &mut req.ext, ctx)?);
         }
     }
 
@@ -309,7 +324,11 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
         req.stop = if let Some(s) = ss.as_str() {
             Some(vec![s.to_string()])
         } else if let Some(arr) = ss.as_array() {
-            Some(arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            Some(
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect(),
+            )
         } else {
             None
         };
@@ -353,7 +372,9 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
 // ---------------------------------------------------------------------------
 
 fn number_f64(v: f64) -> Value {
-    serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
+    serde_json::Number::from_f64(v)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
 }
 
 fn text_block(text: &str) -> Value {
@@ -364,7 +385,10 @@ fn text_block(text: &str) -> Value {
 fn content_to_anthropic_blocks(content: &IrContent, ctx: &mut ConvCtx) -> Vec<Value> {
     match content {
         IrContent::Text(s) => vec![text_block(s)],
-        IrContent::Parts(parts) => parts.iter().filter_map(|p| part_to_anth_block(p, ctx)).collect(),
+        IrContent::Parts(parts) => parts
+            .iter()
+            .filter_map(|p| part_to_anth_block(p, ctx))
+            .collect(),
     }
 }
 
@@ -394,7 +418,12 @@ fn part_to_anth_block(p: &IrPart, ctx: &mut ConvCtx) -> Option<Value> {
 /// assistant 消息的 thinking block；signature 从请求级 ext.extra[thinking_signature] 原样携带。
 fn thinking_block(rc: &str, req: &IrRequest) -> Value {
     let mut b = serde_json::json!({"type": "thinking", "thinking": rc});
-    if let Some(sig) = req.ext.extra.get("thinking_signature").and_then(|v| v.as_str()) {
+    if let Some(sig) = req
+        .ext
+        .extra
+        .get("thinking_signature")
+        .and_then(|v| v.as_str())
+    {
         b["signature"] = Value::String(sig.to_string());
     }
     b
@@ -402,7 +431,8 @@ fn thinking_block(rc: &str, req: &IrRequest) -> Value {
 
 /// assistant 消息的 tool_use block；arguments JSON 字符串解析回对象，解析失败用原字符串兜底。
 fn tool_use_block(tc: &IrToolCall) -> Value {
-    let input = serde_json::from_str::<Value>(&tc.arguments).unwrap_or_else(|_| Value::String(tc.arguments.clone()));
+    let input = serde_json::from_str::<Value>(&tc.arguments)
+        .unwrap_or_else(|_| Value::String(tc.arguments.clone()));
     serde_json::json!({"type": "tool_use", "id": tc.id, "name": tc.name, "input": input})
 }
 
@@ -410,7 +440,12 @@ fn tool_use_block(tc: &IrToolCall) -> Value {
 fn tool_result_block(m: &IrMessage, ctx: &mut ConvCtx) -> Value {
     let content = match &m.content {
         Some(IrContent::Text(s)) => Value::String(s.clone()),
-        Some(IrContent::Parts(parts)) => Value::Array(parts.iter().filter_map(|p| part_to_anth_block(p, ctx)).collect()),
+        Some(IrContent::Parts(parts)) => Value::Array(
+            parts
+                .iter()
+                .filter_map(|p| part_to_anth_block(p, ctx))
+                .collect(),
+        ),
         None => Value::String(String::new()),
     };
     serde_json::json!({
@@ -576,7 +611,10 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     body.insert("max_tokens".into(), Value::from(max_tokens));
 
     if !req.tools.is_empty() {
-        body.insert("tools".into(), Value::Array(req.tools.iter().map(tool_to_json).collect()));
+        body.insert(
+            "tools".into(),
+            Value::Array(req.tools.iter().map(tool_to_json).collect()),
+        );
     }
     if let Some(tc) = &req.tool_choice {
         body.insert("tool_choice".into(), tool_choice_to_anthropic(tc));
@@ -591,7 +629,10 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         body.insert("top_k".into(), Value::from(tk));
     }
     if let Some(stop) = &req.stop {
-        body.insert("stop_sequences".into(), Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()));
+        body.insert(
+            "stop_sequences".into(),
+            Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()),
+        );
     }
     body.insert("stream".into(), Value::Bool(req.stream));
     if let Some(u) = &req.user {
@@ -623,10 +664,20 @@ fn tool_to_json(t: &IrTool) -> Value {
 /// cache_read_input_tokens→cache_read_tokens、cache_creation_input_tokens→cache_write_tokens。
 fn parse_usage(u: &Value) -> IrUsage {
     let mut usage = IrUsage::default();
-    usage.prompt_tokens = u["input_tokens"].as_u64().or_else(|| u["prompt_tokens"].as_u64()).unwrap_or(0);
-    usage.completion_tokens = u["output_tokens"].as_u64().or_else(|| u["completion_tokens"].as_u64()).unwrap_or(0);
-    usage.cache_read_tokens = u["cache_read_input_tokens"].as_u64().or_else(|| u["cache_read_tokens"].as_u64());
-    usage.cache_write_tokens = u["cache_creation_input_tokens"].as_u64().or_else(|| u["cache_creation_tokens"].as_u64());
+    usage.prompt_tokens = u["input_tokens"]
+        .as_u64()
+        .or_else(|| u["prompt_tokens"].as_u64())
+        .unwrap_or(0);
+    usage.completion_tokens = u["output_tokens"]
+        .as_u64()
+        .or_else(|| u["completion_tokens"].as_u64())
+        .unwrap_or(0);
+    usage.cache_read_tokens = u["cache_read_input_tokens"]
+        .as_u64()
+        .or_else(|| u["cache_read_tokens"].as_u64());
+    usage.cache_write_tokens = u["cache_creation_input_tokens"]
+        .as_u64()
+        .or_else(|| u["cache_creation_tokens"].as_u64());
     usage.total_tokens = u["total_tokens"].as_u64();
     if let Some(o) = u.as_object() {
         for (k, v) in o {
@@ -652,7 +703,11 @@ fn parse_usage(u: &Value) -> IrUsage {
 /// 解析响应 content blocks 为单条 assistant 消息。
 /// text 拼接为 IrContent（单个 text 回落 Text，多文本/含图则 Parts）；tool_use→tool_calls；
 /// thinking→reasoning_content；signature 存响应级 extra["thinking_signature"]。
-fn parse_response_content(content: &Value, resp: &mut IrResponse, ctx: &mut ConvCtx) -> Result<IrMessage, ConvertError> {
+fn parse_response_content(
+    content: &Value,
+    resp: &mut IrResponse,
+    ctx: &mut ConvCtx,
+) -> Result<IrMessage, ConvertError> {
     let arr = content
         .as_array()
         .ok_or_else(|| ConvertError::Parse("响应 content 不是数组".into()))?;
@@ -718,7 +773,10 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
         if let Some(ch) = resp.choices.first_mut() {
             ch.finish_reason = Some(normalize_finish_reason(sr));
         }
-        resp.extra.insert("anthropic_stop_reason".into(), Value::String(sr.to_string()));
+        resp.extra.insert(
+            "anthropic_stop_reason".into(),
+            Value::String(sr.to_string()),
+        );
     }
     if let Some(u) = v.get("usage") {
         resp.usage = Some(parse_usage(u));
@@ -769,7 +827,11 @@ fn response_blocks(msg: &IrMessage, resp: &IrResponse, ctx: &mut ConvCtx) -> Vec
     let mut blocks: Vec<Value> = Vec::new();
     if let Some(rc) = &msg.reasoning_content {
         let mut b = serde_json::json!({"type": "thinking", "thinking": rc});
-        if let Some(sig) = resp.extra.get("thinking_signature").and_then(|v| v.as_str()) {
+        if let Some(sig) = resp
+            .extra
+            .get("thinking_signature")
+            .and_then(|v| v.as_str())
+        {
             b["signature"] = Value::String(sig.to_string());
         }
         blocks.push(b);
@@ -798,10 +860,15 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
         Some(c) => (&c.message, c.finish_reason.as_deref()),
         None => (&IrMessage::default(), None),
     };
-    body.insert("content".into(), Value::Array(response_blocks(msg, resp, ctx)));
+    body.insert(
+        "content".into(),
+        Value::Array(response_blocks(msg, resp, ctx)),
+    );
     body.insert("model".into(), Value::String(resp.model.clone()));
 
-    let sr = finish_reason.map(reverse_finish_reason).unwrap_or_else(|| "end_turn".into());
+    let sr = finish_reason
+        .map(reverse_finish_reason)
+        .unwrap_or_else(|| "end_turn".into());
     body.insert("stop_reason".into(), Value::String(sr));
     body.insert("stop_sequence".into(), Value::Null);
 
@@ -843,7 +910,11 @@ fn event_str(v: Value) -> Result<String, ConvertError> {
 }
 
 /// SSE data 载荷 → IR chunk；无业务内容（ping/text 空帧/stop）返回 Ok(None)。
-pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Option<IrChunk>, ConvertError> {
+pub fn chunk_to_ir(
+    data: &str,
+    st: &mut StreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Option<IrChunk>, ConvertError> {
     let v: Value = serde_json::from_str(data).map_err(|e| ConvertError::Parse(e.to_string()))?;
     let _obj = v
         .as_object()
@@ -903,7 +974,10 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
                     Ok(Some(chunk))
                 }
                 other => {
-                    ctx.degrade("stream.content_block_start.type", format!("未知内容块类型: {other}"));
+                    ctx.degrade(
+                        "stream.content_block_start.type",
+                        format!("未知内容块类型: {other}"),
+                    );
                     Ok(None)
                 }
             }
@@ -913,19 +987,37 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
             let dt = v["delta"]["type"].as_str().unwrap_or_default();
             let mut delta = IrDelta::default();
             match dt {
-                "text_delta" => delta.content = Some(v["delta"]["text"].as_str().unwrap_or_default().to_string()),
-                "thinking_delta" => delta.reasoning_content = Some(v["delta"]["thinking"].as_str().unwrap_or_default().to_string()),
+                "text_delta" => {
+                    delta.content =
+                        Some(v["delta"]["text"].as_str().unwrap_or_default().to_string())
+                }
+                "thinking_delta" => {
+                    delta.reasoning_content = Some(
+                        v["delta"]["thinking"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                }
                 "input_json_delta" => {
                     let tool_idx = st.block_to_tool.get(&idx).copied().unwrap_or(0);
                     delta.tool_calls.push(IrToolCallDelta {
                         index: tool_idx,
                         id: None,
                         name: None,
-                        arguments: Some(v["delta"]["partial_json"].as_str().unwrap_or_default().to_string()),
+                        arguments: Some(
+                            v["delta"]["partial_json"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
+                        ),
                     });
                 }
                 other => {
-                    ctx.degrade("stream.content_block_delta.type", format!("未知增量类型: {other}"));
+                    ctx.degrade(
+                        "stream.content_block_delta.type",
+                        format!("未知增量类型: {other}"),
+                    );
                     return Ok(None);
                 }
             }
@@ -974,7 +1066,10 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
             Ok(None)
         }
         "ping" => Ok(None),
-        "error" => Err(ConvertError::Parse(format!("Anthropic 流错误: {}", v["error"].to_string()))),
+        "error" => Err(ConvertError::Parse(format!(
+            "Anthropic 流错误: {}",
+            v["error"].to_string()
+        ))),
         other => {
             ctx.degrade("stream.event.type", format!("未知事件: {other}"));
             Ok(None)
@@ -985,7 +1080,10 @@ pub fn chunk_to_ir(data: &str, st: &mut StreamState, ctx: &mut ConvCtx) -> Resul
 fn message_start_event(st: &StreamState) -> Value {
     let mut usage = Map::new();
     usage.insert("input_tokens".into(), Value::from(st.usage.prompt_tokens));
-    usage.insert("output_tokens".into(), Value::from(st.usage.completion_tokens));
+    usage.insert(
+        "output_tokens".into(),
+        Value::from(st.usage.completion_tokens),
+    );
     if let Some(c) = st.usage.cache_read_tokens {
         usage.insert("cache_read_input_tokens".into(), Value::from(c));
     }
@@ -1026,8 +1124,14 @@ fn content_block_delta_thinking(idx: u32, thinking: &str) -> Value {
 fn content_block_start_tool_use(idx: u32, tc: &IrToolCallDelta) -> Value {
     let mut cb = Map::new();
     cb.insert("type".into(), Value::String("tool_use".into()));
-    cb.insert("id".into(), Value::String(tc.id.clone().unwrap_or_default()));
-    cb.insert("name".into(), Value::String(tc.name.clone().unwrap_or_default()));
+    cb.insert(
+        "id".into(),
+        Value::String(tc.id.clone().unwrap_or_default()),
+    );
+    cb.insert(
+        "name".into(),
+        Value::String(tc.name.clone().unwrap_or_default()),
+    );
     cb.insert("input".into(), json_object());
     serde_json::json!({"type": "content_block_start", "index": idx, "content_block": Value::Object(cb)})
 }
@@ -1047,7 +1151,10 @@ fn content_block_stop(idx: u32) -> Value {
 fn message_delta_event(fr: &str, st: &StreamState) -> Value {
     let sr = reverse_finish_reason(fr);
     let mut usage = Map::new();
-    usage.insert("output_tokens".into(), Value::from(st.usage.completion_tokens));
+    usage.insert(
+        "output_tokens".into(),
+        Value::from(st.usage.completion_tokens),
+    );
     serde_json::json!({
         "type": "message_delta",
         "delta": {"stop_reason": sr, "stop_sequence": null},
@@ -1060,7 +1167,11 @@ fn message_stop_event() -> Value {
 }
 
 /// IR chunk → Anthropic 事件 JSON 字符串列表。事件序列保证合法（start→delta*→stop）。
-pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, _ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
+pub fn chunk_from_ir(
+    chunk: &IrChunk,
+    st: &mut StreamState,
+    _ctx: &mut ConvCtx,
+) -> Result<Vec<String>, ConvertError> {
     let mut events: Vec<String> = Vec::new();
 
     // 首个 chunk 产出 message_start
@@ -1090,7 +1201,10 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, _ctx: &mut ConvCtx) 
             st.text_block_index = idx;
             events.push(event_str(content_block_start_text(idx))?);
         }
-        events.push(event_str(content_block_delta_text(st.text_block_index, text))?);
+        events.push(event_str(content_block_delta_text(
+            st.text_block_index,
+            text,
+        ))?);
     }
 
     // 思考增量
@@ -1102,7 +1216,10 @@ pub fn chunk_from_ir(chunk: &IrChunk, st: &mut StreamState, _ctx: &mut ConvCtx) 
             st.thinking_block_index = idx;
             events.push(event_str(content_block_start_thinking(idx))?);
         }
-        events.push(event_str(content_block_delta_thinking(st.thinking_block_index, rc))?);
+        events.push(event_str(content_block_delta_thinking(
+            st.thinking_block_index,
+            rc,
+        ))?);
     }
 
     // 工具调用增量（同一 index 只发一次 content_block_start）
@@ -1187,10 +1304,19 @@ mod tests {
         assert_eq!(req.model, "claude-3-5-sonnet");
         assert_eq!(req.max_tokens, Some(1024));
         assert_eq!(req.messages[0].role, IrRole::System);
-        assert_eq!(req.messages[0].content, Some(IrContent::Text("You are helpful.".into())));
+        assert_eq!(
+            req.messages[0].content,
+            Some(IrContent::Text("You are helpful.".into()))
+        );
         assert_eq!(req.messages[1].role, IrRole::User);
-        assert_eq!(req.messages[1].content, Some(IrContent::Text("Hello".into())));
-        assert_eq!(req.messages[2].content, Some(IrContent::Text("Hi there".into())));
+        assert_eq!(
+            req.messages[1].content,
+            Some(IrContent::Text("Hello".into()))
+        );
+        assert_eq!(
+            req.messages[2].content,
+            Some(IrContent::Text("Hi there".into()))
+        );
         assert_eq!(req.ext.top_k, Some(40));
         assert_eq!(req.stop, Some(vec!["END".to_string()]));
 
@@ -1221,8 +1347,19 @@ mod tests {
             other => panic!("应为 Parts: {other:?}"),
         };
         assert_eq!(parts.len(), 3);
-        assert_eq!(parts[1], IrPart::ImageInline { media_type: "image/png".into(), data: "AAAABBBB".into() });
-        assert_eq!(parts[2], IrPart::ImageUrl { url: "https://example.com/a.png".into() });
+        assert_eq!(
+            parts[1],
+            IrPart::ImageInline {
+                media_type: "image/png".into(),
+                data: "AAAABBBB".into()
+            }
+        );
+        assert_eq!(
+            parts[2],
+            IrPart::ImageUrl {
+                url: "https://example.com/a.png".into()
+            }
+        );
 
         let back = request_from_ir(&req, &mut c).unwrap();
         let req2 = request_to_ir(&back, &mut c).unwrap();
@@ -1260,7 +1397,10 @@ mod tests {
         let req = request_to_ir(&j, &mut c).unwrap();
         assert_eq!(req.tools.len(), 1);
         assert_eq!(req.tools[0].name, "get_weather");
-        assert_eq!(req.tools[0].parameters["properties"]["city"]["type"], "string");
+        assert_eq!(
+            req.tools[0].parameters["properties"]["city"]["type"],
+            "string"
+        );
         assert_eq!(req.tool_choice, Some(serde_json::json!("auto")));
 
         let asst = &req.messages[1];
@@ -1297,8 +1437,14 @@ mod tests {
         let mut c = ctx();
         let req = request_to_ir(&j, &mut c).unwrap();
         assert_eq!(req.messages[0].role, IrRole::System);
-        assert_eq!(req.messages[0].content, Some(IrContent::Text("You are a helpful assistant".into())));
-        assert_eq!(req.ext.cache_control, Some(serde_json::json!({"type": "ephemeral"})));
+        assert_eq!(
+            req.messages[0].content,
+            Some(IrContent::Text("You are a helpful assistant".into()))
+        );
+        assert_eq!(
+            req.ext.cache_control,
+            Some(serde_json::json!({"type": "ephemeral"}))
+        );
 
         let back = request_from_ir(&req, &mut c).unwrap();
         assert!(back["system"].is_array());
@@ -1328,7 +1474,10 @@ mod tests {
         });
         let mut c = ctx();
         let req = request_to_ir(&j, &mut c).unwrap();
-        assert_eq!(req.ext.thinking, Some(serde_json::json!({"type": "enabled", "budget_tokens": 1024})));
+        assert_eq!(
+            req.ext.thinking,
+            Some(serde_json::json!({"type": "enabled", "budget_tokens": 1024}))
+        );
         let asst = &req.messages[1];
         assert_eq!(asst.reasoning_content.as_deref(), Some("let me think"));
         assert_eq!(req.ext.extra["thinking_signature"], "sig_xyz");

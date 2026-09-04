@@ -91,8 +91,18 @@ fn build_stats_filter(q: &StatsQuery, tz: &str) -> ApiResult<StatsFilter> {
     if from_ts > to_ts {
         return Err(ApiError::bad_request("from_ts 不能晚于 to_ts"));
     }
-    let key_id = q.key_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
-    let upstream_id = q.upstream_id.as_deref().filter(|s| !s.is_empty()).map(parse_uuid).transpose()?;
+    let key_id = q
+        .key_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(parse_uuid)
+        .transpose()?;
+    let upstream_id = q
+        .upstream_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(parse_uuid)
+        .transpose()?;
 
     Ok(StatsFilter {
         from_ts,
@@ -150,7 +160,9 @@ fn resolve_currency(q: &StatsQuery, state: &AppState) -> ApiResult<String> {
 fn resolve_currency_value(c: Option<&str>, default: &str) -> ApiResult<String> {
     match c.map(str::trim).filter(|s| !s.is_empty()) {
         Some(c) if matches!(c, "CNY" | "USD") => Ok(c.to_string()),
-        Some(c) => Err(ApiError::bad_request(format!("currency 必须为 CNY 或 USD: {c}"))),
+        Some(c) => Err(ApiError::bad_request(format!(
+            "currency 必须为 CNY 或 USD: {c}"
+        ))),
         None => Ok(default.to_string()),
     }
 }
@@ -203,7 +215,9 @@ mod tests {
     use chrono::TimeZone;
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("构建 UTC 时间")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("构建 UTC 时间")
     }
 
     #[test]
@@ -235,9 +249,18 @@ mod tests {
         assert_eq!(validate_dimension(Some("")).unwrap(), None);
         assert_eq!(validate_dimension(Some("model")).unwrap(), Some("model"));
         assert_eq!(validate_dimension(Some("key")).unwrap(), Some("key"));
-        assert_eq!(validate_dimension(Some("upstream")).unwrap(), Some("upstream"));
-        assert_eq!(validate_dimension(Some("protocol")).unwrap(), Some("protocol"));
-        assert!(matches!(validate_dimension(Some("bad")), Err(ApiError::BadRequest(_))));
+        assert_eq!(
+            validate_dimension(Some("upstream")).unwrap(),
+            Some("upstream")
+        );
+        assert_eq!(
+            validate_dimension(Some("protocol")).unwrap(),
+            Some("protocol")
+        );
+        assert!(matches!(
+            validate_dimension(Some("bad")),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]
@@ -250,13 +273,22 @@ mod tests {
         assert_eq!(resolve_currency_value(None, "CNY").unwrap(), "CNY");
         assert_eq!(resolve_currency_value(Some(""), "USD").unwrap(), "USD");
         // 非法 → BadRequest。
-        assert!(matches!(resolve_currency_value(Some("EUR"), "CNY"), Err(ApiError::BadRequest(_))));
+        assert!(matches!(
+            resolve_currency_value(Some("EUR"), "CNY"),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]
     fn build_stats_filter_ts_parse_fail_bad_request() {
-        let q = StatsQuery { from_ts: Some("bad".into()), ..Default::default() };
-        assert!(matches!(build_stats_filter(&q, "Asia/Shanghai"), Err(ApiError::BadRequest(_))));
+        let q = StatsQuery {
+            from_ts: Some("bad".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            build_stats_filter(&q, "Asia/Shanghai"),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]

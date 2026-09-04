@@ -259,7 +259,9 @@ async fn series_hourly(
         qb.push(" AND model = ").push_bind(m.clone());
     }
     // GROUP BY 用实际表达式避免 `hour` 别名与输入列名歧义；ORDER BY 用序号引用输出列。
-    qb.push(&format!(" GROUP BY date_trunc('{g}', hour), model ORDER BY 1, 2"));
+    qb.push(&format!(
+        " GROUP BY date_trunc('{g}', hour), model ORDER BY 1, 2"
+    ));
 
     let rows: Vec<SeriesRow> = qb.build_query_as().fetch_all(pool).await?;
     Ok(rows.into_iter().map(SeriesPoint::from).collect())
@@ -289,9 +291,8 @@ async fn series_detail(
         }
     };
 
-    let mut qb = QueryBuilder::<Postgres>::new(format!(
-        "SELECT date_trunc('{g}', ts AT TIME ZONE "
-    ));
+    let mut qb =
+        QueryBuilder::<Postgres>::new(format!("SELECT date_trunc('{g}', ts AT TIME ZONE "));
     qb.push_bind(&f.billing_tz); // $1
     qb.push(") AT TIME ZONE $1 AS bucket, ");
     if dim_expr.is_empty() {
@@ -347,7 +348,9 @@ mod tests {
     use chrono::TimeZone;
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("构建 UTC 时间")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("构建 UTC 时间")
     }
 
     // 短区间：1 天（≤ 7 天）；长区间：14 天（> 7 天）

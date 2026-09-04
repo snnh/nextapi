@@ -23,8 +23,8 @@ mod limit;
 mod logging;
 mod media;
 mod metrics;
-mod protocol;
 mod presets;
+mod protocol;
 mod routing;
 mod seed;
 mod settings;
@@ -72,9 +72,12 @@ async fn main() -> anyhow::Result<()> {
     let engine = settings::SettingsEngine::init(pool.clone(), &cfg, hot.clone()).await?;
 
     // 5. 启动类参数：env > UI > YAML
-    let (listen, listen_src) = engine.effective_startup("server.listen", &cfg.server.listen).await?;
-    let (jwt_secret, jwt_src) =
-        engine.effective_startup("server.admin_jwt_secret", &cfg.server.admin_jwt_secret).await?;
+    let (listen, listen_src) = engine
+        .effective_startup("server.listen", &cfg.server.listen)
+        .await?;
+    let (jwt_secret, jwt_src) = engine
+        .effective_startup("server.admin_jwt_secret", &cfg.server.admin_jwt_secret)
+        .await?;
     if jwt_secret.is_empty() && !cfg.server.debug {
         anyhow::bail!(
             "生产模式必须配置 server.admin_jwt_secret 或环境变量 NEXTAPI_ADMIN_JWT_SECRET（或开启 server.debug）"
@@ -89,7 +92,14 @@ async fn main() -> anyhow::Result<()> {
     let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.min(1_000_000).max(16));
     let wal = logging::wal::WalWriter::new(gw.log_wal_dir.clone().into(), gw.log_wal_file_max_mb);
     // 启动即重放 WAL（失败只 warn）
-    if let Err(e) = logging::wal::replay_and_archive(wal.dir(), &pool, &gw.billing_timezone, gw.fx_stale_max_minutes).await {
+    if let Err(e) = logging::wal::replay_and_archive(
+        wal.dir(),
+        &pool,
+        &gw.billing_timezone,
+        gw.fx_stale_max_minutes,
+    )
+    .await
+    {
         warn!("WAL 启动重放失败（忽略，继续启动）: {e}");
     }
     // 预热 usage_logs 分区（失败只 warn）
@@ -159,7 +169,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            if let Err(e) = logging::wal::replay_and_archive(&wal_dir, &pool_replay, &tz, fx_stale).await {
+            if let Err(e) =
+                logging::wal::replay_and_archive(&wal_dir, &pool_replay, &tz, fx_stale).await
+            {
                 warn!("WAL 周期重放失败: {e}");
             }
         }
@@ -187,7 +199,8 @@ async fn main() -> anyhow::Result<()> {
                     tokio::time::sleep(Duration::from_secs(interval_minutes * 60)).await;
                     let cfg = state_fx.hot.load().fx_auto_fetch.clone();
                     let client = build_fx_client(&state_fx, &cfg);
-                    if let Err(e) = billing::fx::fetch_and_store(&state_fx.db, &client, &cfg).await {
+                    if let Err(e) = billing::fx::fetch_and_store(&state_fx.db, &client, &cfg).await
+                    {
                         warn!("fx 自动刷新失败（保留旧值）: {e}");
                     }
                 }
@@ -255,7 +268,9 @@ async fn main() -> anyhow::Result<()> {
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr: SocketAddr = listen.parse().map_err(|e| anyhow::anyhow!("监听地址非法 {listen}: {e}"))?;
+    let addr: SocketAddr = listen
+        .parse()
+        .map_err(|e| anyhow::anyhow!("监听地址非法 {listen}: {e}"))?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(%addr, "NextAPI 已启动");
     axum::serve(listener, app)
