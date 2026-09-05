@@ -39,6 +39,18 @@ pub const TOKEN_TTL_SECS: u64 = 3600;
 /// 登录防爆破滑动窗口（秒）：1 分钟。
 const RATE_WINDOW_SECS: u64 = 60;
 
+/// 限速器最大用户名条目数：超过先淘汰闲置条目，仍满则拒绝新用户名（防随机用户名内存 DoS）。
+const MAX_RATE_ENTRIES: usize = 10_000;
+
+/// 限速条目闲置淘汰时长：超过该时长未再尝试登录即删除（窗口仅 60s，10 分钟绰绰有余）。
+const IDLE_EVICT_SECS: u64 = 600;
+
+// 当前请求客户端 IP：由 require_admin 中间件在 task 作用域内设置，
+// 供审计自动携带；登录端点不走中间件，显式传参。
+tokio::task_local! {
+    static CURRENT_CLIENT_IP: Option<std::net::IpAddr>;
+}
+
 /// JWT 载荷：sub（用户名）+ exp + iat。
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -138,15 +150,19 @@ struct ChangePasswordReq {
 /// POST /login：校验用户名/密码，签发 JWT。
 async fn login(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<LoginReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     // 1. 防爆破：按 username 的 1 分钟滑动窗口限速
+    let ip = client_ip(&headers);
     let limit = state.hot.load().gateway.admin_login_rate_limit_per_min;
     if !login_rate_limiter().check(&body.username, limit) {
         return Err(ApiError::RateLimited);
     }
 
-    // 2. 查用户；查不到与密码错误统一返回 401（不区分）
+    // 2. 查用户；查不到与密码错误统一返回 401（不区分）。
+    //    用户不存在不写审计（防随机用户名刷爆审计表）；仅密码错误写失败审计，
+    //    写入速率受 per-username 限速约束。
     let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = $1")
         .bind(&body.username)
         .fetch_optional(&state.db)
@@ -158,14 +174,34 @@ async fn login(
 
     // 3. argon2 校验密码
     if !verify_password(&hash, &body.password) {
+        let _ = audit(
+            &state,
+            &body.username,
+            "auth.login_failed",
+            "admin",
+            Some(&body.username),
+            serde_json::json!({ "reason": "bad_password" }),
+            ip,
+        )
+        .await;
         return Err(ApiError::Unauthorized);
     }
 
-    // 4. 签发 JWT
+    // 4. 签发 JWT，写登录成功审计
     let token = state
         .jwt
         .issue(&body.username)
         .map_err(|e| ApiError::internal(e))?;
+    audit(
+        &state,
+        &body.username,
+        "auth.login",
+        "admin",
+        Some(&body.username),
+        serde_json::json!({}),
+        ip,
+    )
+    .await?;
     Ok(Json(
         serde_json::json!({ "token": token, "username": body.username }),
     ))
@@ -187,6 +223,15 @@ async fn change_password(
     Json(body): Json<ChangePasswordReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers)?;
+    let ip = client_ip(&headers);
+
+    // 强度校验（review P4）：≥8 字符且不得与旧密码相同（避免误操作/弱口令）
+    if body.new_password.chars().count() < 8 {
+        return Err(ApiError::bad_request("新密码至少 8 个字符"));
+    }
+    if body.new_password == body.old_password {
+        return Err(ApiError::bad_request("新密码不能与原密码相同"));
+    }
 
     // 查用户（token 有效但用户可能已被删）
     let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = $1")
@@ -218,7 +263,7 @@ async fn change_password(
         "admin",
         Some(&username),
         serde_json::json!({}),
-        None,
+        ip,
     )
     .await?;
 
@@ -226,15 +271,34 @@ async fn change_password(
 }
 
 /// JWT 保护中间件：校验 Authorization: Bearer，失败返回 401。
-/// 校验通过后把用户名写入请求扩展，供 `/api/*` 下的 handler 提取。
+/// 校验通过后把用户名写入请求扩展，供 `/api/*` 下的 handler 提取；
+/// 客户端 IP 写入 task 作用域，供 audit() 自动携带（无需改动各 handler）。
 pub async fn require_admin(
     State(state): State<Arc<AppState>>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
     let username = current_username(&state, req.headers())?;
+    let ip = client_ip(req.headers());
     req.extensions_mut().insert(AdminUsername(username));
-    Ok(next.run(req).await)
+    Ok(CURRENT_CLIENT_IP.scope(ip, next.run(req)).await)
+}
+
+/// 客户端 IP（最佳努力，审计展示用途）：X-Forwarded-For 首值 → X-Real-IP。
+/// 说明：XFF 可由客户端伪造，故不将其作为任何安全边界（限速仍以 username 为准）。
+fn client_ip(headers: &HeaderMap) -> Option<std::net::IpAddr> {
+    let raw = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next().map(str::trim))
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.is_empty())
+        })?;
+    raw.parse().ok()
 }
 
 /// 从请求头解析 Bearer 并校验 JWT，返回管理员用户名。
@@ -273,8 +337,14 @@ fn hash_password(password: &str) -> anyhow::Result<String> {
     Ok(hash.to_string())
 }
 
-/// 内存滑动窗口限速器：`username -> 最近请求时间戳队列`。
-struct LoginRateLimiter(Mutex<HashMap<String, VecDeque<Instant>>>);
+/// 内存滑动窗口限速器：`username -> (最近请求时间戳队列, 最近活动时间)`。
+/// 条目设上限并闲置淘汰，防随机用户名无界增长（review P4）。
+struct LoginRateLimiter(Mutex<HashMap<String, RateEntry>>);
+
+struct RateEntry {
+    events: VecDeque<Instant>,
+    last_seen: Instant,
+}
 
 impl LoginRateLimiter {
     /// 尝试记录一次登录：返回 true 表示放行（并计入窗口），false 表示超限。
@@ -284,10 +354,30 @@ impl LoginRateLimiter {
         }
         let now = Instant::now();
         let window = Duration::from_secs(RATE_WINDOW_SECS);
+        let idle = Duration::from_secs(IDLE_EVICT_SECS);
         let mut map = self.0.lock().unwrap();
-        let queue = map.entry(username.to_string()).or_default();
-        window_allow(queue, now, limit, window)
+        // 新用户名且已达条目上限：先淘汰闲置条目；仍满则拒绝（保守：限速而非放行）
+        if !map.contains_key(username) && map.len() >= MAX_RATE_ENTRIES {
+            evict_idle_entries(&mut map, now, idle);
+            if !map.contains_key(username) && map.len() >= MAX_RATE_ENTRIES {
+                tracing::warn!("登录限速器条目超限，拒绝新用户名 {username} 的尝试");
+                return false;
+            }
+        }
+        let entry = map
+            .entry(username.to_string())
+            .or_insert_with(|| RateEntry {
+                events: VecDeque::new(),
+                last_seen: now,
+            });
+        entry.last_seen = now;
+        window_allow(&mut entry.events, now, limit, window)
     }
+}
+
+/// 纯函数：淘汰闲置（超过 idle 未活动）的限速条目。供测试。
+fn evict_idle_entries(map: &mut HashMap<String, RateEntry>, now: Instant, idle: Duration) {
+    map.retain(|_, e| now.duration_since(e.last_seen) <= idle);
 }
 
 static LOGIN_RATE_LIMITER: OnceLock<LoginRateLimiter> = OnceLock::new();
@@ -340,7 +430,9 @@ pub async fn audit(
             }
         };
 
-    // ip 为 INET 列：项目未启用 sqlx 的 ipnet 特性，先转成文本再 `::inet` 交由 PostgreSQL 解析
+    // ip 为 INET 列：项目未启用 sqlx 的 ipnet 特性，先转成文本再 `::inet` 交由 PostgreSQL 解析。
+    // 显式 ip 优先；未传时回退到 task 作用域（require_admin 中间件注入的当前请求 IP）。
+    let ip = ip.or_else(|| CURRENT_CLIENT_IP.try_with(|v| *v).unwrap_or(None));
     let ip_text: Option<String> = ip.map(|i| i.to_string());
 
     if let Err(e) = sqlx::query(
@@ -430,6 +522,43 @@ mod tests {
             0,
             Duration::from_secs(1)
         ));
+    }
+
+    #[test]
+    fn evicts_idle_rate_entries() {
+        // review P4：限速器条目闲置淘汰（防随机用户名无界增长）
+        let now = Instant::now();
+        let idle = Duration::from_secs(IDLE_EVICT_SECS);
+        let mut map = HashMap::new();
+        let active = RateEntry {
+            events: VecDeque::new(),
+            last_seen: now,
+        };
+        let stale = RateEntry {
+            events: VecDeque::new(),
+            last_seen: now - idle - Duration::from_secs(1),
+        };
+        map.insert("active-user".into(), active);
+        map.insert("stale-user".into(), stale);
+        evict_idle_entries(&mut map, now, idle);
+        assert!(map.contains_key("active-user"));
+        assert!(!map.contains_key("stale-user"));
+    }
+
+    #[test]
+    fn client_ip_parses_proxy_headers() {
+        let mut h = axum::http::HeaderMap::new();
+        assert_eq!(client_ip(&h), None);
+        // XFF 取首个
+        h.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
+        assert_eq!(client_ip(&h), Some("1.2.3.4".parse().unwrap()));
+        // 非法值回退 None
+        h.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+        assert_eq!(client_ip(&h), None);
+        // x-real-ip 兜底
+        h.remove("x-forwarded-for");
+        h.insert("x-real-ip", "2001:db8::1".parse().unwrap());
+        assert_eq!(client_ip(&h), Some("2001:db8::1".parse().unwrap()));
     }
 
     #[test]

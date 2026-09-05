@@ -795,10 +795,9 @@ fn entry_error(entry: Protocol, fail: &Fail) -> (u16, serde_json::Value) {
 // 指标
 // ---------------------------------------------------------------------------
 
-fn metrics_labels(key: &ApiKeyRow, model: &str, entry: Entry, upstream: &str) -> RequestLabels {
+fn metrics_labels(key: &ApiKeyRow, entry: Entry, upstream: &str) -> RequestLabels {
     RequestLabels {
         key_prefix: key.prefix.clone(),
-        model: model.to_string(),
         upstream: upstream.to_string(),
         protocol: entry.protocol().as_str().to_string(),
     }
@@ -987,7 +986,7 @@ async fn run_gateway(
     // 6. 路由决策
     let matched = routing::match_routes(&model, &snap.routes);
     if matched.is_empty() {
-        let lbl = metrics_labels(&key, &model, entry, "");
+        let lbl = metrics_labels(&key, entry, "");
         log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
         return record(
             &state.metrics,
@@ -1009,7 +1008,7 @@ async fn run_gateway(
         }
     }
     if candidates.is_empty() {
-        let lbl = metrics_labels(&key, &model, entry, "");
+        let lbl = metrics_labels(&key, entry, "");
         log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
         return record(
             &state.metrics,
@@ -1026,7 +1025,7 @@ async fn run_gateway(
         })
         .collect();
     if attempts.is_empty() {
-        let lbl = metrics_labels(&key, &model, entry, "");
+        let lbl = metrics_labels(&key, entry, "");
         log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
         return record(
             &state.metrics,
@@ -1172,7 +1171,7 @@ async fn run_gateway(
             match exec_res {
                 Ok(ExecOutcome::Json(json)) => {
                     state.breaker.on_success(&state.db, upstream).await;
-                    let lbl = metrics_labels(&key, &model, entry, &upstream.name);
+                    let lbl = metrics_labels(&key, entry, &upstream.name);
                     // 用上游原始 JSON 提取 usage（§12.2）；转换前后 usage 语义等价，取原始值最准。
                     let usage =
                         crate::upstream::usage::extract_json_usage(outbound.protocol, &json);
@@ -1243,7 +1242,7 @@ async fn run_gateway(
                 }
                 Ok(ExecOutcome::Stream(resp)) => {
                     state.breaker.on_success(&state.db, upstream).await;
-                    let lbl = metrics_labels(&key, &model, entry, &upstream.name);
+                    let lbl = metrics_labels(&key, entry, &upstream.name);
                     let sbody = if matches!(outbound.mode, Mode::Convert(_)) {
                         Body::from_stream(upstream::sse_convert_stream(
                             resp,
@@ -1308,7 +1307,7 @@ async fn run_gateway(
     }
 
     // 全部候选失败
-    let lbl = metrics_labels(&key, &model, entry, last_upstream.as_deref().unwrap_or(""));
+    let lbl = metrics_labels(&key, entry, last_upstream.as_deref().unwrap_or(""));
     let (status, msg, jbody) = match &last_err {
         Some(f) => {
             let (s, body) = entry_error(entry_protocol, f);
@@ -1391,10 +1390,9 @@ fn image_api_name(api: ImageApi) -> &'static str {
 }
 
 /// 图片请求的指标标签：protocol 维度用 "openai_image"（无 token 语义，不打 gateway_tokens）。
-fn image_metrics_labels(key: &ApiKeyRow, model: &str, upstream: &str) -> RequestLabels {
+fn image_metrics_labels(key: &ApiKeyRow, upstream: &str) -> RequestLabels {
     RequestLabels {
         key_prefix: key.prefix.clone(),
-        model: model.to_string(),
         upstream: upstream.to_string(),
         protocol: "openai_image".to_string(),
     }
@@ -1547,7 +1545,7 @@ async fn images_generations(
     // 5. 路由匹配 + 候选收集（候选须具备 image_api 形状，否则跳过）
     let matched = routing::match_routes(&model, &snap.routes);
     if matched.is_empty() {
-        let lbl = image_metrics_labels(&key, &model, "");
+        let lbl = image_metrics_labels(&key, "");
         log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
         return record(
             &state.metrics,
@@ -1569,7 +1567,7 @@ async fn images_generations(
         }
     }
     if candidates.is_empty() {
-        let lbl = image_metrics_labels(&key, &model, "");
+        let lbl = image_metrics_labels(&key, "");
         log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
         return record(
             &state.metrics,
@@ -1744,7 +1742,7 @@ async fn images_generations(
                                 ev.debug_payload = Some(payload);
                             }
                             state.log_sink.log(ev);
-                            let lbl = image_metrics_labels(&key, &model, &upstream.name);
+                            let lbl = image_metrics_labels(&key, &upstream.name);
                             return record(
                                 &state.metrics,
                                 &lbl,
@@ -1815,7 +1813,7 @@ async fn images_generations(
                                 ev.debug_payload = Some(payload);
                             }
                             state.log_sink.log(ev);
-                            let lbl = image_metrics_labels(&key, &model, &upstream.name);
+                            let lbl = image_metrics_labels(&key, &upstream.name);
                             return record(
                                 &state.metrics,
                                 &lbl,
@@ -1862,7 +1860,7 @@ async fn images_generations(
     }
 
     // 全部候选失败：log_fail 记账 + OpenAI 错误体
-    let lbl = image_metrics_labels(&key, &model, last_upstream.as_deref().unwrap_or(""));
+    let lbl = image_metrics_labels(&key, last_upstream.as_deref().unwrap_or(""));
     let (status, msg): (u16, String) = match &last_err {
         Some(UpstreamError::Status(s, body)) => (*s, body.clone()),
         Some(other) => (502, other.to_string()),
@@ -1912,8 +1910,12 @@ async fn video_tasks_placeholder(_task_id: Path<String>) -> Response {
     )
 }
 
-/// GET /v1/models：网关可用模型列表（OpenAI 格式）。
-async fn list_models(State(state): State<Arc<AppState>>) -> Response {
+/// GET /v1/models：网关可用模型列表（OpenAI 格式）。与 OpenAI 语义一致，需网关 Key 鉴权
+/// （review P4：此前公开可枚举模型清单与上游拓扑）。
+async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(resp) = authenticate_gateway_key(&state, &headers) {
+        return resp;
+    }
     let request_id = Uuid::new_v4().to_string();
     let snap = state.cache.snapshot();
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

@@ -522,6 +522,24 @@ mod tests {
         };
         assert_eq!(row.proxy_url(), "http://user:pass@proxy.example.com:8080");
 
+        // 特殊字符凭据（@ : # / 与非 ASCII）需百分号编码，否则 URL 解析错位（review P4）
+        let row3 = crate::entities::ProxyRow {
+            id: uuid::Uuid::new_v4(),
+            name: "s".into(),
+            kind: "http".into(),
+            host: "proxy.example.com".into(),
+            port: 8080,
+            username: Some("us er".into()),
+            password_enc: None,
+            password_plain: Some("p@ss:wo/rd#中文".into()),
+            no_proxy: Vec::new(),
+            enabled: true,
+        };
+        assert_eq!(
+            row3.proxy_url(),
+            "http://us%20er:p%40ss%3Awo%2Frd%23%E4%B8%AD%E6%96%87@proxy.example.com:8080"
+        );
+
         // 无凭据 + socks5 类型
         let row2 = crate::entities::ProxyRow {
             id: uuid::Uuid::new_v4(),

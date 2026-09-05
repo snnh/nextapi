@@ -14,7 +14,7 @@ use crate::state::AppState;
 pub struct RequestLabels {
     /// 网关 Key 前 8 位前缀（不暴露完整 Key）
     pub key_prefix: String,
-    pub model: String,
+    /// 上游名（空 = 未路由/鉴权失败等无上游阶段）
     pub upstream: String,
     pub protocol: String,
 }

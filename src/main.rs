@@ -69,7 +69,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 4. 设置引擎：hot 参数 UI > YAML 合并，原子替换生效配置
     let hot = Arc::new(ArcSwap::from_pointee(cfg.hot()));
-    let engine = settings::SettingsEngine::init(pool.clone(), &cfg, hot.clone()).await?;
+    let engine =
+        settings::SettingsEngine::init(pool.clone(), &cfg, hot.clone(), crypto.clone()).await?;
 
     // 5. 启动类参数：env > UI > YAML
     let (listen, listen_src) = engine

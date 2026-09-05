@@ -66,6 +66,23 @@ pub fn encode_event(data: &str) -> String {
     format!("data: {data}\n\n")
 }
 
+/// 编码单条 SSE 事件，并按 data 的 JSON `type` 补 `event:` 行。
+///
+/// 背景（全局 review）：Anthropic Messages / OpenAI Responses 流式规范以 `event:` 行分派事件，
+/// 而事件名与其 data JSON 的 `type` 字段一致（如 `message_start` / `response.created`）；
+/// OpenAI Chat / Gemini 的 data 无 `type`，按其规范不应输出 `event:` 行。
+/// 透传重编码与转换出站统一走本函数：有 type 补事件名，无 type 退化为纯 data。
+pub fn encode_typed_event(data: &str) -> String {
+    let event: Option<String> = serde_json::from_str::<serde_json::Value>(data)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
+        .filter(|t| !t.is_empty());
+    match event {
+        Some(name) => format!("event: {name}\ndata: {data}\n\n"),
+        None => format!("data: {data}\n\n"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +114,30 @@ mod tests {
         let mut p = SseParser::new();
         p.feed(b"data: tail");
         assert_eq!(p.finish(), vec!["tail"]);
+    }
+
+    #[test]
+    fn typed_encode_adds_event_line_for_json_type() {
+        // Anthropic/Responses 出站：data 带顶层 type → 输出 event: <type> 行
+        assert_eq!(
+            encode_typed_event(r#"{"type":"message_start","message":{}}"#),
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{}}\n\n"
+        );
+        assert_eq!(
+            encode_typed_event(r#"{"type":"response.completed","response":{}}"#),
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n"
+        );
+        // OpenAI Chat / Gemini：无 type → 纯 data
+        assert_eq!(
+            encode_typed_event(r#"{"choices":[{"delta":{"content":"hi"}}]}"#),
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+        );
+        // 非 JSON（[DONE]、纯文本）→ 纯 data
+        assert_eq!(encode_typed_event("[DONE]"), "data: [DONE]\n\n");
+        // type 非字符串/为空 → 不输出 event 行
+        assert_eq!(
+            encode_typed_event(r#"{"type":123}"#),
+            "data: {\"type\":123}\n\n"
+        );
     }
 }

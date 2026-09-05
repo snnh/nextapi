@@ -194,6 +194,27 @@ impl Breaker {
         }
         let id = up.id;
         let now = Utc::now();
+        // 重启恢复（review P4）：熔断自动禁用会回写 DB（disabled_by='auto' + cooldown_until），
+        // 而内存状态机重启即空。冷启动后若 DB 行仍处于冷却期，把状态导入 Open 并拒绝放行，
+        // 避免重启/滚动更新绕过冷却直接把流量打向已知故障上游；冷却已过期的 auto 行不拦截
+        // （走下方 None → Closed 正常放行，成功后续 on_success 会清 DB 状态）。
+        if up.disabled_by.as_deref() == Some("auto") {
+            if let Some(until) = up.cooldown_until {
+                if until > now {
+                    let mut states = self.states.lock().unwrap();
+                    if !states.contains_key(&id) {
+                        states.insert(
+                            id,
+                            BreakerState::Open {
+                                until,
+                                consecutive_opens: up.consecutive_failures.max(1) as u32,
+                            },
+                        );
+                    }
+                    return false;
+                }
+            }
+        }
         let mut states = self.states.lock().unwrap();
         match states.get(&id).cloned() {
             None => {
@@ -755,5 +776,41 @@ mod tests {
             &*br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Closed { failures: 0 }
         ));
+    }
+
+    #[tokio::test]
+    async fn breaker_db_cooldown_blocks_after_restart() {
+        // review P4：进程重启后内存状态为空，但 DB 行 disabled_by='auto' 且冷却未到期 →
+        // allow() 应拒绝放行并导入 Open 状态（冷却期内的流量不得直击故障上游）。
+        let pool = lazy_pool();
+        let br = Breaker::new();
+        let mut up = upstream(2, Some("auto"));
+        up.consecutive_failures = 4;
+        up.cooldown_until = Some(Utc::now() + Duration::seconds(120));
+        assert!(!br.allow(&up));
+        assert!(matches!(
+            &*br.states.lock().unwrap().get(&up.id).unwrap(),
+            BreakerState::Open {
+                consecutive_opens: 4,
+                ..
+            }
+        ));
+        // 冷却已过期（如重放刚过期的半开窗口）：放行探测，且不导入 Open
+        br.reset(up.id);
+        up.cooldown_until = Some(Utc::now() - Duration::seconds(1));
+        assert!(br.allow(&up));
+        assert!(matches!(
+            &*br.states.lock().unwrap().get(&up.id).unwrap(),
+            BreakerState::Closed { failures: 0 }
+        ));
+        // 内存已有状态时 DB 冷却不覆盖内存判定（仍在 Open 窗口内 → 拒绝）
+        br.states.lock().unwrap().insert(
+            up.id,
+            BreakerState::Open {
+                until: Utc::now() + Duration::seconds(30),
+                consecutive_opens: 1,
+            },
+        );
+        assert!(!br.allow(&up));
     }
 }

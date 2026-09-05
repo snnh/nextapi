@@ -52,7 +52,8 @@ gateway:
   log_wal_dir: "/data/wal"          # WAL 落盘目录
   log_wal_file_max_mb: 128          # WAL 单文件上限
   log_wal_archive_tail_mb: 64       # 尾部 N MB 全部写入并重放完成即归档
-  log_partition_days: 30            # usage_logs 每分区覆盖天数（30 天分文件存储）
+  log_partition_days: 30            # usage_logs 每分区覆盖天数；首次建分区时固化到 app_meta，
+                                    # 此后以固化值为准（改此项仅对未固化过的空库生效）
   log_detail_retention_days: 0      # 明细不自动清理；仅作手动清理默认 before（0=永久）
   log_aggregate_retention_days: 365 # 汇总表保留建议值，不自动删除（0=永久）
   log_debug_ttl_minutes: 60         # 按 Key debug 模式最长开启时长（分钟）

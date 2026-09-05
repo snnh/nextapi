@@ -178,18 +178,41 @@ pub struct ProxyRow {
 
 impl ProxyRow {
     /// 生成代理 URL（http://user:pass@host:port / socks5://...）。
+    /// 用户名/密码做百分号编码（review P4：含 `@ : # /` 或非 ASCII 的凭据此前会拼出
+    /// 非法 URL，凭据静默失效甚至被截断）。
     pub fn proxy_url(&self) -> String {
         let scheme = if self.kind == "socks5" {
             "socks5"
         } else {
             "http"
         };
+        let host = &self.host;
+        let port = self.port;
         match (&self.username, &self.password_plain) {
-            (Some(u), Some(p)) => format!("{scheme}://{u}:{p}@{}:{}", self.host, self.port),
-            (Some(u), None) => format!("{scheme}://{u}@{}:{}", self.host, self.port),
-            _ => format!("{scheme}://{}:{}", self.host, self.port),
+            (Some(u), Some(p)) => {
+                let (ue, pe) = (urlencode_credential(u), urlencode_credential(p));
+                format!("{scheme}://{ue}:{pe}@{host}:{port}")
+            }
+            (Some(u), None) => format!("{scheme}://{}@{host}:{port}", urlencode_credential(u)),
+            _ => format!("{scheme}://{host}:{port}"),
         }
     }
+}
+
+/// RFC 3986 用户信息（userinfo）百分号编码：保留子集与已编码串原样保留。
+fn urlencode_credential(s: &str) -> String {
+    // 与 url crate 的 userinfo 编码规则一致的简化实现：仅对非保留字符放行。
+    const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if UNRESERVED.contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
 }
 
 // ===========================================================================

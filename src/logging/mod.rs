@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -254,11 +254,16 @@ fn build_unnest_sql(casts: &[&str]) -> String {
     format!("SELECT * FROM UNNEST({})", params.join(", "))
 }
 
-/// usage_logs 多行 INSERT（ON CONFLICT (request_id, ts) DO NOTHING）。纯函数，供测试。
+/// usage_logs 多行 INSERT（ON CONFLICT (request_id, ts) DO NOTHING）… RETURNING request_id。
+/// RETURNING 只返回实际新插入的行（冲突行不返回），供调用方精确区分「本批新入库」事件，
+/// 保证聚合/配额/最后使用只对真正新插入的行累加（幂等守卫基础，见 insert_batch）。纯函数，供测试。
 fn usage_logs_insert_sql() -> String {
     let cols = LOG_COLS.join(", ");
     let unnest = build_unnest_sql(&LOG_ARRAY_TYPES);
-    format!("INSERT INTO usage_logs ({cols}) {unnest} ON CONFLICT (request_id, ts) DO NOTHING")
+    format!(
+        "INSERT INTO usage_logs ({cols}) {unnest} ON CONFLICT (request_id, ts) DO NOTHING \
+         RETURNING request_id"
+    )
 }
 
 /// usage_hourly 单桶聚合累计（含成本可选累加）。
@@ -310,6 +315,11 @@ pub async fn insert_batch(
     let mut tx = pool.begin().await?;
 
     // ---- 1) usage_logs UNNEST 多行 INSERT ----
+    // 幂等守卫（review P1-#10 增强 / review P4）：ON CONFLICT DO NOTHING + RETURNING 只返回
+    // 实际新插入的行。活跃 WAL 文件重放不归档，重复重放会产生「旧事件（已入库）+ 新事件」
+    // 混批；旧做法以 rows_affected>0 判定「本批有新行」即对整批做聚合，导致已入库旧事件
+    // 的 usage_hourly / quota_usage / last_used_at 被反复累加（配额虚增、统计失真）。
+    // 现改为：聚合/配额/last_used 只遍历 RETURNING 返回的真正新插入事件。
     let n = priced.len();
     let mut request_ids = Vec::with_capacity(n);
     let mut ts_col = Vec::with_capacity(n);
@@ -378,7 +388,8 @@ pub async fn insert_batch(
         fx_snapshot.push(ev.fx_snapshot.clone());
     }
 
-    let inserted = sqlx::query(&usage_logs_insert_sql())
+    let insert_sql = usage_logs_insert_sql();
+    let rows = sqlx::query(&insert_sql)
         .bind(&request_ids)
         .bind(&ts_col)
         .bind(&key_ids)
@@ -410,16 +421,15 @@ pub async fn insert_batch(
         .bind(&pricing_source)
         .bind(&price_used)
         .bind(&fx_snapshot)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-    // 幂等守卫（review P1-#10）：明细 ON CONFLICT DO NOTHING 若 0 行受影响，
-    // 说明本批此前已提交成功（歧义提交后 WAL 重放场景——明细与聚合同事务，
-    // 明细在则聚合/配额/last_used 必已做过）。此时若继续执行下方 usage_hourly /
-    // quota_usage 的 +EXCLUDED 累加会造成重复计数（配额虚增、统计失真），
-    // 因此整批跳过聚合段直接提交返回。
-    if inserted == 0 {
+        .fetch_all(&mut *tx)
+        .await?;
+    let mut inserted_ids: HashSet<String> = HashSet::with_capacity(rows.len());
+    for row in rows {
+        inserted_ids.insert(row.get::<String, _>("request_id"));
+    }
+    // 本批无任何新插入（全部冲突 = 此前已提交）：明细与聚合同事务，明细在则聚合必已做，
+    // 直接提交返回，避免重复累加。
+    if inserted_ids.is_empty() {
         tx.commit().await?;
         return Ok(0);
     }
@@ -427,7 +437,10 @@ pub async fn insert_batch(
     // ---- 2) usage_hourly 聚合 upsert（小时桶 + model 维度）----
     // 聚合项: (requests, errors, prompt_tokens, completion_tokens, cost_cny, cost_usd)
     let mut hourly: HashMap<(DateTime<Utc>, String), HourlyAcc> = HashMap::new();
-    for ev in &priced {
+    for ev in priced
+        .iter()
+        .filter(|e| inserted_ids.contains(&e.request_id))
+    {
         let bucket = hour_bucket(ev.ts);
         let agg = hourly.entry((bucket, ev.model.clone())).or_default();
         agg.requests += 1;
@@ -493,7 +506,10 @@ pub async fn insert_batch(
     // 按 (key_id, window, period_start) 聚合 tokens 用量（仅 quota_unit='tokens' 累加）。
     // 若 key 未配置 quota_window，按 window_start 对未知 window 的语义退回 'total'（epoch 起点）。
     let mut quota_tokens: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
-    for ev in &priced {
+    for ev in priced
+        .iter()
+        .filter(|e| inserted_ids.contains(&e.request_id))
+    {
         let Some(key_id) = ev.key_id else { continue };
         let Some((unit, window)) = key_quota.get(&key_id) else {
             continue;
@@ -533,7 +549,10 @@ pub async fn insert_batch(
     // PLAN v1.10：未定价事件 cost=None → 不计入成本配额（但 token 配额照常，见上）。
     let mut quota_cost_cny: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
     let mut quota_cost_usd: HashMap<(Uuid, String, DateTime<Utc>), Decimal> = HashMap::new();
-    for ev in &priced {
+    for ev in priced
+        .iter()
+        .filter(|e| inserted_ids.contains(&e.request_id))
+    {
         let Some(key_id) = ev.key_id else { continue };
         let Some((unit, window)) = key_quota.get(&key_id) else {
             continue;
@@ -589,9 +608,12 @@ pub async fn insert_batch(
         .await?;
     }
 
-    // ---- 4) last_used_at 批量更新（批内按 key 取 max ts）----
+    // ---- 4) last_used_at 批量更新（批内按 key 取 max ts；仅新插入事件）----
     let mut last_used: HashMap<Uuid, DateTime<Utc>> = HashMap::new();
-    for ev in &priced {
+    for ev in priced
+        .iter()
+        .filter(|e| inserted_ids.contains(&e.request_id))
+    {
         if let Some(key_id) = ev.key_id {
             let e = last_used.entry(key_id).or_insert(ev.ts);
             if ev.ts > *e {
@@ -618,7 +640,7 @@ pub async fn insert_batch(
     }
 
     tx.commit().await?;
-    Ok(inserted)
+    Ok(inserted_ids.len() as u64)
 }
 
 #[cfg(test)]
@@ -651,6 +673,8 @@ mod tests {
         assert!(sql.contains("$27::numeric[]"));
         assert!(sql.contains("$31::jsonb[]"));
         assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
+        // review P4：RETURNING request_id 供聚合侧精确区分新插入行
+        assert!(sql.trim_end().ends_with("RETURNING request_id"));
         assert!(sql.contains("usage_logs (request_id, ts, key_id, model,"));
     }
 

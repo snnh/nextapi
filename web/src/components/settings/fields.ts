@@ -82,7 +82,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
   },
   'gateway.log_partition_days': {
     label: '日志分区天数',
-    help: 'usage_logs 每分区覆盖天数（30 天分文件存储）。默认 30',
+    help: 'usage_logs 每分区覆盖天数。首次建分区时固化到 app_meta，此后以固化值为准；改此项仅对尚未建过分区的空库生效。默认 30',
   },
   'gateway.log_detail_retention_days': {
     label: '明细保留天数',

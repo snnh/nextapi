@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::cache::Snapshot;
 use crate::entities::{Overrides, UpstreamRow};
 use crate::protocol::ir::Protocol;
-use crate::protocol::sse::{encode_event, SseParser};
+use crate::protocol::sse::{encode_typed_event, SseParser};
 use crate::protocol::{chunk_from_ir, chunk_to_ir, stream_end, AnyStreamState, ConvCtx};
 
 /// 上游调用错误。
@@ -532,7 +532,7 @@ fn truncate_text(bytes: &[u8], max_bytes: usize) -> String {
 /// - 解析失败原样放行。
 pub fn rewrite_sse_payload(data: &str, model: &str, request_id: &str) -> String {
     if data.trim() == "[DONE]" {
-        return encode_event(data);
+        return encode_typed_event(data);
     }
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(mut v) => {
@@ -550,9 +550,9 @@ pub fn rewrite_sse_payload(data: &str, model: &str, request_id: &str) -> String 
                     );
                 }
             }
-            encode_event(&v.to_string())
+            encode_typed_event(&v.to_string())
         }
-        Err(_) => encode_event(data),
+        Err(_) => encode_typed_event(data),
     }
 }
 
@@ -659,8 +659,9 @@ pub fn sse_convert_stream(
                     match stream_end(st.to, &mut st.to_state, &mut ctx) {
                         Ok(events) => {
                             for ev in events {
-                                st.queue
-                                    .push_back(Ok(Bytes::from(encode_event(&ev).into_bytes())));
+                                st.queue.push_back(Ok(Bytes::from(
+                                    encode_typed_event(&ev).into_bytes(),
+                                )));
                             }
                         }
                         Err(e) => tracing::warn!("转换终止事件失败: {e}"),
@@ -691,7 +692,7 @@ fn process_convert_frame(st: &mut ConvertState, data: &str) {
             Ok(events) => {
                 for ev in events {
                     st.queue
-                        .push_back(Ok(Bytes::from(encode_event(&ev).into_bytes())));
+                        .push_back(Ok(Bytes::from(encode_typed_event(&ev).into_bytes())));
                 }
             }
             Err(e) => tracing::warn!("转换帧写 IR→输出失败: {e}"),

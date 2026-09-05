@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::config::{ConfigFile, HotConfig};
+use crate::crypto::Crypto;
 use crate::error::ApiResult;
 
 /// GET /api/settings 的单项视图。
@@ -47,19 +48,44 @@ pub struct SettingsEngine {
     yaml_startup: Arc<RwLock<HashMap<String, String>>>,
     /// 生效中的 hot 配置（与 AppState.hot 共享同一 Arc）
     effective: Arc<ArcSwap<HotConfig>>,
+    /// 敏感字段（server.admin_jwt_secret）落库前 AES-256-GCM 加密（review P4：DB 明文
+    /// 泄露即可伪造管理员 JWT，与上游 api_key / 代理密码的落库加密约定保持一致）
+    crypto: Crypto,
+}
+
+/// 敏感键落库前加密（返回带 `enc1:` 前缀的密文；非敏感/空值/加密不可用 → 原样返回）。
+fn seal_secret_value(crypto: &Crypto, key: &str, value: &str) -> String {
+    if key_is_secret(key) && !value.is_empty() {
+        if let Ok(enc) = crypto.encrypt(value) {
+            return format!("enc1:{enc}");
+        }
+    }
+    value.to_string()
+}
+
+/// 敏感键读取时解密（兼容旧版明文行：无 `enc1:` 前缀原样返回）。解密失败返回 Err，
+/// 由调用方降级（跳过该 UI 覆盖并告警），不中断启动。
+fn open_secret_value(crypto: &Crypto, key: &str, value: &str) -> Result<String, String> {
+    if key_is_secret(key) {
+        if let Some(enc) = value.strip_prefix("enc1:") {
+            return crypto.decrypt(enc).map_err(|e| e.to_string());
+        }
+    }
+    Ok(value.to_string())
 }
 
 impl SettingsEngine {
     /// 初始化：
     /// 1. 将 YAML hot 键初始化到 system_settings（缺失才插入，source=file）；
     /// 2. 确保 3 个启动类键也存在（source=file、restart_required=true；
-    ///    server.admin_jwt_secret 另标 secret=true）；
+    ///    server.admin_jwt_secret 另标 secret=true，落库前加密）；
     /// 3. 读取全部 UI 保存值（source=ui），按 UI > YAML 计算生效 HotConfig；
     /// 4. 原子替换 effective。
     pub async fn init(
         pool: PgPool,
         cfg: &ConfigFile,
         effective: Arc<ArcSwap<HotConfig>>,
+        crypto: Crypto,
     ) -> anyhow::Result<Self> {
         let yaml_hot = cfg.hot();
 
@@ -75,17 +101,27 @@ impl SettingsEngine {
             .await?;
         }
 
-        // 2. 确保 3 个启动类键存在（source=file、需重启；admin_jwt_secret 略敏感）
+        // 2. 确保 3 个启动类键存在（source=file、需重启；admin_jwt_secret 略敏感 → 落库前加密）
         for key in crate::config::RESTART_REQUIRED_KEYS {
             let value = startup_yaml_value(cfg, key).unwrap_or_default();
             let secret = key_is_secret(key);
+            let stored = seal_secret_value(&crypto, key, &value);
+            if stored != value {
+                tracing::debug!(%key, "启动类敏感键已加密落库");
+            } else if secret && !value.is_empty() && !crypto.is_available() {
+                tracing::warn!(
+                    %key,
+                    "未配置 {}，{key} 将以明文形式存入 system_settings（建议生产环境配置后重新保存）",
+                    crate::crypto::ENV_SECRET_KEY
+                );
+            }
             sqlx::query(
                 "INSERT INTO system_settings (key, value, source, secret, restart_required, updated_at) \
                  VALUES ($1, $2, 'file', $3, TRUE, now()) \
                  ON CONFLICT (key) DO NOTHING",
             )
             .bind(key)
-            .bind(serde_json::Value::String(value))
+            .bind(serde_json::Value::String(stored))
             .bind(secret)
             .execute(&pool)
             .await?;
@@ -96,6 +132,7 @@ impl SettingsEngine {
             yaml_hot: Arc::new(RwLock::new(yaml_hot.clone())),
             yaml_startup: Arc::new(RwLock::new(startup_yaml_map(cfg))),
             effective,
+            crypto,
         };
 
         // 3. 计算生效配置：YAML hot + 全部 UI 覆盖（单行失败警告并跳过）
@@ -257,11 +294,27 @@ impl SettingsEngine {
             }
             let secret = key_is_secret(&key);
             let restart = is_startup;
+            // 敏感键保存：要求落库前可加密（与上游 api_key 等语义一致）；
+            // 若 NEXTAPI_SECRET_KEY 未配置则拒绝，避免 JWT secret 明文落库（review P4）。
+            if secret && value.is_string() && !value.as_str().unwrap_or_default().is_empty() {
+                if !self.crypto.is_available() {
+                    return Err(crate::error::ApiError::bad_request(format!(
+                        "保存 {key} 需要先配置环境变量 {}（敏感字段落库前强制加密）",
+                        crate::crypto::ENV_SECRET_KEY
+                    )));
+                }
+            }
             validated.push((key.clone(), value.clone(), secret, restart));
         }
 
-        // 持久化 source='ui'（覆盖即更新；source 转为 ui）
+        // 持久化 source='ui'（覆盖即更新；source 转为 ui；敏感键加密存储）
         for (key, value, secret, restart) in &validated {
+            let stored = match value {
+                serde_json::Value::String(s) => {
+                    serde_json::Value::String(seal_secret_value(&self.crypto, key, s))
+                }
+                other => other.clone(),
+            };
             sqlx::query(
                 "INSERT INTO system_settings (key, value, source, secret, restart_required, updated_at) \
                  VALUES ($1, $2, 'ui', $3, $4, now()) \
@@ -270,7 +323,7 @@ impl SettingsEngine {
                  updated_at = now()",
             )
             .bind(key)
-            .bind(value)
+            .bind(stored)
             .bind(secret)
             .bind(restart)
             .execute(&self.pool)
@@ -300,7 +353,8 @@ impl SettingsEngine {
                 }
             }
         }
-        // system_settings 中 source='ui' 的行
+        // system_settings 中 source='ui' 的行（敏感键为密文，读时解密；解密失败视为
+        // 无效覆盖降级回退 YAML，避免 NEXTAPI_SECRET_KEY 轮换后启动/查询被卡死）
         let row = sqlx::query("SELECT value FROM system_settings WHERE key = $1 AND source = 'ui'")
             .bind(key)
             .fetch_optional(&self.pool)
@@ -308,7 +362,12 @@ impl SettingsEngine {
         if let Some(row) = row {
             let v: serde_json::Value = row.get("value");
             if let Some(s) = v.as_str() {
-                return Ok((s.to_string(), "ui"));
+                match open_secret_value(&self.crypto, key, s) {
+                    Ok(plain) => return Ok((plain, "ui")),
+                    Err(e) => {
+                        tracing::warn!(%key, error = %e, "UI 覆盖的敏感配置解密失败，回退 YAML");
+                    }
+                }
             }
         }
         // 回退 YAML
@@ -442,6 +501,34 @@ mod tests {
         assert!(key_is_restart("database.url"));
         assert!(key_is_restart("server.admin_jwt_secret"));
         assert!(!key_is_restart("gateway.display_currency"));
+    }
+
+    #[test]
+    fn secret_seal_open_roundtrip() {
+        // review P4：JWT secret 落库前加密、读取解密；旧明文行兼容
+        let c = Crypto::from_secret("test-key");
+        let sealed = seal_secret_value(&c, "server.admin_jwt_secret", "jwt-abc");
+        assert!(sealed.starts_with("enc1:"));
+        assert!(!sealed.contains("jwt-abc"));
+        assert_eq!(
+            open_secret_value(&c, "server.admin_jwt_secret", &sealed).unwrap(),
+            "jwt-abc"
+        );
+        // 非敏感键不加密
+        assert_eq!(
+            seal_secret_value(&c, "server.listen", "0.0.0.0:8080"),
+            "0.0.0.0:8080"
+        );
+        // 旧版明文行兼容直读
+        assert_eq!(
+            open_secret_value(&c, "server.admin_jwt_secret", "legacy-plain").unwrap(),
+            "legacy-plain"
+        );
+        // 空值不加密
+        assert_eq!(seal_secret_value(&c, "server.admin_jwt_secret", ""), "");
+        // 密钥不匹配 → 解密失败（调用方降级回退 YAML）
+        let c2 = Crypto::from_secret("other-key");
+        assert!(open_secret_value(&c2, "server.admin_jwt_secret", &sealed).is_err());
     }
 
     #[test]

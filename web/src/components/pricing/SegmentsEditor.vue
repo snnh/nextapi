@@ -94,17 +94,30 @@ function cloneList(list: SegmentForm[]): SegmentForm[] {
 
 const inner = ref<SegmentForm[]>(cloneList(props.modelValue))
 
+// 双向 deep-watch 防自激守卫（review P4）：inner 变化 → emit → 父回写 props（引用必变）
+// → 无守卫时会再次同步 inner 生成新引用 → 再 emit……无限循环（Vue 递归更新告警/卡死）。
+// 以「最后一次 emit 的序列化快照」为准：回写内容相同时 props watch 不再同步、不再 emit。
+const lastEmittedJson = ref(JSON.stringify(props.modelValue))
+
 watch(
   () => props.modelValue,
-  () => {
-    inner.value = cloneList(props.modelValue)
+  (v) => {
+    const s = JSON.stringify(v)
+    if (s !== lastEmittedJson.value) {
+      inner.value = cloneList(v)
+      lastEmittedJson.value = s
+    }
   },
 )
 
 watch(
   inner,
   () => {
-    emit('update:modelValue', cloneList(inner.value))
+    const s = JSON.stringify(inner.value)
+    if (s !== lastEmittedJson.value) {
+      lastEmittedJson.value = s
+      emit('update:modelValue', cloneList(inner.value))
+    }
   },
   { deep: true },
 )
