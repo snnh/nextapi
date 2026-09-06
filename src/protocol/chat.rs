@@ -2,8 +2,9 @@
 
 //! OpenAI Chat Completions 适配器（/v1/chat/completions）。
 //!
-//! 这是 IR 的枢轴协议，转换最接近恒等：字段名归一化（max_completion_tokens→max_tokens）、
-//! 未知字段进 extra 原样携带、usage 提取（含 cache 字段 prompt_tokens_details）。
+//! 这是 IR 的枢轴协议，转换最接近恒等：字段名归一化（max_completion_tokens→max_tokens，
+//! 原始字段名记入 IR 供回写保真）、未知字段进 extra 原样携带、usage 提取
+//! （含 cache 字段 prompt_tokens_details）。
 //! 流式：chat.completion.chunk 逐条映射；终止载荷为 "[DONE]"。
 //!
 //! 无法映射能力处理（PLAN.md §4.3）：思考/联网搜索等 OpenRouter / Anthropic 扩展字段（ext）
@@ -302,15 +303,35 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
         }
     }
 
-    // max_tokens / max_completion_tokens 统一进 max_tokens
-    if let Some(mt) = v
-        .get("max_tokens")
-        .or_else(|| v.get("max_completion_tokens"))
-    {
-        if let Some(n) = mt.as_u64() {
-            req.max_tokens = Some(n);
-        }
+    // max_tokens / max_completion_tokens 统一进 max_tokens，并记录入口原始字段名
+    // （round-trip 保真：用户用什么字段就回写什么字段——o 系/gpt-5 只认
+    // max_completion_tokens，部分第三方服务商只认 max_tokens）。
+    let has_mt = v.get("max_tokens").is_some_and(|x| !x.is_null());
+    let has_mct = v.get("max_completion_tokens").is_some_and(|x| !x.is_null());
+    if has_mt && has_mct {
+        // OpenAI 规范不允许两者并存；取 max_completion_tokens 值并记降级
+        ctx.degrade(
+            "max_tokens",
+            "max_tokens 与 max_completion_tokens 并存，取 max_completion_tokens",
+        );
     }
+    let mt_val = if has_mct {
+        v.get("max_completion_tokens")
+    } else if has_mt {
+        v.get("max_tokens")
+    } else {
+        None
+    };
+    if let Some(n) = mt_val.and_then(|x| x.as_u64()) {
+        req.max_tokens = Some(n);
+    }
+    req.max_tokens_field = if has_mct {
+        Some(MaxTokensField::MaxCompletionTokens)
+    } else if has_mt {
+        Some(MaxTokensField::MaxTokens)
+    } else {
+        None
+    };
 
     // stop：字符串或数组统一为 Vec<String>
     if let Some(stop) = v.get("stop") {
@@ -541,7 +562,14 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         body.insert("top_p".into(), json_number_f64(tp));
     }
     if let Some(mt) = req.max_tokens {
-        body.insert("max_tokens".into(), Value::from(mt));
+        // 字段名回写策略：Chat 入口记录了原字段名 → 原样回写（round-trip 保真）；
+        // 跨协议转换（无原字段名）→ 默认 max_tokens（第三方 OpenAI 兼容服务商
+        // 普遍只认此字段；o 系/gpt-5 场景的按上游配置覆盖待 M10 能力矩阵）。
+        let key = match req.max_tokens_field {
+            Some(MaxTokensField::MaxCompletionTokens) => "max_completion_tokens",
+            Some(MaxTokensField::MaxTokens) | None => "max_tokens",
+        };
+        body.insert(key.into(), Value::from(mt));
     }
     if let Some(stop) = &req.stop {
         body.insert(
@@ -1320,5 +1348,70 @@ mod tests {
             body["tool_choice"],
             serde_json::json!({"type": "function", "function": {"name": "get_weather"}})
         );
+    }
+
+    /// max_tokens 字段名 round-trip 保真：用户请求用什么字段就回写什么字段；
+    /// 未携带则不写；跨协议（无原始字段名）默认 max_tokens。
+    #[test]
+    fn max_tokens_field_roundtrip_fidelity() {
+        let mut c = ctx();
+        // max_completion_tokens 入口 → 回写同名字段
+        let j = serde_json::json!({
+            "model": "gpt-5", "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 256
+        });
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.max_tokens, Some(256));
+        assert_eq!(
+            req.max_tokens_field,
+            Some(MaxTokensField::MaxCompletionTokens)
+        );
+        let back = request_from_ir(&req, &mut c).unwrap();
+        assert_eq!(back["max_completion_tokens"], 256);
+        assert!(back.get("max_tokens").is_none());
+
+        // max_tokens 入口 → 回写 max_tokens
+        let j = serde_json::json!({
+            "model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 128
+        });
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.max_tokens_field, Some(MaxTokensField::MaxTokens));
+        let back = request_from_ir(&req, &mut c).unwrap();
+        assert_eq!(back["max_tokens"], 128);
+        assert!(back.get("max_completion_tokens").is_none());
+
+        // 未携带 → 不写任何字段
+        let j = serde_json::json!({
+            "model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]
+        });
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.max_tokens, None);
+        assert_eq!(req.max_tokens_field, None);
+        let back = request_from_ir(&req, &mut c).unwrap();
+        assert!(back.get("max_tokens").is_none());
+        assert!(back.get("max_completion_tokens").is_none());
+
+        // 跨协议转换（IR 有值但无原始字段名）→ 默认 max_tokens
+        let req = IrRequest {
+            model: "gpt-4o".into(),
+            max_tokens: Some(64),
+            ..Default::default()
+        };
+        let back = request_from_ir(&req, &mut c).unwrap();
+        assert_eq!(back["max_tokens"], 64);
+        assert!(back.get("max_completion_tokens").is_none());
+
+        // 两字段并存 → 取 max_completion_tokens 值并记降级，回写新字段名
+        let j = serde_json::json!({
+            "model": "gpt-5", "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 100, "max_completion_tokens": 200
+        });
+        let mut c2 = ctx();
+        let req = request_to_ir(&j, &mut c2).unwrap();
+        assert_eq!(req.max_tokens, Some(200));
+        assert!(c2.degraded.iter().any(|d| d.field == "max_tokens"));
+        let back = request_from_ir(&req, &mut c2).unwrap();
+        assert_eq!(back["max_completion_tokens"], 200);
     }
 }

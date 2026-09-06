@@ -157,6 +157,15 @@ impl IrExt {
     }
 }
 
+/// Chat 入口 max_tokens 的原始字段名（round-trip 保真用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MaxTokensField {
+    /// `max_tokens`（传统字段；第三方 OpenAI 兼容服务商普遍只认这个）
+    MaxTokens,
+    /// `max_completion_tokens`（o 系/gpt-5 必填的新字段）
+    MaxCompletionTokens,
+}
+
 /// 请求 IR。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IrRequest {
@@ -173,6 +182,10 @@ pub struct IrRequest {
     pub top_p: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
+    /// Chat 入口请求 max_tokens 使用的原始字段名；None = 未携带或非 Chat 入口。
+    /// 回写策略：用户请求用什么字段就回写什么字段（round-trip 保真）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens_field: Option<MaxTokensField>,
     /// 归一为字符串数组
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
