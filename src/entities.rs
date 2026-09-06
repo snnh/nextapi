@@ -142,6 +142,18 @@ impl UpstreamRow {
     }
 }
 
+/// 模型别名（model_aliases 表，M10.1）：alias → model 单跳映射。
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct ModelAliasRow {
+    pub id: Uuid,
+    pub alias: String,
+    /// 实际模型 ID（路由匹配/白名单/计价均以此为准）
+    pub model: String,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// 模型路由目标。
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct ModelRouteRow {
@@ -229,6 +241,8 @@ pub struct UsageLogRow {
     pub ts: chrono::DateTime<chrono::Utc>,
     pub key_id: Option<Uuid>,
     pub model: String,
+    /// 客户端原始入口模型（M10.1；经别名解析时与 model 不同，未走别名为 NULL）
+    pub requested_model: Option<String>,
     pub upstream_id: Option<Uuid>,
     pub protocol_in: String,
     pub protocol_out: String,

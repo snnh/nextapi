@@ -324,6 +324,7 @@ mod tests {
             ts: Utc.timestamp_opt(i, 0).unwrap(),
             key_id: Some(Uuid::new_v4()),
             model: "gpt-4".into(),
+            requested_model: None,
             upstream_id: None,
             protocol_in: "openai_chat".into(),
             protocol_out: "openai_chat".into(),

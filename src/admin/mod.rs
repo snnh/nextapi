@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::state::AppState;
 
+pub mod aliases;
 pub mod audit;
 pub mod fx;
 pub mod keys;
@@ -23,6 +24,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .nest("/keys", keys::router())
         .nest("/upstreams", upstreams::router())
         .nest("/model-routes", routes::router())
+        .nest("/aliases", aliases::router())
         .nest("/proxies", proxies::router())
         .nest("/settings", settings_api::settings_router())
         .nest("/config", settings_api::config_router())

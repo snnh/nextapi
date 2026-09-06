@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use crate::crypto::Crypto;
-use crate::entities::{ApiKeyRow, ModelRouteRow, ProxyRow, UpstreamRow};
+use crate::entities::{ApiKeyRow, ModelAliasRow, ModelRouteRow, ProxyRow, UpstreamRow};
 
 #[derive(Debug, Default)]
 pub struct Snapshot {
@@ -21,6 +21,8 @@ pub struct Snapshot {
     pub upstream_ids: HashMap<String, Uuid>,
     pub routes: Vec<ModelRouteRow>,
     pub proxies: HashMap<Uuid, ProxyRow>,
+    /// alias → ModelAliasRow（含禁用项；使用处自行判 enabled，M10.1）
+    pub aliases: HashMap<String, ModelAliasRow>,
 }
 
 pub struct EntityCache {
@@ -66,6 +68,12 @@ impl EntityCache {
             "SELECT id, model_pattern, upstream_id, override_model, priority, weight, enabled, \
              retries, retry_status_codes, lock_upstream, sort_order, created_at, updated_at \
              FROM model_routes",
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let aliases: Vec<ModelAliasRow> = sqlx::query_as::<_, ModelAliasRow>(
+            "SELECT id, alias, model, enabled, created_at, updated_at FROM model_aliases",
         )
         .fetch_all(pool)
         .await?;
@@ -121,6 +129,10 @@ impl EntityCache {
         }
 
         snap.routes = routes;
+
+        for a in aliases {
+            snap.aliases.insert(a.alias.clone(), a);
+        }
 
         for p in proxy_rows {
             // 代理密码密文解密进内存（仅内存、不出 API）；解密失败记 warn 并置 None

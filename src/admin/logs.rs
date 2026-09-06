@@ -30,7 +30,7 @@ use crate::logging::partition;
 use crate::state::AppState;
 
 /// usage_logs 查询列清单（与 entities::UsageLogRow 字段名一一对应）。
-const LOG_COLS: &str = "id, request_id, ts, key_id, model, upstream_id, protocol_in, protocol_out, \
+const LOG_COLS: &str = "id, request_id, ts, key_id, model, requested_model, upstream_id, protocol_in, protocol_out, \
     convert_mode, stream, prompt_tokens, completion_tokens, cache_write_tokens, cache_read_tokens, \
     images, image_size, video_seconds, video_resolution, video_task_type, latency_ms, status, error, \
     retry_count, ttfb_ms, degraded, pricing_source, cost_cny, cost_usd, price_used, fx_snapshot, \

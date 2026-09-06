@@ -448,6 +448,16 @@ fn extract_max_tokens(body: &serde_json::Value) -> Option<u64> {
         .and_then(|v| v.as_u64())
 }
 
+/// 别名解析（M10.1）：入口模型命中**启用**的别名 → 返回 (实际模型, Some(入口模型))；
+/// 否则原样返回 (model, None)。单跳解析，不链式（管理 API 禁止别名指向别名）。
+fn resolve_alias(snap: &crate::cache::Snapshot, model: &str) -> (String, Option<String>) {
+    match snap.aliases.get(model) {
+        Some(a) if a.enabled && !a.model.trim().is_empty() => {
+            (a.model.clone(), Some(model.to_string()))
+        }
+        _ => (model.to_string(), None),
+    }
+}
 /// 是否流式请求：Gemini 以路径 action 判定，其余以 body["stream"] 判定。
 fn is_stream(body: &serde_json::Value, gemini_stream: Option<bool>) -> bool {
     match gemini_stream {
@@ -873,6 +883,7 @@ async fn run_gateway(
         ts: chrono::Utc::now(),
         key_id: Some(key.id),
         model: String::new(),
+        requested_model: None,
         upstream_id: None,
         protocol_in: entry_protocol.as_str().to_string(),
         protocol_out: String::new(),
@@ -943,6 +954,10 @@ async fn run_gateway(
             return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
         }
     };
+    // 别名解析（M10.1）：入口模型命中启用的别名 → 替换为实际模型（单跳，不链式）。
+    // 白名单/路由匹配/计价均按解析后的实际模型；requested_model 保留客户端原始值入账。
+    let (model, requested) = resolve_alias(&snap, &model);
+    tmpl.requested_model = requested;
     // 模型/stream 确定后填充模板与参数元数据
     tmpl.model = model.clone();
     tmpl.stream = is_stream(&body_value, gemini_stream);
@@ -1445,6 +1460,7 @@ async fn images_generations(
         ts: chrono::Utc::now(),
         key_id: Some(key.id),
         model: String::new(),
+        requested_model: None,
         upstream_id: None,
         protocol_in: "openai_image".to_string(),
         protocol_out: String::new(),
@@ -1507,6 +1523,9 @@ async fn images_generations(
             return error_resp(Protocol::OpenaiChat, &request_id, 400, "model 缺失");
         }
     };
+    // 别名解析（M10.1）：同主链路——白名单/路由/计价按解析后的实际模型
+    let (model, requested) = resolve_alias(&snap, &model);
+    tmpl.requested_model = requested;
     tmpl.model = model.clone();
     if debug_active {
         debug_req = Some(crate::logging::redact::redact_and_truncate(
@@ -1965,6 +1984,29 @@ async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
             }));
         }
     }
+    // M10.1：启用的别名同样对外暴露——要求白名单允许解析后的实际模型，
+    // 且实际模型存在可用路由（含通配命中）+ 上游 enabled。
+    for alias in snap.aliases.values() {
+        if !alias.enabled || !key.model_allowed(&alias.model) {
+            continue;
+        }
+        let routable = snap.routes.iter().any(|r| {
+            r.enabled
+                && crate::routing::pattern_matches(&r.model_pattern, &alias.model)
+                && snap
+                    .upstreams
+                    .get(&r.upstream_id)
+                    .is_some_and(|u| u.enabled)
+        });
+        if routable && seen.insert(alias.alias.clone()) {
+            data.push(serde_json::json!({
+                "id": alias.alias,
+                "object": "model",
+                "created": alias.created_at.timestamp(),
+                "owned_by": "nextapi",
+            }));
+        }
+    }
     let body = serde_json::json!({ "object": "list", "data": data });
     json_rsp(StatusCode::OK, &request_id, None, body)
 }
@@ -2013,6 +2055,37 @@ mod tests {
     use axum::http::HeaderMap;
     use chrono::Utc;
     use serde_json::json;
+
+    /// 别名解析（M10.1）：启用别名单跳替换并保留入口名；禁用/未命中原样返回。
+    #[test]
+    fn resolve_alias_rules() {
+        let mk = |alias: &str, model: &str, enabled: bool| crate::entities::ModelAliasRow {
+            id: Uuid::new_v4(),
+            alias: alias.into(),
+            model: model.into(),
+            enabled,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let mut snap = crate::cache::Snapshot::default();
+        let on = mk("fast-gpt", "gpt-4o-mini", true);
+        snap.aliases.insert(on.alias.clone(), on);
+        let off = mk("off-alias", "gpt-4o", false);
+        snap.aliases.insert(off.alias.clone(), off);
+
+        // 命中启用别名 → 解析 + 保留入口名
+        let (m, req) = resolve_alias(&snap, "fast-gpt");
+        assert_eq!(m, "gpt-4o-mini");
+        assert_eq!(req.as_deref(), Some("fast-gpt"));
+        // 禁用别名不解析
+        let (m, req) = resolve_alias(&snap, "off-alias");
+        assert_eq!(m, "off-alias");
+        assert!(req.is_none());
+        // 未命中原样
+        let (m, req) = resolve_alias(&snap, "gpt-4o");
+        assert_eq!(m, "gpt-4o");
+        assert!(req.is_none());
+    }
 
     /// tee 收集：验证逐 chunk 文本累积与 ttfb 记录（ctx=None 避免触发 finalize 的 DB 记账）。
     #[tokio::test]

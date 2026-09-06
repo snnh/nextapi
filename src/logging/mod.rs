@@ -26,6 +26,9 @@ pub struct LogEvent {
     pub key_id: Option<Uuid>,
     /// 网关侧模型名（改写前）
     pub model: String,
+    /// 客户端原始入口模型（M10.1 别名；未走别名为 None。旧 WAL 行缺省可反序列化）
+    #[serde(default)]
+    pub requested_model: Option<String>,
     pub upstream_id: Option<Uuid>,
     pub protocol_in: String,
     /// 未知时 = protocol_in
@@ -175,11 +178,12 @@ impl LogSink {
 // ---------------------------------------------------------------------------
 
 /// 直接来自 LogEvent 的列（顺序固定，与数组类型一一对应）。
-const LOG_COLS: [&str; 31] = [
+const LOG_COLS: [&str; 32] = [
     "request_id",
     "ts",
     "key_id",
     "model",
+    "requested_model",
     "upstream_id",
     "protocol_in",
     "protocol_out",
@@ -210,10 +214,11 @@ const LOG_COLS: [&str; 31] = [
 ];
 
 /// 对应列的 Postgres 数组类型（与 LOG_COLS 同序）。
-const LOG_ARRAY_TYPES: [&str; 31] = [
+const LOG_ARRAY_TYPES: [&str; 32] = [
     "text[]",
     "timestamptz[]",
     "uuid[]",
+    "text[]",
     "text[]",
     "uuid[]",
     "text[]",
@@ -325,6 +330,7 @@ pub async fn insert_batch(
     let mut ts_col = Vec::with_capacity(n);
     let mut key_ids = Vec::with_capacity(n);
     let mut models = Vec::with_capacity(n);
+    let mut requested_models = Vec::with_capacity(n);
     let mut upstream_ids = Vec::with_capacity(n);
     let mut protocols_in = Vec::with_capacity(n);
     let mut protocols_out = Vec::with_capacity(n);
@@ -358,6 +364,7 @@ pub async fn insert_batch(
         ts_col.push(ev.ts);
         key_ids.push(ev.key_id);
         models.push(ev.model.clone());
+        requested_models.push(ev.requested_model.clone());
         upstream_ids.push(ev.upstream_id);
         protocols_in.push(ev.protocol_in.clone());
         protocols_out.push(ev.protocol_out.clone());
@@ -394,6 +401,7 @@ pub async fn insert_batch(
         .bind(&ts_col)
         .bind(&key_ids)
         .bind(&models)
+        .bind(&requested_models)
         .bind(&upstream_ids)
         .bind(&protocols_in)
         .bind(&protocols_out)
@@ -667,11 +675,13 @@ mod tests {
         assert!(sql.contains("cost_cny, cost_usd, pricing_source, price_used, fx_snapshot"));
         // M6：新增 5 个媒体列进入 INSERT 列清单（数值型/文本型/数值型/文本型/文本型）
         assert!(sql.contains("cache_read_tokens, images, image_size, video_seconds, video_resolution, video_task_type"));
-        // 数组位次：usage_raw=$25::jsonb[]、video_seconds=$16::numeric[]、cost_cny=$27::numeric[]、fx_snapshot=$31::jsonb[]
-        assert!(sql.contains("$16::numeric[]"));
-        assert!(sql.contains("$25::jsonb[]"));
-        assert!(sql.contains("$27::numeric[]"));
-        assert!(sql.contains("$31::jsonb[]"));
+        // M10.1：requested_model 紧随 model 之后（$5::text[]），其后位次整体 +1
+        assert!(sql.contains("model, requested_model, upstream_id"));
+        // 数组位次：usage_raw=$26::jsonb[]、video_seconds=$17::numeric[]、cost_cny=$28::numeric[]、fx_snapshot=$32::jsonb[]
+        assert!(sql.contains("$17::numeric[]"));
+        assert!(sql.contains("$26::jsonb[]"));
+        assert!(sql.contains("$28::numeric[]"));
+        assert!(sql.contains("$32::jsonb[]"));
         assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
         // review P4：RETURNING request_id 供聚合侧精确区分新插入行
         assert!(sql.trim_end().ends_with("RETURNING request_id"));

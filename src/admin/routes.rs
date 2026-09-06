@@ -132,6 +132,25 @@ async fn replace_routes(
         return Err(ApiError::bad_request("存在无效的 upstream_id"));
     }
 
+    // 2b. 别名冲突检测（M10.1）：非通配 pattern 不得等于现有别名（同名歧义）
+    let literal_patterns: Vec<&str> = routes
+        .iter()
+        .map(|r| r.model_pattern.as_str())
+        .filter(|p| !p.contains('*'))
+        .collect();
+    if !literal_patterns.is_empty() {
+        let hit: Option<String> =
+            sqlx::query_scalar("SELECT alias FROM model_aliases WHERE alias = ANY($1) LIMIT 1")
+                .bind(&literal_patterns)
+                .fetch_optional(&state.db)
+                .await?;
+        if let Some(a) = hit {
+            return Err(ApiError::Conflict(format!(
+                "model_pattern `{a}` 与现有模型别名冲突"
+            )));
+        }
+    }
+
     // 3. 事务内替换
     let mut tx = state.db.begin().await?;
     sqlx::query("DELETE FROM model_routes")
