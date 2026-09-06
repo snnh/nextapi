@@ -11,7 +11,7 @@
 //!
 //! 依赖 IR 枢轴（N→1→N），无法映射能力记 `ctx.degrade`（§4.3）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde_json::{Map, Value};
 
@@ -144,10 +144,12 @@ fn collect_system_text(parts: &Value, ctx: &mut ConvCtx) -> String {
 }
 
 /// 解析单条 Gemini `content`（role + parts）→ 可能产出多条 IR 消息（text/media 主消息 + functionResponse 的 Tool 消息）。
+/// `call_ids` 为请求级 functionCall 合成 id 登记表（跨 content 配对 functionResponse）。
 fn parse_content(
     c: &Value,
     ctx: &mut ConvCtx,
     messages: &mut Vec<IrMessage>,
+    call_ids: &mut HashMap<String, VecDeque<String>>,
 ) -> Result<(), ConvertError> {
     if !c.is_object() {
         return Err(ConvertError::Parse("content 不是对象".into()));
@@ -194,6 +196,10 @@ fn parse_content(
                 let arguments = args_to_string(&fc["args"]);
                 let id = format!("{name}_{fc_seq}");
                 fc_seq += 1;
+                call_ids
+                    .entry(name.clone())
+                    .or_default()
+                    .push_back(id.clone());
                 tool_calls.push(IrToolCall {
                     id,
                     name,
@@ -240,13 +246,22 @@ fn parse_content(
         messages.push(msg);
     }
 
-    // functionResponse → 独立 Tool 消息（role=Tool，content=Text(response JSON 串)，tool_call_id=name）
+    // functionResponse → 独立 Tool 消息（role=Tool，content=Text(response JSON 串)）。
+    // tool_call_id 与对应 functionCall 的合成 id 配对（按 name + 出现顺序出队）；
+    // 无配对记录时回退为 name 并记 degrade（review P5：此前恒填 name，跨协议桥接断裂）。
     for (name, response) in function_responses {
+        let paired = call_ids.get_mut(&name).and_then(|q| q.pop_front());
+        if paired.is_none() {
+            ctx.degrade(
+                "functionResponse.id",
+                format!("functionResponse 无配对的 functionCall，tool_call_id 回退为 name: {name}"),
+            );
+        }
         messages.push(IrMessage {
             role: IrRole::Tool,
             content: Some(IrContent::Text(response)),
             name: Some(name.clone()),
-            tool_call_id: Some(name),
+            tool_call_id: Some(paired.unwrap_or(name)),
             ..Default::default()
         });
     }
@@ -310,8 +325,13 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
         let arr = contents
             .as_array()
             .ok_or_else(|| ConvertError::Parse("contents 不是数组".into()))?;
+        // functionCall 合成 id 登记表（name → 未配对的调用 id 队列）：Gemini 的
+        // functionResponse 只带 name 不带调用 id，跨协议桥接（OpenAI/Anthropic 要求
+        // tool_call_id 与调用 id 一致）时按 name+出现顺序配对（review P5：此前
+        // tool_call_id 直接填 name，与调用侧 `{name}_{seq}` 不匹配，工具链断裂）。
+        let mut call_ids: HashMap<String, VecDeque<String>> = HashMap::new();
         for c in arr {
-            parse_content(c, ctx, &mut req.messages)?;
+            parse_content(c, ctx, &mut req.messages, &mut call_ids)?;
         }
     }
 
@@ -735,7 +755,10 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
                 .as_u64()
                 .and_then(|x| u32::try_from(x).ok())
                 .unwrap_or(i as u32);
-            // 候选无 content 时容错（保留空 assistant 消息）
+            // 候选无 content 时容错（保留空 assistant 消息）；
+            // role 恒为 Assistant（review P5：此前缺 content 时保持 IrMessage::default()
+            // 的 User 角色，SAFETY 拦截等场景转出后语义错误）。
+            ch.message.role = IrRole::Assistant;
             if let Some(content) = c.get("content") {
                 ch.message = parse_response_content(content, ctx);
             }
@@ -1242,9 +1265,12 @@ mod tests {
         assert_eq!(req.messages[1].tool_calls[0].arguments, "{\"city\":\"bj\"}");
         assert_eq!(req.messages[1].tool_calls[0].id, "get_weather_0");
 
-        // functionResponse → Tool 消息
+        // functionResponse → Tool 消息（tool_call_id 与 functionCall 合成 id 配对）
         assert_eq!(req.messages[2].role, IrRole::Tool);
-        assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("get_weather"));
+        assert_eq!(
+            req.messages[2].tool_call_id.as_deref(),
+            Some("get_weather_0")
+        );
         assert_eq!(
             req.messages[2].content,
             Some(IrContent::Text("{\"temperature\":25}".into()))
