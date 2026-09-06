@@ -29,6 +29,21 @@ use crate::error::{ApiError, ApiResult};
 use crate::logging::partition;
 use crate::state::AppState;
 
+/// 日志查询超时（M11.2 资源治理）：30s 未返回 → 503，防慢查询拖垮连接池。
+const LOG_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn with_log_timeout<F, T, E>(fut: F) -> Result<Result<T, E>, ApiError>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    match tokio::time::timeout(LOG_QUERY_TIMEOUT, fut).await {
+        Ok(r) => Ok(r),
+        Err(_) => Err(ApiError::internal(
+            "日志查询超时（30s），请缩小时间范围".to_string(),
+        )),
+    }
+}
+
 /// usage_logs 查询列清单（与 entities::UsageLogRow 字段名一一对应）。
 const LOG_COLS: &str = "id, request_id, ts, key_id, model, requested_model, upstream_id, protocol_in, protocol_out, \
     convert_mode, stream, prompt_tokens, completion_tokens, cache_write_tokens, cache_read_tokens, \
@@ -103,10 +118,10 @@ async fn list_logs(
     let f = build_log_filter(&q, &tz)?;
     let offset = ((page as i64) - 1) * (page_size as i64);
 
-    // 总数（与列表共用同一过滤条件）
+    // 总数（与列表共用同一过滤条件；M11.2：30s 查询超时治理）
     let mut count_qb = QueryBuilder::<Postgres>::new("SELECT count(*) FROM usage_logs WHERE");
     push_log_where(&mut count_qb, &f);
-    let total: i64 = count_qb.build_query_scalar().fetch_one(&state.db).await?;
+    let total: i64 = with_log_timeout(count_qb.build_query_scalar().fetch_one(&state.db)).await??;
 
     // 数据页
     let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {LOG_COLS} FROM usage_logs WHERE"));
@@ -114,7 +129,8 @@ async fn list_logs(
     qb.push(" ORDER BY ts DESC, id DESC LIMIT ")
         .push_bind(page_size as i64);
     qb.push(" OFFSET ").push_bind(offset);
-    let rows: Vec<UsageLogRow> = qb.build_query_as().fetch_all(&state.db).await?;
+    let rows: Vec<UsageLogRow> =
+        with_log_timeout(qb.build_query_as().fetch_all(&state.db)).await??;
 
     let snap = state.cache.snapshot();
     let items: Vec<LogItem> = rows
@@ -146,7 +162,8 @@ async fn export_csv(
     push_log_where(&mut qb, &f);
     qb.push(" ORDER BY ts DESC, id DESC LIMIT ")
         .push_bind(LIMIT as i64 + 1);
-    let rows: Vec<UsageLogRow> = qb.build_query_as().fetch_all(&state.db).await?;
+    let rows: Vec<UsageLogRow> =
+        with_log_timeout(qb.build_query_as().fetch_all(&state.db)).await??;
 
     let truncated = rows.len() > LIMIT;
     let slice = if truncated { &rows[..LIMIT] } else { &rows[..] };
@@ -175,13 +192,15 @@ async fn get_log(
     _admin: AdminUsername,
     Path(request_id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let row = sqlx::query_as::<_, UsageLogRow>(&format!(
-        "SELECT {LOG_COLS} FROM usage_logs WHERE request_id = $1 \
-         ORDER BY ts DESC, id DESC LIMIT 1"
-    ))
-    .bind(&request_id)
-    .fetch_optional(&state.db)
-    .await?
+    let row = with_log_timeout(
+        sqlx::query_as::<_, UsageLogRow>(&format!(
+            "SELECT {LOG_COLS} FROM usage_logs WHERE request_id = $1 \
+             ORDER BY ts DESC, id DESC LIMIT 1"
+        ))
+        .bind(&request_id)
+        .fetch_optional(&state.db),
+    )
+    .await??
     .ok_or(ApiError::NotFound)?;
 
     let snap = state.cache.snapshot();

@@ -40,6 +40,22 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/series", get(series))
 }
 
+/// 统计查询超时（M11.2 资源治理）：30s 未返回 → 503，防慢聚合拖垮连接池。
+/// 分组基数受配置规模（模型/Key/上游数量）自然约束，不做 top-N 截断。
+const STATS_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn with_timeout<F, T>(fut: F) -> ApiResult<T>
+where
+    F: std::future::Future<Output = ApiResult<T>>,
+{
+    match tokio::time::timeout(STATS_QUERY_TIMEOUT, fut).await {
+        Ok(r) => r,
+        Err(_) => Err(ApiError::internal(
+            "统计查询超时（30s），请缩小时间范围或降低维度".to_string(),
+        )),
+    }
+}
+
 /// GET /api/stats/summary。
 async fn summary(
     State(state): State<Arc<AppState>>,
@@ -49,7 +65,7 @@ async fn summary(
     let tz = state.hot.load().gateway.billing_timezone.clone();
     let f = build_stats_filter(&q, &tz)?;
     let currency = resolve_currency(&q, &state)?;
-    let s = stats::summary(&state.db, &f, &currency).await?;
+    let s = with_timeout(stats::summary(&state.db, &f, &currency)).await?;
     // 展示层舍入：仅对 cost_* 字段做 round_dp（DB 原样存）。
     let precision = state.hot.load().gateway.display_precision;
     let mut v = serde_json::json!(s);
@@ -68,7 +84,14 @@ async fn series(
     let granularity = resolve_granularity(&q, &f)?;
     let dimension = validate_dimension(q.dimension.as_deref())?;
     let currency = resolve_currency(&q, &state)?;
-    let points = stats::series(&state.db, &f, &granularity, dimension, &currency).await?;
+    let points = with_timeout(stats::series(
+        &state.db,
+        &f,
+        &granularity,
+        dimension,
+        &currency,
+    ))
+    .await?;
     // 展示层舍入：仅对成本数值字段做 round_dp（DB 原样存）。
     let precision = state.hot.load().gateway.display_precision;
     let mut v = serde_json::json!({ "currency": currency, "points": points });
