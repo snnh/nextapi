@@ -1928,18 +1928,24 @@ async fn video_tasks_placeholder(_task_id: Path<String>) -> Response {
 
 /// GET /v1/models：网关可用模型列表（OpenAI 格式）。与 OpenAI 语义一致，需网关 Key 鉴权
 /// （review P4：此前公开可枚举模型清单与上游拓扑）。
+/// 仅暴露当前 Key 白名单允许、且存在可用路由（非通配 pattern + 上游 enabled）的模型
+/// （PLAN P0：避免向 Key 泄露其无权访问的模型清单）。通配路由无法枚举具体模型，不列出。
 async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(resp) = authenticate_gateway_key(&state, &headers) {
-        return *resp;
-    }
+    let key = match authenticate_gateway_key(&state, &headers) {
+        Ok(k) => k,
+        Err(resp) => return *resp,
+    };
     let request_id = Uuid::new_v4().to_string();
     let snap = state.cache.snapshot();
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut data: Vec<serde_json::Value> = Vec::new();
     for route in &snap.routes {
-        // 只收集非通配 model_pattern + 对应上游 enabled
+        // 只收集非通配 model_pattern + Key 白名单允许 + 对应上游 enabled
         let pattern = route.model_pattern.as_str();
         if pattern.is_empty() || pattern.contains('*') {
+            continue;
+        }
+        if !key.model_allowed(pattern) {
             continue;
         }
         let Some(up) = snap.upstreams.get(&route.upstream_id) else {
