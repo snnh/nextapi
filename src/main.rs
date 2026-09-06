@@ -24,6 +24,7 @@ mod limit;
 mod logging;
 mod media;
 mod metrics;
+mod netguard;
 mod presets;
 mod protocol;
 mod routing;

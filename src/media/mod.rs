@@ -1,6 +1,7 @@
 //! 图片媒体适配核心（PLAN §5.4 v1.18：统一入口 + 三档适配；视频仅占位）。
 //! 契约 contracts/m6-media.md §3，M6-A 实现。
 
+pub mod download;
 pub mod tasks;
 
 use serde::{Deserialize, Serialize};

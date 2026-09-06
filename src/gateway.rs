@@ -1952,6 +1952,25 @@ async fn images_generations(
                             image_size,
                             ..
                         }) => {
+                            // M11.1 受控下载：media_download.enabled 时把 URL 图片转 b64_json
+                            // 回填（防 CDN URL 过期）；失败保留原 URL 不阻断响应。
+                            let mut images = images;
+                            if state.hot.load().media_download.enabled {
+                                for img in images.iter_mut() {
+                                    if img.b64_json.is_none() {
+                                        if let Some(u) = img.url.clone() {
+                                            match media::download::download_b64(&state, &u).await {
+                                                Ok((b64, _mime)) => img.b64_json = Some(b64),
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        "图片受控下载失败（保留 URL）: {e}"
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             // 同步创建 → 200 {created, data, usage:{image_count}}
                             let data: Vec<serde_json::Value> = images
                                 .iter()
