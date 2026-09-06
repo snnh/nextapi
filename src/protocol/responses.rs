@@ -112,6 +112,10 @@ fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
             text: p["text"].as_str().unwrap_or_default().to_string(),
         }),
         "input_image" => {
+            // detail（low/high/auto）无 IR 槽位，记降级（review P5：此前静默丢失）
+            if p.get("detail").is_some_and(|d| !d.is_null()) {
+                ctx.degrade("input_image.detail", "image detail 不支持，丢弃");
+            }
             let url_val = p.get("image_url").cloned().unwrap_or_default();
             let url = if let Some(s) = url_val.as_str() {
                 s.to_string()
@@ -124,7 +128,12 @@ fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
                 String::new()
             };
             if url.is_empty() {
-                ctx.degrade("input.image_url", "input_image 缺 url");
+                // file_id 引用已上传文件的形态无 IR 槽位（review P5：此前笼统报缺 url）
+                if p.get("file_id").and_then(|f| f.as_str()).is_some() {
+                    ctx.degrade("input_image.file_id", "file_id 引用图片不支持，丢弃");
+                } else {
+                    ctx.degrade("input.image_url", "input_image 缺 url");
+                }
                 return None;
             }
             if let Some(rest) = url.strip_prefix("data:") {
@@ -232,7 +241,25 @@ fn parse_input_item(item: &Value, ctx: &mut ConvCtx) -> Result<Option<IrMessage>
         }
         "function_call_output" => {
             let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
-            let output = item["output"].as_str().unwrap_or_default().to_string();
+            if call_id.is_empty() {
+                ctx.degrade(
+                    "function_call_output.call_id",
+                    "缺 call_id，工具链将无法配对",
+                );
+            }
+            // output 规范为字符串；结构化数组（output_text 等）序列化兜底并记降级
+            // （review P5：此前非字符串静默变空串）
+            let output = match &item["output"] {
+                Value::String(s) => s.clone(),
+                Value::Null => String::new(),
+                other => {
+                    ctx.degrade(
+                        "function_call_output.output",
+                        "output 非字符串，序列化为 JSON 携带",
+                    );
+                    serde_json::to_string(other).unwrap_or_default()
+                }
+            };
             let msg = IrMessage {
                 role: IrRole::Tool,
                 tool_call_id: Some(call_id),
@@ -594,6 +621,13 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     if req.seed.is_some() {
         // Responses API 不支持 seed（review P5：此前直接写入请求体，与本文件头注释矛盾）
         ctx.degrade("seed", "Responses 不支持 seed，忽略");
+    }
+    if req.stop.is_some() {
+        // Responses API 无 stop 参数（review P5：此前静默丢弃）
+        ctx.degrade("stop", "Responses 不支持 stop，忽略");
+    }
+    if let Some(u) = &req.user {
+        body.insert("user".into(), Value::String(u.clone()));
     }
     if req.n.is_some() {
         ctx.degrade("n", "Responses 不支持 n，忽略");
@@ -968,6 +1002,16 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
     }
 
     let mut output = Vec::new();
+    if resp.choices.len() > 1 {
+        // 多 choice 平铺进同一 output 数组（Responses 单响应语义），记降级
+        ctx.degrade(
+            "choices",
+            format!(
+                "多候选（{}）平铺为单个 response 的 output",
+                resp.choices.len()
+            ),
+        );
+    }
     for ch in &resp.choices {
         let msg = &ch.message;
         if let Some(content) = &msg.content {
