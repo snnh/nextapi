@@ -39,6 +39,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '模型路由', icon: 'Operation' },
       },
       {
+        path: 'aliases',
+        name: 'aliases',
+        component: () => import('@/views/Aliases.vue'),
+        meta: { title: '模型别名', icon: 'Switch' },
+      },
+      {
         path: 'pricing',
         name: 'pricing',
         component: () => import('@/views/Pricing.vue'),

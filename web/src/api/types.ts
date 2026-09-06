@@ -237,6 +237,25 @@ export interface RouteOut {
 }
 
 // ---------------------------------------------------------------------------
+// model aliases（/api/aliases，M10.1）
+// ---------------------------------------------------------------------------
+
+export interface ModelAliasRow {
+  id: string
+  alias: string
+  model: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AliasIn {
+  alias: string
+  model: string
+  enabled?: boolean
+}
+
+// ---------------------------------------------------------------------------
 // proxies（/api/proxies）
 // ---------------------------------------------------------------------------
 
@@ -347,6 +366,8 @@ export interface UsageLogRow {
   ts: string
   key_id: string | null
   model: string
+  /** 客户端原始入口模型（经别名解析时与 model 不同，未走别名为 null） */
+  requested_model: string | null
   upstream_id: string | null
   protocol_in: string
   protocol_out: string

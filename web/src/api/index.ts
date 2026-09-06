@@ -38,6 +38,8 @@ import type {
   ProvisionResp,
   RouteItem,
   RouteOut,
+  ModelAliasRow,
+  AliasIn,
   RuleItem,
   SettingsPutReq,
   SettingsView,
@@ -102,6 +104,17 @@ export const routeApi = {
   list: () => http.get<{ items: RouteOut[] }>('/api/model-routes').then((r) => r.data.items),
   replaceAll: (items: RouteItem[]) =>
     http.put<{ items: RouteOut[] }>('/api/model-routes', items).then((r) => r.data.items),
+}
+
+// ---------------------------------------------------------------------------
+// model aliases（M10.1）
+// ---------------------------------------------------------------------------
+export const aliasApi = {
+  list: () => http.get<{ items: ModelAliasRow[] }>('/api/aliases').then((r) => r.data.items),
+  create: (input: AliasIn) => http.post<ModelAliasRow>('/api/aliases', input).then((r) => r.data),
+  update: (id: string, input: AliasIn) =>
+    http.put<ModelAliasRow>(`/api/aliases/${id}`, input).then((r) => r.data),
+  remove: (id: string) => http.delete(`/api/aliases/${id}`).then((r) => r.data),
 }
 
 // ---------------------------------------------------------------------------

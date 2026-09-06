@@ -181,6 +181,9 @@
             </el-descriptions-item>
             <el-descriptions-item label="时间">{{ fmtTime(detail?.ts) }}</el-descriptions-item>
             <el-descriptions-item label="模型">{{ detail?.model }}</el-descriptions-item>
+            <el-descriptions-item v-if="detail?.requested_model" label="入口模型">
+              {{ detail.requested_model }}<span class="hint">（别名）</span>
+            </el-descriptions-item>
             <el-descriptions-item label="Key">{{ keyText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="上游">{{ detail?.upstream_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="协议链">
