@@ -53,7 +53,8 @@ const KNOWN_CHUNK_FIELDS: [&str; 5] = ["id", "model", "created", "choices", "usa
 /// 解析角色字符串为 IR 角色；未知角色记降级，缺省按 User 容错。
 fn parse_role(role: Option<&str>, ctx: &mut ConvCtx) -> IrRole {
     match role {
-        Some("system") => IrRole::System,
+        // developer 为 o 系/gpt-5 的系统消息角色（review P5：此前按 user 降级）
+        Some("system") | Some("developer") => IrRole::System,
         Some("assistant") => IrRole::Assistant,
         Some("tool") => IrRole::Tool,
         Some(other) => {
