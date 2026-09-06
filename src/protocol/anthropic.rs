@@ -897,12 +897,33 @@ pub struct StreamState {
     // 出站：内容块编排
     pub message_start_emitted: bool,
     pub message_stop_emitted: bool,
+    message_delta_emitted: bool,
     pub next_block_index: u32,
-    pub text_block_open: bool,
-    pub text_block_index: u32,
-    pub thinking_block_open: bool,
-    pub thinking_block_index: u32,
-    pub tool_block_open: HashMap<u32, u32>,
+    /// 当前唯一打开的内容块（review P5：Anthropic 协议要求任一时刻至多一个块打开，
+    /// 严格 start→delta*→stop 顺序；此前 text/thinking/tool 块可并行打开，产生
+    /// index N 未 stop 即 start N+1 的非法序列）。
+    open_block: Option<OpenBlock>,
+    /// 工具调用序号 → 最近分配的块 index（交错重开时更新）
+    tool_block_of: HashMap<u32, u32>,
+    /// 工具调用序号 → (id, name) 元数据（后续增量不再携带，重开块时兜底）
+    tool_meta: HashMap<u32, (String, String)>,
+}
+
+/// 出站当前打开的内容块。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenBlock {
+    Text(u32),
+    Thinking(u32),
+    Tool(u32),
+}
+
+/// 关闭当前打开的块（如有），返回应追加的 content_block_stop 事件。
+fn close_open_block(st: &mut StreamState) -> Option<Value> {
+    let b = st.open_block.take()?;
+    let idx = match b {
+        OpenBlock::Text(i) | OpenBlock::Thinking(i) | OpenBlock::Tool(i) => i,
+    };
+    Some(content_block_stop(idx))
 }
 
 fn event_str(v: Value) -> Result<String, ConvertError> {
@@ -1000,7 +1021,15 @@ pub fn chunk_to_ir(
                     )
                 }
                 "input_json_delta" => {
-                    let tool_idx = st.block_to_tool.get(&idx).copied().unwrap_or(0);
+                    // 未登记的内容块 index（content_block_start 未到/不匹配）：此前静默归入
+                    // 工具 0 且无日志（review P5），现记 degrade 并丢弃该增量，避免拼错工具。
+                    let Some(&tool_idx) = st.block_to_tool.get(&idx) else {
+                        ctx.degrade(
+                            "stream.content_block_delta",
+                            format!("未登记的内容块 index，丢弃工具增量: {idx}"),
+                        );
+                        return Ok(None);
+                    };
                     delta.tool_calls.push(IrToolCallDelta {
                         index: tool_idx,
                         id: None,
@@ -1066,10 +1095,22 @@ pub fn chunk_to_ir(
             Ok(None)
         }
         "ping" => Ok(None),
-        "error" => Err(ConvertError::Parse(format!(
-            "Anthropic 流错误: {}",
-            v["error"]
-        ))),
+        // 上游流式错误（review P5）：此前返回 Err 被上层 warn 后丢弃，下游收不到任何
+        // 失败信号。现映射为 finish=failed 的终止 chunk，由出站侧发各协议的失败终止。
+        "error" => {
+            let msg = v["error"]["message"].as_str().unwrap_or("未知错误");
+            ctx.degrade("stream.error", format!("Anthropic 流错误: {msg}"));
+            let mut chunk = IrChunk::default();
+            chunk.id = st.id.clone();
+            chunk.model = st.model.clone();
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta::default(),
+                finish_reason: Some("failed".into()),
+            });
+            chunk.usage = Some(st.usage.clone());
+            Ok(Some(chunk))
+        }
         other => {
             ctx.degrade("stream.event.type", format!("未知事件: {other}"));
             Ok(None)
@@ -1162,15 +1203,30 @@ fn message_delta_event(fr: &str, st: &StreamState) -> Value {
     })
 }
 
+/// 无 stop_reason 的 message_delta（流截断/失败兜底：Anthropic stop_reason 可空）。
+fn message_delta_end_event(st: &StreamState) -> Value {
+    let mut usage = Map::new();
+    usage.insert(
+        "output_tokens".into(),
+        Value::from(st.usage.completion_tokens),
+    );
+    serde_json::json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": null, "stop_sequence": null},
+        "usage": usage,
+    })
+}
+
 fn message_stop_event() -> Value {
     serde_json::json!({"type": "message_stop"})
 }
 
-/// IR chunk → Anthropic 事件 JSON 字符串列表。事件序列保证合法（start→delta*→stop）。
+/// IR chunk → Anthropic 事件 JSON 字符串列表。事件序列保证合法（start→delta*→stop，
+/// 任一时刻至多一个块打开）。
 pub fn chunk_from_ir(
     chunk: &IrChunk,
     st: &mut StreamState,
-    _ctx: &mut ConvCtx,
+    ctx: &mut ConvCtx,
 ) -> Result<Vec<String>, ConvertError> {
     let mut events: Vec<String> = Vec::new();
 
@@ -1192,46 +1248,84 @@ pub fn chunk_from_ir(
         None => (&IrDelta::default(), None),
     };
 
-    // 文本增量
+    // 文本增量（开启前关闭当前打开的其它块）
     if let Some(text) = &delta.content {
-        if !st.text_block_open {
+        if !matches!(st.open_block, Some(OpenBlock::Text(_))) {
+            if let Some(ev) = close_open_block(st) {
+                events.push(event_str(ev)?);
+            }
             let idx = st.next_block_index;
             st.next_block_index += 1;
-            st.text_block_open = true;
-            st.text_block_index = idx;
+            st.open_block = Some(OpenBlock::Text(idx));
             events.push(event_str(content_block_start_text(idx))?);
         }
-        events.push(event_str(content_block_delta_text(
-            st.text_block_index,
-            text,
-        ))?);
+        let Some(OpenBlock::Text(idx)) = st.open_block else {
+            unreachable!("文本块刚打开");
+        };
+        events.push(event_str(content_block_delta_text(idx, text))?);
     }
 
-    // 思考增量
+    // 思考增量（同理）
     if let Some(rc) = &delta.reasoning_content {
-        if !st.thinking_block_open {
+        if !matches!(st.open_block, Some(OpenBlock::Thinking(_))) {
+            if let Some(ev) = close_open_block(st) {
+                events.push(event_str(ev)?);
+            }
             let idx = st.next_block_index;
             st.next_block_index += 1;
-            st.thinking_block_open = true;
-            st.thinking_block_index = idx;
+            st.open_block = Some(OpenBlock::Thinking(idx));
             events.push(event_str(content_block_start_thinking(idx))?);
         }
-        events.push(event_str(content_block_delta_thinking(
-            st.thinking_block_index,
-            rc,
-        ))?);
+        let Some(OpenBlock::Thinking(idx)) = st.open_block else {
+            unreachable!("思考块刚打开");
+        };
+        events.push(event_str(content_block_delta_thinking(idx, rc))?);
     }
 
-    // 工具调用增量（同一 index 只发一次 content_block_start）
+    // 工具调用增量（开启前关闭当前打开的其它块；同一工具交错重开时拆分新块并记 degrade）
     for tc in &delta.tool_calls {
-        let block_idx = if let Some(&b) = st.tool_block_open.get(&tc.index) {
-            b
-        } else {
-            let b = st.next_block_index;
-            st.next_block_index += 1;
-            st.tool_block_open.insert(tc.index, b);
-            events.push(event_str(content_block_start_tool_use(b, tc))?);
-            b
+        // id/name 仅首个增量携带，入元数据表兜底
+        let meta = st.tool_meta.entry(tc.index).or_default();
+        if let Some(id) = &tc.id {
+            meta.0 = id.clone();
+        }
+        if let Some(name) = &tc.name {
+            meta.1 = name.clone();
+        }
+
+        let block_idx = match st.tool_block_of.get(&tc.index).copied() {
+            Some(b) if st.open_block == Some(OpenBlock::Tool(b)) => b,
+            existed => {
+                if let Some(ev) = close_open_block(st) {
+                    events.push(event_str(ev)?);
+                }
+                if existed.is_some() {
+                    ctx.degrade(
+                        "stream.tool_calls",
+                        "并行工具调用增量交错，拆分为多个 tool_use 块",
+                    );
+                }
+                let b = st.next_block_index;
+                st.next_block_index += 1;
+                st.tool_block_of.insert(tc.index, b);
+                st.open_block = Some(OpenBlock::Tool(b));
+                // content_block_start 需要 id/name：增量缺省时用元数据兜底
+                let (id, name) = st.tool_meta.get(&tc.index).cloned().unwrap_or_default();
+                let tc_full = IrToolCallDelta {
+                    index: tc.index,
+                    id: tc
+                        .id
+                        .clone()
+                        .or_else(|| if id.is_empty() { None } else { Some(id) }),
+                    name: tc
+                        .name
+                        .clone()
+                        .or_else(|| if name.is_empty() { None } else { Some(name) }),
+                    arguments: tc.arguments.clone(),
+                };
+                events.push(event_str(content_block_start_tool_use(b, &tc_full))?);
+                b
+            }
         };
         events.push(event_str(content_block_delta_input_json(block_idx, tc))?);
     }
@@ -1244,35 +1338,40 @@ pub fn chunk_from_ir(
         st.usage.cache_write_tokens = u.cache_write_tokens.or(st.usage.cache_write_tokens);
     }
 
-    // finish_reason：关闭所有 open block，再发 message_delta
+    // finish_reason：关闭当前打开的块，再发 message_delta
     if let Some(fr) = finish_reason {
-        if st.text_block_open {
-            events.push(event_str(content_block_stop(st.text_block_index))?);
-            st.text_block_open = false;
+        if let Some(ev) = close_open_block(st) {
+            events.push(event_str(ev)?);
         }
-        if st.thinking_block_open {
-            events.push(event_str(content_block_stop(st.thinking_block_index))?);
-            st.thinking_block_open = false;
+        // failed 无 Anthropic 合法 stop_reason（ inbound 侧已记 degrade），stop_reason 置 null
+        if fr == "failed" {
+            events.push(event_str(message_delta_end_event(st))?);
+        } else {
+            events.push(event_str(message_delta_event(fr, st))?);
         }
-        let mut keys: Vec<u32> = st.tool_block_open.keys().cloned().collect();
-        keys.sort_unstable();
-        for k in keys {
-            let b = st.tool_block_open.remove(&k).unwrap();
-            events.push(event_str(content_block_stop(b))?);
-        }
-        events.push(event_str(message_delta_event(fr, st))?);
+        st.message_delta_emitted = true;
     }
 
     Ok(events)
 }
 
-/// 流终止：产出 message_stop（若 st 中已发过则空）。
+/// 流终止：补全终止序列（review P5：此前只发 message_stop，流截断时打开的块与
+/// message_delta 缺失，事件序列不完整、下游解析器可能挂起）。
 pub fn stream_end(st: &mut StreamState, _ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
-    if st.message_stop_emitted {
-        return Ok(vec![]);
+    let mut events: Vec<String> = Vec::new();
+    if let Some(ev) = close_open_block(st) {
+        events.push(event_str(ev)?);
     }
-    st.message_stop_emitted = true;
-    Ok(vec![event_str(message_stop_event())?])
+    if st.message_start_emitted && !st.message_delta_emitted {
+        events.push(event_str(message_delta_end_event(st))?);
+        st.message_delta_emitted = true;
+    }
+    // 从未发出 message_start（上游流立即结束）则不补任何事件：裸 message_stop 本身非法。
+    if st.message_start_emitted && !st.message_stop_emitted {
+        st.message_stop_emitted = true;
+        events.push(event_str(message_stop_event())?);
+    }
+    Ok(events)
 }
 
 #[cfg(test)]
@@ -1805,12 +1904,140 @@ mod tests {
 
     #[test]
     fn stream_end_idempotent() {
-        let mut st = StreamState::default();
         let mut c = ctx();
+        // 从未发出 message_start（上游流立即结束）：不补任何事件（裸 message_stop 非法）
+        let mut st = StreamState::default();
+        assert!(stream_end(&mut st, &mut c).unwrap().is_empty());
+
+        // 截断流（message_start + 文本块，无 finish）：补全 stop/delta/stop 终止序列
+        let mut st = StreamState::default();
+        let ch = IrChunk {
+            id: "msg_t".into(),
+            model: "claude".into(),
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: Some("hi".into()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            ..Default::default()
+        };
+        chunk_from_ir(&ch, &mut st, &mut c).unwrap();
         let e1 = stream_end(&mut st, &mut c).unwrap();
-        assert_eq!(e1.len(), 1);
+        let types: Vec<String> = e1
+            .iter()
+            .map(|e| {
+                serde_json::from_str::<Value>(e).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            types,
+            vec!["content_block_stop", "message_delta", "message_stop"]
+        );
         // 第二次调用不再产出
-        let e2 = stream_end(&mut st, &mut c).unwrap();
-        assert!(e2.is_empty());
+        assert!(stream_end(&mut st, &mut c).unwrap().is_empty());
+    }
+
+    /// review P5 回归：text→tool→text 交错序列中，任何 content_block_start 前
+    /// 前一个块必须已 stop（任一时刻至多一个块打开）。
+    #[test]
+    fn stream_blocks_never_overlap() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let mk = |delta: IrDelta, finish: Option<&str>| IrChunk {
+            id: "msg_seq".into(),
+            model: "claude".into(),
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta,
+                finish_reason: finish.map(String::from),
+            }],
+            ..Default::default()
+        };
+        let chunks = vec![
+            mk(
+                IrDelta {
+                    content: Some("A".into()),
+                    ..Default::default()
+                },
+                None,
+            ),
+            mk(
+                IrDelta {
+                    tool_calls: vec![IrToolCallDelta {
+                        index: 0,
+                        id: Some("toolu_1".into()),
+                        name: Some("f".into()),
+                        arguments: Some("{".into()),
+                    }],
+                    ..Default::default()
+                },
+                None,
+            ),
+            mk(
+                IrDelta {
+                    content: Some("B".into()),
+                    ..Default::default()
+                },
+                None,
+            ),
+            mk(
+                IrDelta {
+                    tool_calls: vec![IrToolCallDelta {
+                        index: 0,
+                        arguments: Some("}".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                Some("tool_calls"),
+            ),
+        ];
+        let mut events: Vec<Value> = Vec::new();
+        for ch in &chunks {
+            for e in chunk_from_ir(ch, &mut st, &mut c).unwrap() {
+                events.push(serde_json::from_str(&e).unwrap());
+            }
+        }
+        events.extend(
+            stream_end(&mut st, &mut c)
+                .unwrap()
+                .iter()
+                .map(|e| serde_json::from_str(e).unwrap()),
+        );
+
+        // 校验块时序：start 时不得有打开的块；stop 必须关闭当前打开的块
+        let mut open: Option<u64> = None;
+        for e in &events {
+            match e["type"].as_str().unwrap_or_default() {
+                "content_block_start" => {
+                    assert!(open.is_none(), "块 {:?} 未关闭即开启新块", open);
+                    open = e["index"].as_u64();
+                }
+                "content_block_stop" => {
+                    assert_eq!(open, e["index"].as_u64(), "stop 与当前打开块不一致");
+                    open = None;
+                }
+                "message_delta" => assert!(open.is_none(), "message_delta 前块未关闭"),
+                _ => {}
+            }
+        }
+        // 工具调用拆分为新块后仍保留 id/name（元数据兜底）
+        let tool_starts: Vec<&Value> = events
+            .iter()
+            .filter(|e| {
+                e["type"] == "content_block_start" && e["content_block"]["type"] == "tool_use"
+            })
+            .collect();
+        assert_eq!(tool_starts.len(), 2);
+        for ts in tool_starts {
+            assert_eq!(ts["content_block"]["id"], "toolu_1");
+            assert_eq!(ts["content_block"]["name"], "f");
+        }
     }
 }
