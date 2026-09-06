@@ -187,6 +187,13 @@ fn parse_anth_message(
             if !block.is_object() {
                 continue;
             }
+            // 块级 cache_control 无 IR 槽位（review P5：此前静默丢弃；仅 system 位置有处理）
+            if block.get("cache_control").is_some() {
+                ctx.degrade(
+                    "content.cache_control",
+                    "非 system 位置的 cache_control 不支持，丢弃",
+                );
+            }
             match block["type"].as_str().unwrap_or_default() {
                 "text" => parts.push(IrPart::Text {
                     text: block["text"].as_str().unwrap_or_default().to_string(),
@@ -213,6 +220,18 @@ fn parse_anth_message(
                     arguments: input_to_arguments(&block["input"]),
                 }),
                 "tool_result" => {
+                    // is_error 与非 text 内容（如 image 块）无 IR 槽位（review P5：此前静默丢弃）
+                    if block["is_error"].as_bool().unwrap_or(false) {
+                        ctx.degrade("tool_result.is_error", "is_error 标记无 IR 槽位，丢弃");
+                    }
+                    if let Some(arr) = block.get("content").and_then(|c| c.as_array()) {
+                        if arr.iter().any(|b| b["type"].as_str() != Some("text")) {
+                            ctx.degrade(
+                                "tool_result.content",
+                                "tool_result 仅抽取 text 块，其余类型丢弃",
+                            );
+                        }
+                    }
                     let tid = block["tool_use_id"]
                         .as_str()
                         .unwrap_or_default()
@@ -261,7 +280,7 @@ fn parse_anth_message(
 }
 
 /// 解析工具定义（name/description/input_schema → parameters）。`input_schema` 缺省为空对象。
-fn parse_tools(v: &Value, _ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertError> {
+fn parse_tools(v: &Value, ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertError> {
     let arr = v
         .as_array()
         .ok_or_else(|| ConvertError::Parse("tools 不是数组".into()))?;
@@ -269,6 +288,10 @@ fn parse_tools(v: &Value, _ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertErro
     for t in arr {
         if !t.is_object() {
             continue;
+        }
+        // 工具级 cache_control 无 IR 槽位（review P5：此前静默丢弃）
+        if t.get("cache_control").is_some() {
+            ctx.degrade("tools.cache_control", "工具级 cache_control 不支持，丢弃");
         }
         out.push(IrTool {
             name: t["name"].as_str().unwrap_or_default().to_string(),
@@ -280,7 +303,7 @@ fn parse_tools(v: &Value, _ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertErro
 }
 
 /// Anthropic tool_choice → OpenAI 形态。
-/// `auto`→"auto"，`any`→"required"，`tool`→{type:"function",function:{name}}。
+/// `auto`→"auto"，`any`→"required"，`none`→"none"，`tool`→{type:"function",function:{name}}。
 fn parse_tool_choice(tc: &Value) -> Option<Value> {
     if tc.is_null() {
         return None;
@@ -289,6 +312,9 @@ fn parse_tool_choice(tc: &Value) -> Option<Value> {
     match t {
         "auto" => Some(Value::String("auto".into())),
         "any" => Some(Value::String("required".into())),
+        // none 归一为字符串（review P5：此前原样透传 Anthropic 形状对象，转到
+        // OpenAI 系成为非法 tool_choice）
+        "none" => Some(Value::String("none".into())),
         "tool" => Some(serde_json::json!({
             "type": "function",
             "function": {"name": tc["name"].as_str().unwrap_or_default()},
@@ -349,8 +375,18 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
     }
     req.tool_choice = v.get("tool_choice").and_then(parse_tool_choice);
 
-    // metadata.user_id → user
+    // metadata.user_id → user；metadata 其余键无 IR 槽位（review P5：此前静默丢弃）
     req.user = v["metadata"]["user_id"].as_str().map(String::from);
+    if let Some(md) = v.get("metadata").and_then(|m| m.as_object()) {
+        for k in md.keys() {
+            if k != "user_id" {
+                ctx.degrade(
+                    format!("metadata.{k}"),
+                    "metadata 仅 user_id 有 IR 槽位，其余键丢弃",
+                );
+            }
+        }
+    }
 
     // thinking 请求参数 → ext.thinking（如 {type:"enabled",budget_tokens:N}）
     if let Some(t) = v.get("thinking") {
@@ -860,16 +896,43 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
         Some(c) => (&c.message, c.finish_reason.as_deref()),
         None => (&IrMessage::default(), None),
     };
+    if resp.choices.len() > 1 {
+        // Anthropic 响应单候选语义（review P5：此前静默截断）
+        ctx.degrade(
+            "choices",
+            format!("多候选（{}）仅取首个，其余丢弃", resp.choices.len()),
+        );
+    }
     body.insert(
         "content".into(),
         Value::Array(response_blocks(msg, resp, ctx)),
     );
     body.insert("model".into(), Value::String(resp.model.clone()));
 
-    let sr = finish_reason
-        .map(reverse_finish_reason)
-        .unwrap_or_else(|| "end_turn".into());
-    body.insert("stop_reason".into(), Value::String(sr));
+    // stop_reason：优先用入站保留的原始值（stop_sequence 等；review P5 修复语义回写丢失）；
+    // 无 finish 信息时不伪造 end_turn（此前 unwrap_or_else 恒补 end_turn）。
+    let raw_sr = resp
+        .extra
+        .get("anthropic_stop_reason")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let sr: Option<String> = match (raw_sr, finish_reason) {
+        (Some(raw), _) => {
+            if raw == "stop_sequence" {
+                ctx.degrade(
+                    "stop_sequence",
+                    "stop_sequence 原始值未保留，stop_sequence 字段回写为 null",
+                );
+            }
+            Some(raw.to_string())
+        }
+        (None, Some(fr)) => Some(reverse_finish_reason(fr)),
+        (None, None) => None,
+    };
+    match sr {
+        Some(s) => body.insert("stop_reason".into(), Value::String(s)),
+        None => body.insert("stop_reason".into(), Value::Null),
+    };
     body.insert("stop_sequence".into(), Value::Null);
 
     if let Some(u) = &resp.usage {
