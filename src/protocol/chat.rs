@@ -94,6 +94,10 @@ fn parse_image_url(url_val: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
     let url = if let Some(s) = url_val.as_str() {
         s.to_string()
     } else if let Some(o) = url_val.as_object() {
+        // detail（low/high/auto）无 IR 槽位，记降级（review P5：此前静默丢失）
+        if o.get("detail").is_some_and(|d| !d.is_null()) {
+            ctx.degrade("content.image_url.detail", "image detail 不支持，丢弃");
+        }
         o.get("url")
             .and_then(|u| u.as_str())
             .map(String::from)
@@ -235,6 +239,16 @@ fn parse_message(v: &Value, ctx: &mut ConvCtx) -> Result<IrMessage, ConvertError
             if let Some(call) = parse_tool_call(tc, ctx) {
                 msg.tool_calls.push(call);
             }
+        }
+    }
+    // message 级已知但无 IR 槽位的字段（few-shot 历史中可能出现）：记降级而非静默丢弃
+    // （review P5：refusal 是安全拒绝的唯一载体，annotations 携带 URL 引用）。
+    for k in ["refusal", "annotations", "audio", "function_call"] {
+        if v.get(k).is_some_and(|x| !x.is_null()) {
+            ctx.degrade(
+                format!("message.{k}"),
+                format!("message 级字段 {k} 无 IR 槽位，丢弃"),
+            );
         }
     }
     Ok(msg)
