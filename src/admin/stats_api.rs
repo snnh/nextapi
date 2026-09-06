@@ -91,6 +91,11 @@ fn build_stats_filter(q: &StatsQuery, tz: &str) -> ApiResult<StatsFilter> {
     if from_ts > to_ts {
         return Err(ApiError::bad_request("from_ts 不能晚于 to_ts"));
     }
+    // 与 /api/logs 对齐的跨度上限（review P5）：dimension 非 model 时回退明细扫描，
+    // 无上限的长区间可能扫全部分区明细，消耗无限数据库资源。
+    if to_ts.signed_duration_since(from_ts) > chrono::Duration::days(366) {
+        return Err(ApiError::bad_request("统计查询时间跨度不能超过 366 天"));
+    }
     let key_id = q
         .key_id
         .as_deref()
