@@ -11,7 +11,7 @@ export const useAuthStore = defineStore('auth', () => {
   const username = ref<string | null>(localStorage.getItem(USER_KEY))
   const loggedIn = computed(() => !!token.value)
 
-  async function login(user: string, pass: string) {
+  async function login(user: string, pass: string, totpCode?: string) {
     if (import.meta.env.VITE_UI_PREVIEW === 'true') {
       token.value = 'ui-preview-token'
       username.value = user || 'admin'
@@ -19,7 +19,7 @@ export const useAuthStore = defineStore('auth', () => {
       localStorage.setItem(USER_KEY, username.value)
       return
     }
-    const resp = await authApi.login({ username: user, password: pass })
+    const resp = await authApi.login({ username: user, password: pass, totp_code: totpCode || undefined })
     token.value = resp.token
     username.value = resp.username
     setToken(resp.token)

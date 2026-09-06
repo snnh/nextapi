@@ -20,6 +20,12 @@ pub enum ApiError {
     Conflict(String),
     #[error("请求过于频繁，请稍后再试")]
     RateLimited,
+    /// 登录需 TOTP 二次验证码（未携带）；前端据 error.code=totp_required 弹出验证码输入。
+    #[error("需要二次验证码")]
+    TotpRequired,
+    /// TOTP 验证码错误。
+    #[error("二次验证码错误")]
+    TotpInvalid,
     /// 网关/上游错误（如 GitHub 更新检查联不通），映射 HTTP 502。
     #[error("网关错误: {0}")]
     BadGateway(String),
@@ -43,6 +49,7 @@ impl ApiError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::TotpRequired | Self::TotpInvalid => StatusCode::UNAUTHORIZED,
             Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -53,10 +60,16 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let request_id = uuid::Uuid::new_v4().to_string();
+        // 机器可读码：前端据 code 区分交互流程（如 TOTP 二步输入）。
+        let code: Option<&str> = match &self {
+            Self::TotpRequired => Some("totp_required"),
+            Self::TotpInvalid => Some("totp_invalid"),
+            _ => None,
+        };
         let mut response = (
             status,
             Json(serde_json::json!({
-                "error": { "message": self.to_string(), "type": "nextapi_error" }
+                "error": { "message": self.to_string(), "type": "nextapi_error", "code": code }
             })),
         )
             .into_response();

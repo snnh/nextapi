@@ -10,6 +10,8 @@
 //!
 //! 全部 SQL 使用运行时校验（sqlx::query），不使用 query! 宏（无编译期数据库）。
 
+pub mod totp;
+
 use argon2::password_hash::{PasswordHash, PasswordVerifier};
 use argon2::Argon2;
 use axum::{
@@ -138,6 +140,10 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/login", post(login))
         .route("/me", get(me))
+        .route("/totp", get(totp_status))
+        .route("/totp/setup", post(totp_setup))
+        .route("/totp/enable", post(totp_enable))
+        .route("/totp/disable", post(totp_disable))
         .route("/password", put(change_password))
 }
 
@@ -146,6 +152,9 @@ pub fn router() -> Router<Arc<AppState>> {
 struct LoginReq {
     username: String,
     password: String,
+    /// 已启用 TOTP 时必填的二次验证码（6 位数字）。
+    #[serde(default)]
+    totp_code: Option<String>,
 }
 
 /// 修改密码请求体。
@@ -184,10 +193,12 @@ async fn login(
     // 2. 查用户；查不到与密码错误统一返回 401（不区分）。
     //    用户不存在不写审计（防随机用户名刷爆审计表）；仅密码错误写失败审计，
     //    写入速率受 per-username 限速约束。
-    let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = $1")
-        .bind(&body.username)
-        .fetch_optional(&state.db)
-        .await?;
+    let row = sqlx::query(
+        "SELECT password_hash, session_version, totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1",
+    )
+    .bind(&body.username)
+    .fetch_optional(&state.db)
+    .await?;
     let Some(row) = row else {
         return Err(ApiError::Unauthorized);
     };
@@ -207,6 +218,40 @@ async fn login(
         )
         .await;
         return Err(ApiError::Unauthorized);
+    }
+
+    // 3.5 TOTP 二次验证（已启用时）：缺码返回 totp_required（前端据此弹出验证码输入），
+    //     错码返回 totp_invalid 并写审计；尝试均受 per-username+IP 登录限速约束。
+    let totp_enabled: bool = row.try_get("totp_enabled").unwrap_or(false);
+    if totp_enabled {
+        let code = body.totp_code.as_deref().unwrap_or("").trim().to_string();
+        if code.is_empty() {
+            return Err(ApiError::TotpRequired);
+        }
+        let secret = row
+            .try_get::<Option<String>, _>("totp_secret_enc")
+            .ok()
+            .flatten()
+            .and_then(|enc| state.crypto.decrypt(&enc).ok())
+            .and_then(|b32| totp::secret_from_base32(&b32));
+        let now = Utc::now().timestamp().max(0) as u64;
+        let ok = secret
+            .as_deref()
+            .map(|s| totp::verify(s, &code, now))
+            .unwrap_or(false);
+        if !ok {
+            let _ = audit(
+                &state,
+                &body.username,
+                "auth.login_failed",
+                "admin",
+                Some(&body.username),
+                serde_json::json!({ "reason": "bad_totp" }),
+                ip,
+            )
+            .await;
+            return Err(ApiError::TotpInvalid);
+        }
     }
 
     // 4. 签发 JWT，写登录成功审计
@@ -298,6 +343,200 @@ async fn change_password(
     .await?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// TOTP 二次验证管理（均需登录；handler 内自验 JWT）
+// ---------------------------------------------------------------------------
+
+/// GET /totp：{enabled, pending}（pending = 已生成机密但未确认启用）。
+async fn totp_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    let username = current_username(&state, &headers).await?;
+    let row =
+        sqlx::query("SELECT totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1")
+            .bind(&username)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(ApiError::Unauthorized)?;
+    let enabled: bool = row.try_get("totp_enabled").unwrap_or(false);
+    let has_secret = row
+        .try_get::<Option<String>, _>("totp_secret_enc")
+        .ok()
+        .flatten()
+        .is_some();
+    Ok(Json(serde_json::json!({
+        "enabled": enabled,
+        "pending": has_secret && !enabled,
+    })))
+}
+
+/// POST /totp/setup：生成新机密（pending 态），返回 base32 机密与 otpauth URL。
+/// 机密仅本次展示；已启用时须先禁用才能重新设置。
+async fn totp_setup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    let username = current_username(&state, &headers).await?;
+    let ip = current_client_ip(&state, &headers);
+    let row = sqlx::query("SELECT totp_enabled FROM admin_users WHERE username = $1")
+        .bind(&username)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    if row.try_get::<bool, _>("totp_enabled").unwrap_or(false) {
+        return Err(ApiError::Conflict(
+            "TOTP 已启用，请先禁用后再重新设置".into(),
+        ));
+    }
+    let secret = totp::generate_secret();
+    let b32 = totp::secret_to_base32(&secret);
+    let enc = state.crypto.encrypt(&b32).map_err(ApiError::internal)?;
+    sqlx::query(
+        "UPDATE admin_users SET totp_secret_enc = $1, totp_enabled = false WHERE username = $2",
+    )
+    .bind(&enc)
+    .bind(&username)
+    .execute(&state.db)
+    .await?;
+    audit(
+        &state,
+        &username,
+        "auth.totp_setup",
+        "admin",
+        Some(&username),
+        serde_json::json!({}),
+        ip,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({
+        "secret": b32,
+        "otpauth_url": totp::otpauth_url("NextAPI", &username, &b32),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct TotpCodeReq {
+    code: String,
+}
+
+/// POST /totp/enable {code}：验证 pending 机密的验证码后启用。
+async fn totp_enable(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<TotpCodeReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let username = current_username(&state, &headers).await?;
+    let ip = current_client_ip(&state, &headers);
+    let row =
+        sqlx::query("SELECT totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1")
+            .bind(&username)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(ApiError::Unauthorized)?;
+    if row.try_get::<bool, _>("totp_enabled").unwrap_or(false) {
+        return Err(ApiError::bad_request("TOTP 已启用"));
+    }
+    let secret = row
+        .try_get::<Option<String>, _>("totp_secret_enc")
+        .ok()
+        .flatten()
+        .ok_or_else(|| ApiError::bad_request("请先生成 TOTP 机密（setup）"))?;
+    let secret =
+        totp::secret_from_base32(&state.crypto.decrypt(&secret).map_err(ApiError::internal)?)
+            .ok_or_else(|| ApiError::internal("TOTP 机密损坏"))?;
+    let now = Utc::now().timestamp().max(0) as u64;
+    if !totp::verify(&secret, &body.code, now) {
+        return Err(ApiError::TotpInvalid);
+    }
+    sqlx::query("UPDATE admin_users SET totp_enabled = true WHERE username = $1")
+        .bind(&username)
+        .execute(&state.db)
+        .await?;
+    audit(
+        &state,
+        &username,
+        "auth.totp_enable",
+        "admin",
+        Some(&username),
+        serde_json::json!({}),
+        ip,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+struct TotpDisableReq {
+    password: String,
+    code: String,
+}
+
+/// POST /totp/disable {password, code}：密码 + 验证码双重校验后禁用并清除机密。
+/// 认证器丢失的恢复途径：直接操作数据库清空这两列（README 记载）。
+async fn totp_disable(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<TotpDisableReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let username = current_username(&state, &headers).await?;
+    let ip = current_client_ip(&state, &headers);
+    let row = sqlx::query(
+        "SELECT password_hash, totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1",
+    )
+    .bind(&username)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
+    if !row.try_get::<bool, _>("totp_enabled").unwrap_or(false) {
+        return Err(ApiError::bad_request("TOTP 未启用"));
+    }
+    let hash: String = row.get("password_hash");
+    if !verify_password(&hash, &body.password) {
+        return Err(ApiError::bad_request("密码不正确"));
+    }
+    let enc = row
+        .try_get::<Option<String>, _>("totp_secret_enc")
+        .ok()
+        .flatten()
+        .ok_or_else(|| ApiError::internal("TOTP 机密缺失"))?;
+    let secret = totp::secret_from_base32(&state.crypto.decrypt(&enc).map_err(ApiError::internal)?)
+        .ok_or_else(|| ApiError::internal("TOTP 机密损坏"))?;
+    let now = Utc::now().timestamp().max(0) as u64;
+    if !totp::verify(&secret, &body.code, now) {
+        return Err(ApiError::TotpInvalid);
+    }
+    sqlx::query(
+        "UPDATE admin_users SET totp_enabled = false, totp_secret_enc = NULL WHERE username = $1",
+    )
+    .bind(&username)
+    .execute(&state.db)
+    .await?;
+    audit(
+        &state,
+        &username,
+        "auth.totp_disable",
+        "admin",
+        Some(&username),
+        serde_json::json!({}),
+        ip,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 审计用客户端 IP（复用 trusted_proxies 配置的解析逻辑）。
+fn current_client_ip(state: &AppState, headers: &HeaderMap) -> Option<std::net::IpAddr> {
+    let trusted = state
+        .file_config
+        .read()
+        .unwrap()
+        .server
+        .trusted_proxies
+        .clone();
+    client_ip(headers, &trusted)
 }
 
 /// JWT 保护中间件：校验 Authorization: Bearer，失败返回 401。

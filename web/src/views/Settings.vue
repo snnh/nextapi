@@ -14,6 +14,9 @@
       <el-tab-pane label="审计日志" name="audit" lazy>
         <audit-panel />
       </el-tab-pane>
+      <el-tab-pane label="安全" name="security" lazy>
+        <totp-panel />
+      </el-tab-pane>
       <el-tab-pane label="系统" name="system" lazy>
         <system-info-panel />
       </el-tab-pane>
@@ -33,6 +36,7 @@ import ProxyPanel from '@/components/settings/ProxyPanel.vue'
 import UpdateCheckPanel from '@/components/settings/UpdateCheckPanel.vue'
 import AuditPanel from '@/components/settings/AuditPanel.vue'
 import SystemInfoPanel from '@/components/settings/SystemInfoPanel.vue'
+import TotpPanel from '@/components/settings/TotpPanel.vue'
 
 const activeTab = ref('runtime')
 const settings = ref<SettingItem[]>([])

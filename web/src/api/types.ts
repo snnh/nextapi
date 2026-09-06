@@ -13,7 +13,7 @@
 
 /** 统一错误响应体 */
 export interface ApiErrorBody {
-  error: { message: string; type: string }
+  error: { message: string; type: string; code?: string | null }
 }
 
 /** 服务端分页响应（logs/audit） */
@@ -31,6 +31,8 @@ export interface Paged<T> {
 export interface LoginReq {
   username: string
   password: string
+  /** 已启用 TOTP 时必填（6 位数字） */
+  totp_code?: string
 }
 
 export interface LoginResp {
@@ -40,6 +42,19 @@ export interface LoginResp {
 
 export interface MeResp {
   username: string
+}
+
+/** TOTP 状态 */
+export interface TotpStatusResp {
+  enabled: boolean
+  /** 已生成机密但未确认启用 */
+  pending: boolean
+}
+
+/** TOTP setup 返回（机密仅本次展示） */
+export interface TotpSetupResp {
+  secret: string
+  otpauth_url: string
 }
 
 export interface ChangePasswordReq {

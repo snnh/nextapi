@@ -22,6 +22,8 @@ import type {
   KeyUpdateResp,
   LoginReq,
   LoginResp,
+  TotpSetupResp,
+  TotpStatusResp,
   LogItem,
   OkResp,
   Paged,
@@ -62,6 +64,12 @@ export const authApi = {
   login: (body: LoginReq) => http.post<LoginResp>('/api/auth/login', body).then((r) => r.data),
   changePassword: (body: ChangePasswordReq) =>
     http.put<OkResp>('/api/auth/password', body).then((r) => r.data),
+  totpStatus: () => http.get<TotpStatusResp>('/api/auth/totp').then((r) => r.data),
+  totpSetup: () => http.post<TotpSetupResp>('/api/auth/totp/setup').then((r) => r.data),
+  totpEnable: (code: string) =>
+    http.post<OkResp>('/api/auth/totp/enable', { code }).then((r) => r.data),
+  totpDisable: (password: string, code: string) =>
+    http.post<OkResp>('/api/auth/totp/disable', { password, code }).then((r) => r.data),
 }
 
 // ---------------------------------------------------------------------------

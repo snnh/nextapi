@@ -13,6 +13,15 @@
         <el-form-item prop="password">
           <el-input v-model="form.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
         </el-form-item>
+        <el-form-item v-if="needTotp" prop="totpCode">
+          <el-input
+            v-model="form.totpCode"
+            placeholder="二次验证码（认证器 6 位数字）"
+            :prefix-icon="Key"
+            maxlength="6"
+            clearable
+          />
+        </el-form-item>
         <el-form-item>
           <el-button class="login-btn" type="primary" :loading="loading" @click="handleLogin">登录</el-button>
         </el-form-item>
@@ -24,10 +33,12 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import axios, { AxiosError } from 'axios'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Lock, User } from '@element-plus/icons-vue'
+import { Key, Lock, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { errMsg } from '@/api/http'
+import type { ApiErrorBody } from '@/api/types'
 
 const router = useRouter()
 const route = useRoute()
@@ -35,14 +46,25 @@ const auth = useAuthStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+/** 后端返回 totp_required 后展示验证码输入框 */
+const needTotp = ref(false)
 const form = reactive({
   username: '',
   password: '',
+  totpCode: '',
 })
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+}
+
+/** 提取后端错误体的机器可读码 */
+function errCode(e: unknown): string | null {
+  if (axios.isAxiosError(e)) {
+    return (e as AxiosError<ApiErrorBody>).response?.data?.error?.code ?? null
+  }
+  return null
 }
 
 async function handleLogin() {
@@ -54,11 +76,22 @@ async function handleLogin() {
   }
   loading.value = true
   try {
-    await auth.login(form.username, form.password)
+    await auth.login(form.username, form.password, form.totpCode || undefined)
     const redirect = (route.query.redirect as string) || '/dashboard'
     router.push(redirect)
   } catch (e) {
-    ElMessage.error(errMsg(e))
+    const code = errCode(e)
+    if (code === 'totp_required') {
+      // 密码已通过，进入二次验证步骤
+      needTotp.value = true
+      ElMessage.warning('该账号已启用二次验证，请输入认证器验证码')
+    } else if (code === 'totp_invalid') {
+      needTotp.value = true
+      form.totpCode = ''
+      ElMessage.error('验证码错误或已过期，请重新输入')
+    } else {
+      ElMessage.error(errMsg(e))
+    }
   } finally {
     loading.value = false
   }
