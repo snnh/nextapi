@@ -85,6 +85,9 @@
               >
                 收起
               </el-tag>
+              <el-tag v-for="t in capsTags(row)" :key="t" size="small" type="warning" effect="plain">
+                {{ t }}
+              </el-tag>
             </div>
           </template>
         </el-table-column>
@@ -250,6 +253,18 @@ onMounted(() => {
   loadProxies()
   loadPresets()
 })
+
+/** 能力矩阵限制标签（M10.3）：显式「不支持」的能力 + 最大上下文。 */
+function capsTags(row: UpstreamOut): string[] {
+  const caps = row.extra?.capabilities
+  if (!caps) return []
+  const tags: string[] = []
+  if (caps.stream === false) tags.push('禁流式')
+  if (caps.tools === false) tags.push('禁工具')
+  if (caps.vision === false) tags.push('禁视觉')
+  if (caps.max_context) tags.push(`上下文 ${Math.round(caps.max_context / 1024)}k`)
+  return tags
+}
 
 function toggleExpand(id: string) {
   if (expandedRows.has(id)) expandedRows.delete(id)

@@ -140,6 +140,53 @@ impl UpstreamRow {
             .get("overrides")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
     }
+
+    /// 能力矩阵（M10.3）：extra.capabilities 子对象，未配置 = 假设支持（向后兼容）。
+    pub fn capabilities(&self) -> Capabilities {
+        let c = &self.extra["capabilities"];
+        Capabilities {
+            stream: c["stream"].as_bool(),
+            tools: c["tools"].as_bool(),
+            vision: c["vision"].as_bool(),
+            max_context: c["max_context"].as_u64(),
+        }
+    }
+}
+
+/// 上游能力矩阵（M10.3）。三态：None = 未配置（假设支持）；Some(false) = 明确不支持
+/// → 路由候选过滤；Some(true) = 显式支持（与 None 行为相同，仅作管理标记）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    pub stream: Option<bool>,
+    pub tools: Option<bool>,
+    pub vision: Option<bool>,
+    /// 最大上下文 tokens（仅记录/展示；v1 不参与过滤——请求侧无廉价 token 计量）
+    pub max_context: Option<u64>,
+}
+
+/// 请求所需能力（M10.3），由 gateway 从请求体检测。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RequiredCaps {
+    pub stream: bool,
+    pub tools: bool,
+    pub vision: bool,
+}
+
+impl Capabilities {
+    /// 返回缺失能力名列表（空 = 满足），供路由过滤与错误提示。
+    pub fn missing(&self, req: RequiredCaps) -> Vec<&'static str> {
+        let mut m = Vec::new();
+        if req.stream && self.stream == Some(false) {
+            m.push("stream");
+        }
+        if req.tools && self.tools == Some(false) {
+            m.push("tools");
+        }
+        if req.vision && self.vision == Some(false) {
+            m.push("vision");
+        }
+        m
+    }
 }
 
 /// 模型别名（model_aliases 表，M10.1）：alias → model 单跳映射。
@@ -330,4 +377,60 @@ pub struct MediaTaskRow {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_missing_rules() {
+        // 未配置 = 假设支持（任何需求都不缺失）
+        let none = Capabilities::default();
+        assert!(none
+            .missing(RequiredCaps {
+                stream: true,
+                tools: true,
+                vision: true
+            })
+            .is_empty());
+        // 显式支持同上
+        let on = Capabilities {
+            stream: Some(true),
+            tools: Some(true),
+            vision: Some(true),
+            max_context: None,
+        };
+        assert!(on
+            .missing(RequiredCaps {
+                stream: true,
+                tools: true,
+                vision: true
+            })
+            .is_empty());
+        // 显式不支持 → 按需缺失
+        let off = Capabilities {
+            stream: Some(false),
+            tools: Some(false),
+            vision: Some(false),
+            max_context: None,
+        };
+        assert_eq!(
+            off.missing(RequiredCaps {
+                stream: true,
+                tools: false,
+                vision: true
+            }),
+            vec!["stream", "vision"]
+        );
+        // 无需求不缺失
+        assert!(off.missing(RequiredCaps::default()).is_empty());
+        // max_context 不参与过滤（v1）
+        assert!(
+            off.missing(RequiredCaps {
+                tools: true,
+                ..Default::default()
+            }) == vec!["tools"]
+        );
+    }
 }

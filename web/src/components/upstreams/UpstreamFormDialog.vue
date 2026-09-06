@@ -129,6 +129,39 @@
               clearable
             />
           </el-form-item>
+          <el-form-item label="能力矩阵" label-width="120px">
+            <div class="caps-grid">
+              <span class="caps-label">流式</span>
+              <el-select v-model="form.capStream" style="width: 170px">
+                <el-option label="未设置（假设支持）" value="unset" />
+                <el-option label="明确支持" value="on" />
+                <el-option label="不支持（路由过滤）" value="off" />
+              </el-select>
+              <span class="caps-label">工具调用</span>
+              <el-select v-model="form.capTools" style="width: 170px">
+                <el-option label="未设置（假设支持）" value="unset" />
+                <el-option label="明确支持" value="on" />
+                <el-option label="不支持（路由过滤）" value="off" />
+              </el-select>
+              <span class="caps-label">视觉（图片输入）</span>
+              <el-select v-model="form.capVision" style="width: 170px">
+                <el-option label="未设置（假设支持）" value="unset" />
+                <el-option label="明确支持" value="on" />
+                <el-option label="不支持（路由过滤）" value="off" />
+              </el-select>
+              <span class="caps-label">最大上下文</span>
+              <el-input-number
+                v-model="form.capMaxContext"
+                :min="0"
+                :step="8192"
+                placeholder="tokens"
+                style="width: 170px"
+              />
+            </div>
+            <div class="hint" style="margin-top: 6px">
+              标记「不支持」的能力，带该需求的请求路由时自动跳过此上游；最大上下文仅记录展示，暂不参与过滤。
+            </div>
+          </el-form-item>
         </el-collapse-item>
       </el-collapse>
     </el-form>
@@ -192,6 +225,10 @@ interface FormState {
   proxy_id: string
   overrides: Overrides
   media_base_url: string
+  capStream: 'unset' | 'on' | 'off'
+  capTools: 'unset' | 'on' | 'off'
+  capVision: 'unset' | 'on' | 'off'
+  capMaxContext: number | undefined
 }
 
 function defaultForm(): FormState {
@@ -212,6 +249,10 @@ function defaultForm(): FormState {
     proxy_id: '',
     overrides: {},
     media_base_url: '',
+    capStream: 'unset',
+    capTools: 'unset',
+    capVision: 'unset',
+    capMaxContext: undefined,
   }
 }
 
@@ -279,6 +320,11 @@ function open(upstream?: UpstreamOut) {
     base.proxy_id = upstream.proxy_id ?? ''
     base.overrides = upstream.extra?.overrides ? JSON.parse(JSON.stringify(upstream.extra.overrides)) : {}
     base.media_base_url = upstream.extra?.media_base_url ?? ''
+    const caps = upstream.extra?.capabilities
+    base.capStream = caps?.stream === true ? 'on' : caps?.stream === false ? 'off' : 'unset'
+    base.capTools = caps?.tools === true ? 'on' : caps?.tools === false ? 'off' : 'unset'
+    base.capVision = caps?.vision === true ? 'on' : caps?.vision === false ? 'off' : 'unset'
+    base.capMaxContext = caps?.max_context ?? undefined
   }
   Object.assign(form, base)
   visible.value = true
@@ -289,6 +335,17 @@ function buildExtra(): UpstreamExtra {
   if (Object.keys(form.overrides).length) extra.overrides = form.overrides
   extra.protocol_priority = [...form.protocolPriority]
   extra.media_base_url = form.media_base_url.trim() || null
+  const tri = (v: 'unset' | 'on' | 'off') => (v === 'unset' ? null : v === 'on')
+  const caps: NonNullable<UpstreamExtra['capabilities']> = {
+    stream: tri(form.capStream),
+    tools: tri(form.capTools),
+    vision: tri(form.capVision),
+    max_context: form.capMaxContext || null,
+  }
+  // 全部未设置则不写 capabilities 键（保持 extra 干净）
+  if (caps.stream !== null || caps.tools !== null || caps.vision !== null || caps.max_context) {
+    extra.capabilities = caps
+  }
   return extra
 }
 
@@ -350,5 +407,16 @@ defineExpose({ open })
 }
 .api-key-state {
   margin-bottom: 6px;
+}
+.caps-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+  width: 100%;
+}
+.caps-label {
+  font-size: 13px;
+  color: #6b7280;
 }
 </style>

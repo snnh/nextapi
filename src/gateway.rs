@@ -458,6 +458,47 @@ fn resolve_alias(snap: &crate::cache::Snapshot, model: &str) -> (String, Option<
         _ => (model.to_string(), None),
     }
 }
+
+/// 从请求体检测能力需求（M10.3）：tools 参数 / 图片 part / stream。
+/// 覆盖四协议形态：chat messages[].content[]（image_url）、responses input[].content[]
+/// （input_image）、anthropic messages[].content[]（image）、gemini contents[].parts[]
+/// （inline_data/file_data）。
+fn required_caps(body: &serde_json::Value, stream: bool) -> crate::entities::RequiredCaps {
+    let mut req = crate::entities::RequiredCaps {
+        stream,
+        ..Default::default()
+    };
+    // tools：chat tools[] 与 legacy functions[]；responses/anthropic/gemini 均 tools[]
+    if body["tools"].as_array().is_some_and(|t| !t.is_empty())
+        || body["functions"].as_array().is_some_and(|f| !f.is_empty())
+    {
+        req.tools = true;
+    }
+    // vision：消息内容 part 中的图片形态
+    let is_image_part = |p: &serde_json::Value| {
+        matches!(
+            p["type"].as_str(),
+            Some("image_url") | Some("input_image") | Some("image")
+        ) || p.get("inline_data").is_some()
+            || p.get("file_data").is_some()
+    };
+    'outer: for key in ["messages", "input", "contents"] {
+        if let Some(items) = body[key].as_array() {
+            for it in items {
+                for sub in ["content", "parts"] {
+                    if it[sub]
+                        .as_array()
+                        .is_some_and(|ps| ps.iter().any(is_image_part))
+                    {
+                        req.vision = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    req
+}
 /// 是否流式请求：Gemini 以路径 action 判定，其余以 body["stream"] 判定。
 fn is_stream(body: &serde_json::Value, gemini_stream: Option<bool>) -> bool {
     match gemini_stream {
@@ -1033,9 +1074,18 @@ async fn run_gateway(
             error_resp(entry_protocol, &request_id, 404, "模型未配置路由"),
         );
     }
+    // M10.3 能力过滤：显式标记不支持所需能力（stream/tools/vision）的上游跳过，
+    // 全部被滤掉时错误信息附原因（后台可在日志看到 detail）。
+    let req_caps = required_caps(&body_value, stream);
+    let mut cap_filtered: Vec<String> = Vec::new();
     let mut candidates: Vec<Candidate> = Vec::new();
     for route in matched {
         if let Some(up) = snap.upstreams.get(&route.upstream_id).cloned() {
+            let missing = up.capabilities().missing(req_caps);
+            if !missing.is_empty() {
+                cap_filtered.push(format!("{} 缺 {}", up.name, missing.join("/")));
+                continue;
+            }
             if up.enabled && state.breaker.allow(&up) {
                 candidates.push(Candidate {
                     route,
@@ -1045,14 +1095,19 @@ async fn run_gateway(
         }
     }
     if candidates.is_empty() {
+        let msg = if cap_filtered.is_empty() {
+            "无可用上游".to_string()
+        } else {
+            format!("无可用上游（能力不足：{}）", cap_filtered.join("；"))
+        };
         let lbl = metrics_labels(&key, entry, "");
-        log_fail(&state, &tmpl, start, 503, "无可用上游", 0);
+        log_fail(&state, &tmpl, start, 503, &msg, 0);
         return record(
             &state.metrics,
             &lbl,
             start,
             true,
-            error_resp(entry_protocol, &request_id, 503, "无可用上游"),
+            error_resp(entry_protocol, &request_id, 503, &msg),
         );
     }
     let attempts: Vec<Attempt> = order_candidates(candidates)
@@ -2203,6 +2258,38 @@ mod tests {
     use axum::http::HeaderMap;
     use chrono::Utc;
     use serde_json::json;
+
+    /// 能力需求检测（M10.3）：tools 参数、四协议图片 part、stream 标志。
+    #[test]
+    fn required_caps_detection() {
+        // 纯文本非流式 → 无需求
+        let body = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let r = required_caps(&body, false);
+        assert!(!r.stream && !r.tools && !r.vision);
+        // chat tools + image_url part + stream
+        let body = json!({
+            "model":"m","stream":true,
+            "tools":[{"type":"function","function":{"name":"f"}}],
+            "messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"u"}}]}]
+        });
+        let r = required_caps(&body, true);
+        assert!(r.stream && r.tools && r.vision);
+        // responses input_image
+        let body = json!({"model":"m","input":[{"role":"user","content":[{"type":"input_image","image_url":"u"}]}]});
+        assert!(required_caps(&body, false).vision);
+        // anthropic image part
+        let body = json!({"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{}}]}]});
+        assert!(required_caps(&body, false).vision);
+        // gemini inline_data
+        let body = json!({"contents":[{"role":"user","parts":[{"inline_data":{"mime_type":"image/png","data":"x"}}]}]});
+        assert!(required_caps(&body, false).vision);
+        // legacy functions 也视为 tools
+        let body = json!({"model":"m","functions":[{"name":"f"}]});
+        assert!(required_caps(&body, false).tools);
+        // 空 tools 数组不算
+        let body = json!({"model":"m","tools":[]});
+        assert!(!required_caps(&body, false).tools);
+    }
 
     /// 别名解析（M10.1）：启用别名单跳替换并保留入口名；禁用/未命中原样返回。
     #[test]

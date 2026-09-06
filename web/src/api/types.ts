@@ -153,6 +153,13 @@ export interface UpstreamExtra {
   protocol_priority?: ProtocolName[]
   overrides?: Overrides
   media_base_url?: string | null
+  /** 能力矩阵（M10.3）：三态——缺省=假设支持，false=明确不支持（路由过滤） */
+  capabilities?: {
+    stream?: boolean | null
+    tools?: boolean | null
+    vision?: boolean | null
+    max_context?: number | null
+  }
 }
 
 export interface UpstreamIn {
