@@ -1,8 +1,10 @@
 //! WAL 兜底（PLAN §5.5：JSONL + CRC，单文件上限滚动，重放成功后归档 24h）。
 //! 契约 contracts/m4-logging.md §4，M4-A 实现。
 //!
-//! 简化说明（契约 §4 允许）：活跃文件（mtime 最新）跳过重放，其余 wal-*.jsonl 视为可重放
-//! 归档对象；重放成功后重命名为 `<name>.archived`，保留 24h 后删除。
+//! 活跃文件判定（review P5 修正）：归档经 WalWriter::archive_if_inactive 在 append 同一把
+//! 写锁内原子判定（cur_path 非活跃 + 长度未变才改名），不再用 mtime 最新启发式——
+//! 启动重放时本进程尚无活跃文件，旧文件全部可归档，避免崩溃残留文件被每轮重放却
+//! 永不归档；同时杜绝「读后并发追加的字节被归档滞留」的丢日志竞态。
 //! WalWriter::new 不做任何 IO，目录在首次 append 时创建；磁盘写失败返回 Err 由调用方计数告警。
 
 use std::io::Write;
@@ -93,6 +95,29 @@ impl WalWriter {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// 若 path 非当前活跃文件且长度未变（无并发追加）则原子改名归档，返回是否归档。
+    ///
+    /// 判定与改名都在 append 同一把写锁内完成，杜绝「重放读到一半被并发追加、
+    /// 归档后尾部字节滞留 .archived 永不落库」的竞态；len 校验兜底「读后追加再滚动」
+    /// 场景（文件已非活跃但被追加过未重放的字节）。
+    pub fn archive_if_inactive(&self, path: &Path, expected_len: u64) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if inner.cur_path.as_deref() == Some(path) {
+            return false;
+        }
+        let cur_len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+        if cur_len != expected_len {
+            return false;
+        }
+        match std::fs::rename(path, path.with_extension("archived")) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), "WAL 归档失败: {e}");
+                false
+            }
+        }
     }
 }
 
@@ -218,41 +243,37 @@ fn cleanup_archived(dir: &Path) {
     }
 }
 
-/// 重放所有非活跃 wal-*.jsonl：坏行跳过 + warn；insert_batch 成功后重命名 .archived；
+/// 重放所有 wal-*.jsonl：坏行跳过 + warn；非活跃文件 insert_batch 成功后归档（改名 .archived，
+/// 由 WalWriter::archive_if_inactive 在写锁内原子判定，活跃/并发追加的文件留待下轮）；
 /// 删除 mtime 超过 24h 的 *.archived。返回 (回放事件数, 归档文件数)。
+///
+/// `wal` 为本进程的写入器：启动重放时其尚无活跃文件（内部 None），旧文件全部可归档，
+/// 修正此前 mtime 最新启发式导致崩溃残留文件永不归档、每轮空转重放的问题（review P5）。
 pub async fn replay_and_archive(
     dir: &Path,
     pool: &sqlx::PgPool,
     billing_tz: &str,
     fx_stale_max_minutes: u64,
+    wal: &WalWriter,
 ) -> ApiResult<(u64, u64)> {
-    let mut files = list_wal_files(dir)?;
+    let files = list_wal_files(dir)?;
     if files.is_empty() {
         return Ok((0, 0));
     }
-    // 末尾为 mtime 最新（活跃尾巴：本进程正在 append 的文件）。改进（review P1-#11）：
-    // 活跃文件同样参与重放（失败批次/溢出事件常滞留其中，跳过会导致永不落库），
-    // 但不归档（进程仍持有写句柄）；insert_batch 的明细幂等守卫保证重复重放安全。
-    let active = files.pop();
     let mut replayed = 0u64;
     let mut archived = 0u64;
 
     for f in &files {
+        // 重放前记录长度：归档时复核，防止「读后并发追加」的字节被归档滞留。
+        let len_before = std::fs::metadata(f).map(|m| m.len()).unwrap_or(u64::MAX);
         let (n, ok) = replay_wal_file(pool, f, billing_tz, fx_stale_max_minutes).await?;
         replayed += n;
         if ok {
-            // 重放成功（含空文件）→ 归档
-            match std::fs::rename(f, f.with_extension("archived")) {
-                Ok(()) => archived += 1,
-                Err(e) => tracing::warn!(path = %f.display(), "WAL 归档失败: {e}"),
+            if wal.archive_if_inactive(f, len_before) {
+                archived += 1;
             }
-        }
-    }
-    if let Some(f) = &active {
-        let (n, ok) = replay_wal_file(pool, f, billing_tz, fx_stale_max_minutes).await?;
-        replayed += n;
-        if !ok {
-            tracing::warn!(path = %f.display(), "活跃 WAL 重放失败，留待下次");
+        } else {
+            tracing::warn!(path = %f.display(), "WAL 重放失败，保留文件留待下次");
         }
     }
 
@@ -411,6 +432,35 @@ mod tests {
                 assert!(e.request_id.starts_with("req-"));
             }
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn archive_if_inactive_guards_active_and_grown_files() {
+        let dir = std::env::temp_dir().join(format!("wal-arch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = WalWriter::with_max_bytes(dir.clone(), 512);
+        w.append(&[mk_event(1_700_000_010)]).await.unwrap();
+        let files = list_wal_files(&dir).unwrap();
+        assert_eq!(files.len(), 1);
+        let active = files[0].clone();
+        let len = std::fs::metadata(&active).unwrap().len();
+
+        // 活跃文件不归档
+        assert!(!w.archive_if_inactive(&active, len));
+        assert!(active.exists());
+
+        // 非活跃但长度不符（并发追加过）不归档
+        let other = dir.join("wal-other.jsonl");
+        std::fs::write(&other, b"x").unwrap();
+        assert!(!w.archive_if_inactive(&other, 999));
+        assert!(other.exists());
+
+        // 非活跃且长度一致 → 归档成功
+        assert!(w.archive_if_inactive(&other, 1));
+        assert!(!other.exists());
+        assert!(other.with_extension("archived").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

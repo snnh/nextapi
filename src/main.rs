@@ -97,12 +97,14 @@ async fn main() -> anyhow::Result<()> {
     let gw = hot.load().gateway.clone();
     let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.clamp(16, 1_000_000));
     let wal = logging::wal::WalWriter::new(gw.log_wal_dir.clone().into(), gw.log_wal_file_max_mb);
-    // 启动即重放 WAL（失败只 warn）
+    // 启动即重放 WAL（失败只 warn）。本进程尚未 append（WalWriter::new 无 IO），
+    // 无活跃文件 → 旧文件重放成功后全部归档。
     if let Err(e) = logging::wal::replay_and_archive(
         wal.dir(),
         &pool,
         &gw.billing_timezone,
         gw.fx_stale_max_minutes,
+        &wal,
     )
     .await
     {
@@ -165,8 +167,10 @@ async fn main() -> anyhow::Result<()> {
         drop(log_rx);
         None
     };
-    // 周期任务：每 60s 重放非活跃 WAL；每 6h 维护分区。
+    // 周期任务：每 60s 重放 WAL；每 6h 维护分区。
+    // 归档判定由 WalWriter::archive_if_inactive 在写锁内完成（活跃/并发追加文件自动跳过）。
     let wal_dir = wal.dir().to_path_buf();
+    let wal_periodic = wal.clone();
     let tz = gw.billing_timezone.clone();
     let part_days = gw.log_partition_days;
     let fx_stale = gw.fx_stale_max_minutes;
@@ -175,8 +179,14 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            if let Err(e) =
-                logging::wal::replay_and_archive(&wal_dir, &pool_replay, &tz, fx_stale).await
+            if let Err(e) = logging::wal::replay_and_archive(
+                &wal_dir,
+                &pool_replay,
+                &tz,
+                fx_stale,
+                &wal_periodic,
+            )
+            .await
             {
                 warn!("WAL 周期重放失败: {e}");
             }
