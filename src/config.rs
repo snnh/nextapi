@@ -127,6 +127,9 @@ pub struct GatewayCfg {
     pub quota_check_cache_secs: u64,
     /// block=429 硬阻断 | warn=仅日志告警
     pub quota_exceed_action: String,
+    /// M11.3 Key 级粘性路由：同 Key 同模型固定落到同优先级组内最近成功的上游
+    /// （便于利用上游缓存）；pinned 上游不可用（禁用/熔断/缺能力）自动回落加权随机。
+    pub sticky_routing: bool,
 }
 
 impl Default for GatewayCfg {
@@ -153,6 +156,7 @@ impl Default for GatewayCfg {
             batch_insert_interval_ms: 500,
             quota_check_cache_secs: 3,
             quota_exceed_action: "block".into(),
+            sticky_routing: false,
         }
     }
 }

@@ -112,6 +112,10 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '用量缓存秒数',
     help: '用量上限聚合结果缓存秒数。默认 3',
   },
+  'gateway.sticky_routing': {
+    label: 'Key 粘性路由',
+    help: '同一 Key 同模型固定落到最近成功的上游（便于利用上游缓存）；pinned 上游不可用自动回落加权随机。默认 false',
+  },
   'gateway.quota_exceed_action': {
     label: '超配额动作',
     help: 'block=429 硬阻断 | warn=仅日志告警。默认 block',

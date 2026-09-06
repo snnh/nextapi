@@ -136,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
         limiter: limit::RateLimiter::new(),
         quota_cache: limit::QuotaCache::new(),
         breaker: routing::Breaker::new(),
+        sticky: routing::StickyMap::default(),
         client_pools: upstream::ClientPools::new(),
         file_config: std::sync::RwLock::new(cfg.clone()),
         config_path: config_path.clone().into(),

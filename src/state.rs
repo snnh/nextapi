@@ -29,6 +29,8 @@ pub struct AppState {
     pub quota_cache: QuotaCache,
     /// 上游熔断器
     pub breaker: Breaker,
+    /// Key 级粘性路由表（M11.3，gateway.sticky_routing 开启时生效）
+    pub sticky: crate::routing::StickyMap,
     /// 上游 HTTP 客户端池（按代理/直连分池）
     pub client_pools: ClientPools,
     /// 最近一次加载的 YAML 配置（供 /api/config 导出）

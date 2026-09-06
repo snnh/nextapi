@@ -19,6 +19,56 @@ pub const MAX_COOLDOWN_SECS: i64 = 30 * 60;
 /// 半开状态的死锁防护：探测在飞（HalfOpen）超过该时长仍无结果则重置计时并再放行一个。
 pub const HALFOPEN_TIMEOUT_SECS: i64 = 120;
 
+/// 粘性条目 TTL（M11.3）：10 分钟滑动（每次命中续期）。
+const STICKY_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+/// 粘性表容量上限（防内存膨胀；满时先清过期，再逐最旧）。
+const STICKY_CAP: usize = 10_000;
+
+/// Key 级粘性路由表（M11.3）：(key_id, model) → (upstream_id, 最近使用时间)。
+/// 纯内存优化提示（重启失效可接受，非正确性依赖）；仅在「成功」时写入，
+/// pinned 上游不可用（禁用/熔断/缺能力/不在最优优先级组）自动回落加权随机。
+#[derive(Default)]
+pub struct StickyMap {
+    inner: Mutex<HashMap<(Uuid, String), (Uuid, std::time::Instant)>>,
+}
+
+impl StickyMap {
+    /// 读取粘性上游（命中即滑动续期）。
+    pub fn get(&self, key_id: Uuid, model: &str) -> Option<Uuid> {
+        let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let k = (key_id, model.to_string());
+        let (up, ts) = map.get(&k)?;
+        if ts.elapsed() > STICKY_TTL {
+            map.remove(&k);
+            return None;
+        }
+        let up = *up;
+        map.insert(k, (up, std::time::Instant::now()));
+        Some(up)
+    }
+
+    /// 记录/更新粘性（成功路径调用）。满时先清过期，仍满则逐最旧一条。
+    pub fn pin(&self, key_id: Uuid, model: &str, upstream_id: Uuid) {
+        let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if map.len() >= STICKY_CAP {
+            map.retain(|_, (_, ts)| ts.elapsed() <= STICKY_TTL);
+            if map.len() >= STICKY_CAP {
+                if let Some(oldest) = map
+                    .iter()
+                    .max_by_key(|(_, (_, ts))| ts.elapsed())
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
+            }
+        }
+        map.insert(
+            (key_id, model.to_string()),
+            (upstream_id, std::time::Instant::now()),
+        );
+    }
+}
+
 /// 模型通配符匹配（仅支持 `*` 通配任意字符序列）。
 ///
 /// 采用贪心回退算法：遇到 `*` 记录回溯点，失配时让最近的 `*` 多吃一个字符再试。
@@ -839,5 +889,29 @@ mod tests {
             },
         );
         assert!(!br.allow(&up));
+    }
+}
+
+#[cfg(test)]
+mod sticky_tests {
+    use super::*;
+
+    #[test]
+    fn sticky_map_pin_get_update() {
+        let m = StickyMap::default();
+        let k = Uuid::new_v4();
+        // 未 pin → None
+        assert!(m.get(k, "m").is_none());
+        let up1 = Uuid::new_v4();
+        m.pin(k, "m", up1);
+        assert_eq!(m.get(k, "m"), Some(up1));
+        // 不同模型互不粘
+        assert!(m.get(k, "other").is_none());
+        // 不同 Key 互不粘
+        assert!(m.get(Uuid::new_v4(), "m").is_none());
+        // 覆盖更新
+        let up2 = Uuid::new_v4();
+        m.pin(k, "m", up2);
+        assert_eq!(m.get(k, "m"), Some(up2));
     }
 }

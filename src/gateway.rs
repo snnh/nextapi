@@ -697,6 +697,21 @@ fn add_ratelimit_headers(resp: &mut Response, rl: Option<(u32, u32)>) {
     }
 }
 
+/// 粘性重排（M11.3）：pinned 上游位于**最优优先级组**内才提到首位，否则忽略。
+/// 纯函数，供测试。
+fn reorder_pinned_first(attempts: &mut Vec<Attempt>, pin: Uuid) {
+    let Some(best) = attempts.first().map(|a| a.candidate.route.priority) else {
+        return;
+    };
+    if let Some(pos) = attempts
+        .iter()
+        .position(|a| a.candidate.upstream.id == pin && a.candidate.route.priority == best)
+    {
+        let a = attempts.remove(pos);
+        attempts.insert(0, a);
+    }
+}
+
 /// mode 转换后的字符串（contract §12.7）。
 fn mode_str(mode: Mode) -> &'static str {
     match mode {
@@ -1167,6 +1182,15 @@ async fn run_gateway(
         );
     }
 
+    // M11.3 Key 级粘性路由：pinned 上游在最优优先级组内则提到首位；
+    // 不在（禁用/熔断/缺能力/组外）则忽略，成功路径会更新 pin。
+    let mut attempts = attempts;
+    if gateway_cfg.sticky_routing {
+        if let Some(pin) = state.sticky.get(key.id, &model) {
+            reorder_pinned_first(&mut attempts, pin);
+        }
+    }
+
     // 6b. 幂等键（M10.2）：仅非流式；登记点在路由决策之后——限流/无路由等未触达上游的
     // 失败不占键。重放直接返回缓存响应（不重复计费、不写日志、不计 metrics）。
     let mut idem_rec: Option<Uuid> = None;
@@ -1359,6 +1383,10 @@ async fn run_gateway(
             match exec_res {
                 Ok(ExecOutcome::Json(json)) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    // M11.3：成功即更新粘性 pin（仅开启时；pin 只在成功路径写入）
+                    if gateway_cfg.sticky_routing {
+                        state.sticky.pin(key.id, &model, upstream.id);
+                    }
                     let lbl = metrics_labels(&key, entry, &upstream.name);
                     // 用上游原始 JSON 提取 usage（§12.2）；转换前后 usage 语义等价，取原始值最准。
                     let usage =
@@ -1443,6 +1471,10 @@ async fn run_gateway(
                 }
                 Ok(ExecOutcome::Stream(resp)) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    // M11.3：成功即更新粘性 pin（仅开启时；pin 只在成功路径写入）
+                    if gateway_cfg.sticky_routing {
+                        state.sticky.pin(key.id, &model, upstream.id);
+                    }
                     let lbl = metrics_labels(&key, entry, &upstream.name);
                     let sbody = if matches!(outbound.mode, Mode::Convert(_)) {
                         Body::from_stream(upstream::sse_convert_stream(
@@ -2322,6 +2354,79 @@ mod tests {
     use axum::http::HeaderMap;
     use chrono::Utc;
     use serde_json::json;
+
+    /// 粘性重排（M11.3）：pinned 在最优组 → 提首；跨组/不存在 → 不动。
+    #[test]
+    fn sticky_reorder_rules() {
+        let mk_route = |priority: i32| crate::entities::ModelRouteRow {
+            id: Uuid::new_v4(),
+            model_pattern: "m".into(),
+            upstream_id: Uuid::new_v4(),
+            override_model: None,
+            priority,
+            weight: 1,
+            enabled: true,
+            retries: 2,
+            retry_status_codes: vec![429],
+            lock_upstream: false,
+            sort_order: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let mk_up = |name: &str| UpstreamRow {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            kind: "openai".into(),
+            base_url: "http://localhost".into(),
+            api_key_plain: None,
+            protocols: vec!["openai_chat".into()],
+            enabled: true,
+            timeout_ms: 300_000,
+            breaker_threshold: 5,
+            probe_model: None,
+            consecutive_failures: 0,
+            disabled_by: None,
+            cooldown_until: None,
+            use_proxy: false,
+            proxy_id: None,
+            extra: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let mk_attempt = |name: &str, priority: i32| Attempt {
+            candidate: Candidate {
+                route: mk_route(priority),
+                upstream: mk_up(name),
+            },
+            mode: Mode::Passthrough,
+        };
+        let a = mk_attempt("a", 10);
+        let b = mk_attempt("b", 10);
+        let c = mk_attempt("c", 20); // 次优组
+        let (id_a, id_b, id_c) = (
+            a.candidate.upstream.id,
+            b.candidate.upstream.id,
+            c.candidate.upstream.id,
+        );
+
+        // pinned b 在最优组 → 提到首位
+        let mut v = vec![a.clone(), b.clone(), c.clone()];
+        reorder_pinned_first(&mut v, id_b);
+        assert_eq!(v[0].candidate.upstream.id, id_b);
+        assert_eq!(v.len(), 3);
+        // pinned c 在次优组 → 不动
+        let mut v = vec![a.clone(), b.clone(), c.clone()];
+        reorder_pinned_first(&mut v, id_c);
+        assert_eq!(v[0].candidate.upstream.id, id_a);
+        // pinned 不存在 → 不动
+        let mut v = vec![a.clone(), b.clone(), c.clone()];
+        reorder_pinned_first(&mut v, Uuid::new_v4());
+        assert_eq!(v[0].candidate.upstream.id, id_a);
+        // 空表不动
+        let mut v: Vec<Attempt> = vec![];
+        reorder_pinned_first(&mut v, id_a);
+        assert!(v.is_empty());
+    }
 
     /// 能力需求检测（M10.3）：tools 参数、四协议图片 part、stream 标志。
     #[test]
