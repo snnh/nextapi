@@ -66,8 +66,19 @@ impl SseParser {
 }
 
 /// 编码单条 SSE 事件（data 载荷 + 空行）。
+///
+/// 多行 data（解析器按 SSE 规范以 `\n` 拼接）逐行各补 `data: ` 前缀：
+/// 直接 `format!("data: {data}\n\n")` 会让第二行起丢失前缀，产出畸形帧
+/// （仅出现于「解析失败原样放行」路径——JSON 载荷字符串内不含裸换行）。
 pub fn encode_event(data: &str) -> String {
-    format!("data: {data}\n\n")
+    let mut out = String::with_capacity(data.len() + 8);
+    for line in data.split('\n') {
+        out.push_str("data: ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out
 }
 
 /// 编码单条 SSE 事件，并按 data 的 JSON `type` 补 `event:` 行。
@@ -82,8 +93,8 @@ pub fn encode_typed_event(data: &str) -> String {
         .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
         .filter(|t| !t.is_empty());
     match event {
-        Some(name) => format!("event: {name}\ndata: {data}\n\n"),
-        None => format!("data: {data}\n\n"),
+        Some(name) => format!("event: {name}\n{}", encode_event(data)),
+        None => encode_event(data),
     }
 }
 
@@ -154,5 +165,19 @@ mod tests {
             encode_typed_event(r#"{"type":123}"#),
             "data: {\"type\":123}\n\n"
         );
+    }
+
+    #[test]
+    fn multiline_data_reencoded_with_prefix_per_line() {
+        // 多行 data（解析器以 \n 拼接）重编码必须每行补 data: 前缀，
+        // 且能被解析器还原为同一载荷（round-trip）。
+        let joined = "line1\nline2";
+        let encoded = encode_event(joined);
+        assert_eq!(encoded, "data: line1\ndata: line2\n\n");
+        let mut p = SseParser::new();
+        assert_eq!(p.feed(encoded.as_bytes()), vec![joined]);
+        // typed 版本同样逐行前缀，event 行在前
+        let encoded_typed = encode_typed_event(joined);
+        assert_eq!(encoded_typed, "data: line1\ndata: line2\n\n");
     }
 }
