@@ -38,6 +38,14 @@ use crate::upstream::{self, UpstreamError};
 /// 网关注入的响应头。
 pub const HDR_REQUEST_ID: &str = "x-request-id";
 pub const HDR_DEGRADED: &str = "x-nextapi-degraded";
+/// 服务版本头（M10.5 标准客户端兼容）
+pub const HDR_VERSION: &str = "x-nextapi-version";
+/// 限流上限/剩余头（M10.5，可选）
+pub const HDR_RL_LIMIT: &str = "x-ratelimit-limit";
+pub const HDR_RL_REMAINING: &str = "x-ratelimit-remaining";
+
+/// 网关版本（编译期确定）。
+pub const GATEWAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 网关入口协议。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,6 +645,10 @@ fn json_rsp(
             h.insert(HDR_DEGRADED, dv);
         }
     }
+    h.insert(
+        HDR_VERSION,
+        header::HeaderValue::from_static(GATEWAY_VERSION),
+    );
     let bytes = serde_json::to_vec(&body).unwrap_or_default();
     (status, h, Body::from(bytes)).into_response()
 }
@@ -665,7 +677,24 @@ fn stream_rsp(request_id: &str, body: Body) -> Response {
             .parse::<header::HeaderValue>()
             .unwrap_or_else(|_| header::HeaderValue::from_static("")),
     );
+    h.insert(
+        HDR_VERSION,
+        header::HeaderValue::from_static(GATEWAY_VERSION),
+    );
     (StatusCode::OK, h, body).into_response()
+}
+
+/// 附加速率限制头（M10.5）：Some((limit, remaining)) 时写入；None（不限流）不写。
+fn add_ratelimit_headers(resp: &mut Response, rl: Option<(u32, u32)>) {
+    if let Some((limit, remaining)) = rl {
+        let h = resp.headers_mut();
+        if let Ok(v) = header::HeaderValue::from_str(&limit.to_string()) {
+            h.insert(HDR_RL_LIMIT, v);
+        }
+        if let Ok(v) = header::HeaderValue::from_str(&remaining.to_string()) {
+            h.insert(HDR_RL_REMAINING, v);
+        }
+    }
 }
 
 /// mode 转换后的字符串（contract §12.7）。
@@ -1027,13 +1056,23 @@ async fn run_gateway(
     {
         let msg = e.to_string();
         log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
-        return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
+        // RPM 429 附 Retry-After（滑窗 60s；M10.5 标准客户端兼容）
+        let mut resp = error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
+        if e.status().as_u16() == 429 {
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+        }
+        return resp;
     }
     if let Err(e) = limit::tpm_precheck(&key, max_tokens) {
         let msg = e.to_string();
         log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
         return error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
     }
+    // M10.5：限流通过后读取窗口余量，成功响应附 X-RateLimit-* 头
+    let rl_status = state
+        .limiter
+        .rpm_status(&key, gateway_cfg.default_rate_limit_rpm);
     {
         let exceeded = match state
             .quota_cache
@@ -1376,7 +1415,9 @@ async fn run_gateway(
                             }
                         }
                         state.log_sink.log(ev);
-                        return record(&state.metrics, &lbl, start, false, outcome.response);
+                        let mut resp = outcome.response;
+                        add_ratelimit_headers(&mut resp, rl_status);
+                        return record(&state.metrics, &lbl, start, false, resp);
                     } else {
                         // 转换失败（502）：记为失败事件（token 恒 None）。
                         ev.status = outcome.status as i32;
@@ -1434,7 +1475,8 @@ async fn run_gateway(
                         debug_req.clone(),
                         retry_count,
                     );
-                    let resp = stream_rsp(&request_id, teed);
+                    let mut resp = stream_rsp(&request_id, teed);
+                    add_ratelimit_headers(&mut resp, rl_status);
                     return record(&state.metrics, &lbl, start, false, resp);
                 }
                 Err(e) => {
@@ -1671,8 +1713,18 @@ async fn images_generations(
     {
         let msg = e.to_string();
         log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
-        return error_resp(Protocol::OpenaiChat, &request_id, e.status().as_u16(), &msg);
+        // RPM 429 附 Retry-After（滑窗 60s；M10.5）
+        let mut resp = error_resp(Protocol::OpenaiChat, &request_id, e.status().as_u16(), &msg);
+        if e.status().as_u16() == 429 {
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+        }
+        return resp;
     }
+    // M10.5：限流通过后读取窗口余量，成功响应附 X-RateLimit-* 头
+    let rl_status = state
+        .limiter
+        .rpm_status(&key, gateway_cfg.default_rate_limit_rpm);
     {
         let exceeded = match state
             .quota_cache
@@ -1957,13 +2009,9 @@ async fn images_generations(
                             }
                             state.log_sink.log(ev);
                             let lbl = image_metrics_labels(&key, &upstream.name);
-                            return record(
-                                &state.metrics,
-                                &lbl,
-                                start,
-                                false,
-                                json_rsp(StatusCode::OK, &request_id, None, body_json),
-                            );
+                            let mut resp = json_rsp(StatusCode::OK, &request_id, None, body_json);
+                            add_ratelimit_headers(&mut resp, rl_status);
+                            return record(&state.metrics, &lbl, start, false, resp);
                         }
                         Ok(ImageOutcome::Task { provider_task_id }) => {
                             // 异步任务 → 202，插入 media_tasks 供 M6-C 闭环
@@ -2051,13 +2099,10 @@ async fn images_generations(
                             }
                             state.log_sink.log(ev);
                             let lbl = image_metrics_labels(&key, &upstream.name);
-                            return record(
-                                &state.metrics,
-                                &lbl,
-                                start,
-                                false,
-                                json_rsp(StatusCode::ACCEPTED, &request_id, None, body_json),
-                            );
+                            let mut resp =
+                                json_rsp(StatusCode::ACCEPTED, &request_id, None, body_json);
+                            add_ratelimit_headers(&mut resp, rl_status);
+                            return record(&state.metrics, &lbl, start, false, resp);
                         }
                         Err(e) => {
                             // 上游响应虽 2xx 但结构不符合预期：视为该候选失败（BodyRead 不可重试）

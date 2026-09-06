@@ -58,6 +58,33 @@ impl RateLimiter {
         }
     }
 
+    /// 读取当前 RPM 窗口状态（只读不变更，M10.5 rate-limit 响应头）：
+    /// None = 不限流；Some((limit, remaining))。
+    pub fn rpm_status(&self, key: &ApiKeyRow, default_rpm: u32) -> Option<(u32, u32)> {
+        let limit = match key.rpm {
+            Some(r) if r <= 0 => return None,
+            Some(r) => r as u32,
+            None => default_rpm,
+        };
+        if limit == 0 {
+            return None;
+        }
+        let now = Instant::now();
+        let map = self
+            .windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let used = map
+            .get(&key.id)
+            .map(|q| {
+                q.iter()
+                    .filter(|t| now.duration_since(**t) < RPM_WINDOW)
+                    .count() as u32
+            })
+            .unwrap_or(0);
+        Some((limit, limit.saturating_sub(used)))
+    }
+
     /// 移除某 Key 的滑动窗口（删除 Key 时调用，防残留，review P3）。
     pub fn remove_key(&self, key_id: Uuid) {
         self.windows
@@ -268,6 +295,25 @@ mod tests {
         Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
             .single()
             .expect("构建 UTC")
+    }
+
+    /// RPM 窗口余量只读（M10.5）：不限流 → None；限流 → (limit, remaining) 随计数递减。
+    #[test]
+    fn rpm_status_readonly() {
+        let lim = RateLimiter::new();
+        // 不限流：rpm=0 / 默认 0
+        assert!(lim.rpm_status(&mk_key(Some(0), None), 600).is_none());
+        assert!(lim.rpm_status(&mk_key(None, None), 0).is_none());
+        // 限流：初始余量 = 上限；check_rpm 计数后递减
+        let k = mk_key(Some(3), None);
+        assert_eq!(lim.rpm_status(&k, 600), Some((3, 3)));
+        assert!(lim.check_rpm(&k, 600).is_ok());
+        assert_eq!(lim.rpm_status(&k, 600), Some((3, 2)));
+        // 只读不消耗
+        assert_eq!(lim.rpm_status(&k, 600), Some((3, 2)));
+        // 默认上限生效
+        let k2 = mk_key(None, None);
+        assert_eq!(lim.rpm_status(&k2, 100), Some((100, 100)));
     }
 
     // ---- 滑窗 window_allow ----
