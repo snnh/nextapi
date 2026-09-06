@@ -19,6 +19,7 @@ mod embed;
 mod entities;
 mod error;
 mod gateway;
+mod idempotency;
 mod limit;
 mod logging;
 mod media;
@@ -195,6 +196,21 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // M10.2：幂等键过期清理（每 10 分钟）
+    {
+        let pool_idem = pool.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                match idempotency::cleanup_expired(&pool_idem).await {
+                    Ok(n) if n > 0 => tracing::info!("幂等键过期清理: {n} 条"),
+                    Ok(_) => {}
+                    Err(e) => warn!("幂等键过期清理失败: {e}"),
+                }
+            }
+        });
+    }
 
     // M5：fx 自动刷新（enabled 且 refresh_interval_minutes>0 才启动；interval=0 仅手动 refresh）。
     // 每 interval 分钟按代理矩阵构建 client → billing::fx::fetch_and_store；失败 warn 且保留旧值（降级链）。

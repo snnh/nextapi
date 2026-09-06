@@ -1073,6 +1073,63 @@ async fn run_gateway(
         );
     }
 
+    // 6b. 幂等键（M10.2）：仅非流式；登记点在路由决策之后——限流/无路由等未触达上游的
+    // 失败不占键。重放直接返回缓存响应（不重复计费、不写日志、不计 metrics）。
+    let mut idem_rec: Option<Uuid> = None;
+    if let Some(ik_raw) = headers
+        .get(crate::idempotency::IDEM_HEADER)
+        .and_then(|v| v.to_str().ok())
+    {
+        let ik_trim = ik_raw.trim();
+        if !ik_trim.is_empty() {
+            if stream {
+                log_fail(
+                    &state,
+                    &tmpl,
+                    start,
+                    400,
+                    "流式请求不支持 Idempotency-Key",
+                    0,
+                );
+                return error_resp(
+                    entry_protocol,
+                    &request_id,
+                    400,
+                    "流式请求不支持 Idempotency-Key",
+                );
+            }
+            let ik = match crate::idempotency::validate_key(ik_trim) {
+                Ok(k) => k,
+                Err(msg) => {
+                    log_fail(&state, &tmpl, start, 400, msg, 0);
+                    return error_resp(entry_protocol, &request_id, 400, msg);
+                }
+            };
+            let fp = crate::idempotency::fingerprint(&body_value);
+            match crate::idempotency::begin(&state.db, key.id, ik, &fp).await {
+                Ok(crate::idempotency::Begin::Proceed(rid)) => idem_rec = Some(rid),
+                Ok(crate::idempotency::Begin::Replay { status, response }) => {
+                    let code = StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK);
+                    let mut resp = json_rsp(code, &request_id, None, response);
+                    resp.headers_mut().insert(
+                        crate::idempotency::REPLAYED_HEADER,
+                        HeaderValue::from_static("true"),
+                    );
+                    return resp;
+                }
+                Ok(crate::idempotency::Begin::Conflict(msg)) => {
+                    log_fail(&state, &tmpl, start, 409, msg, 0);
+                    return error_resp(entry_protocol, &request_id, 409, msg);
+                }
+                Err(e) => {
+                    let msg = format!("幂等键存储失败: {e}");
+                    log_fail(&state, &tmpl, start, 500, &msg, 0);
+                    return error_resp(entry_protocol, &request_id, 500, "幂等键存储失败");
+                }
+            }
+        }
+    }
+
     // 7-10. 协议决策 → 请求构建 → 执行/重试/故障转移 → 响应
     let mut last_err: Option<Fail> = None;
     let mut last_upstream: Option<String> = None;
@@ -1255,12 +1312,23 @@ async fn run_gateway(
                         ) {
                             ev.debug_payload = Some(payload);
                         }
+                        // 幂等登记完成（M10.2）：缓存响应体；失败仅告警不阻断响应
+                        if let (Some(rid), Some(fj)) = (idem_rec, outcome.final_json.as_ref()) {
+                            if let Err(e) =
+                                crate::idempotency::complete(&state.db, rid, 200, fj, None).await
+                            {
+                                tracing::warn!("幂等键结果写入失败: {e}");
+                            }
+                        }
                         state.log_sink.log(ev);
                         return record(&state.metrics, &lbl, start, false, outcome.response);
                     } else {
                         // 转换失败（502）：记为失败事件（token 恒 None）。
                         ev.status = outcome.status as i32;
                         ev.error = outcome.error.clone();
+                        if let Some(rid) = idem_rec {
+                            let _ = crate::idempotency::fail(&state.db, rid).await;
+                        }
                         if let Some(payload) = debug_payload(
                             &debug_req,
                             &serde_json::to_vec(
@@ -1366,6 +1434,9 @@ async fn run_gateway(
     ev.convert_mode = last_convert_mode.unwrap_or_else(|| "none".into());
     let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
     log_fail(&state, &ev, start, status, &msg, retry_count);
+    if let Some(rid) = idem_rec {
+        let _ = crate::idempotency::fail(&state.db, rid).await;
+    }
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     let resp = json_rsp(code, &request_id, None, jbody);
     record(&state.metrics, &lbl, start, true, resp)
@@ -1616,6 +1687,47 @@ async fn images_generations(
     }
     let ordered = order_candidates(candidates);
 
+    // 5b. 幂等键（M10.2）：图片恒非流式；登记点在路由决策之后（无路由/限流不占键）。
+    // 异步任务完成时缓存 {"task_id":...}，重放返回同一任务。
+    let mut idem_rec: Option<Uuid> = None;
+    if let Some(ik_raw) = headers
+        .get(crate::idempotency::IDEM_HEADER)
+        .and_then(|v| v.to_str().ok())
+    {
+        let ik_trim = ik_raw.trim();
+        if !ik_trim.is_empty() {
+            let ik = match crate::idempotency::validate_key(ik_trim) {
+                Ok(k) => k,
+                Err(msg) => {
+                    log_fail(&state, &tmpl, start, 400, msg, 0);
+                    return error_resp(Protocol::OpenaiChat, &request_id, 400, msg);
+                }
+            };
+            let fp = crate::idempotency::fingerprint(&body_value);
+            match crate::idempotency::begin(&state.db, key.id, ik, &fp).await {
+                Ok(crate::idempotency::Begin::Proceed(rid)) => idem_rec = Some(rid),
+                Ok(crate::idempotency::Begin::Replay { status, response }) => {
+                    let code = StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK);
+                    let mut resp = json_rsp(code, &request_id, None, response);
+                    resp.headers_mut().insert(
+                        crate::idempotency::REPLAYED_HEADER,
+                        HeaderValue::from_static("true"),
+                    );
+                    return resp;
+                }
+                Ok(crate::idempotency::Begin::Conflict(msg)) => {
+                    log_fail(&state, &tmpl, start, 409, msg, 0);
+                    return error_resp(Protocol::OpenaiChat, &request_id, 409, msg);
+                }
+                Err(e) => {
+                    let msg = format!("幂等键存储失败: {e}");
+                    log_fail(&state, &tmpl, start, 500, &msg, 0);
+                    return error_resp(Protocol::OpenaiChat, &request_id, 500, "幂等键存储失败");
+                }
+            }
+        }
+    }
+
     // 6-7. 执行/重试/故障转移 → 响应（图片恒非流式）
     let mut last_err: Option<UpstreamError> = None;
     let mut last_upstream: Option<String> = None;
@@ -1778,6 +1890,16 @@ async fn images_generations(
                             ) {
                                 ev.debug_payload = Some(payload);
                             }
+                            // 幂等登记完成（M10.2）：缓存同步图片响应体
+                            if let Some(rid) = idem_rec {
+                                if let Err(e) = crate::idempotency::complete(
+                                    &state.db, rid, 200, &body_json, None,
+                                )
+                                .await
+                                {
+                                    tracing::warn!("幂等键结果写入失败: {e}");
+                                }
+                            }
                             state.log_sink.log(ev);
                             let lbl = image_metrics_labels(&key, &upstream.name);
                             return record(
@@ -1822,15 +1944,24 @@ async fn images_generations(
                                         Ok(None) => {
                                             let msg = "写入媒体任务失败：billing_key 冲突但未找到任务行".to_string();
                                             log_fail(&state, &tmpl, start, 500, &msg, (idx + failed_candidates) as i32);
+                                            if let Some(rid) = idem_rec {
+                                                let _ = crate::idempotency::fail(&state.db, rid).await;
+                                            }
                                             return error_resp(Protocol::OpenaiChat, &request_id, 500, &msg);
                                         }
                                         Err(e) => {
                                             log_fail(&state, &tmpl, start, 500, &format!("写入媒体任务失败: {e}"), (idx + failed_candidates) as i32);
+                                            if let Some(rid) = idem_rec {
+                                                let _ = crate::idempotency::fail(&state.db, rid).await;
+                                            }
                                             return error_resp(Protocol::OpenaiChat, &request_id, 500, "写入媒体任务失败");
                                         }
                                     },
                                     Err(e) => {
                                         log_fail(&state, &tmpl, start, 500, &format!("写入媒体任务失败: {e}"), (idx + failed_candidates) as i32);
+                                        if let Some(rid) = idem_rec {
+                                            let _ = crate::idempotency::fail(&state.db, rid).await;
+                                        }
                                         return error_resp(Protocol::OpenaiChat, &request_id, 500, "写入媒体任务失败");
                                     }
                                 };
@@ -1848,6 +1979,20 @@ async fn images_generations(
                                 &serde_json::to_vec(&body_json).unwrap_or_default(),
                             ) {
                                 ev.debug_payload = Some(payload);
+                            }
+                            // 幂等登记完成（M10.2）：异步任务缓存 {"task_id":...}，重放返回同一任务
+                            if let Some(rid) = idem_rec {
+                                if let Err(e) = crate::idempotency::complete(
+                                    &state.db,
+                                    rid,
+                                    202,
+                                    &body_json,
+                                    Some(task_id),
+                                )
+                                .await
+                                {
+                                    tracing::warn!("幂等键结果写入失败: {e}");
+                                }
                             }
                             state.log_sink.log(ev);
                             let lbl = image_metrics_labels(&key, &upstream.name);
@@ -1908,6 +2053,9 @@ async fn images_generations(
     ev.convert_mode = last_convert_mode.unwrap_or_else(|| "none".into());
     let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
     log_fail(&state, &ev, start, status, &msg, retry_count);
+    if let Some(rid) = idem_rec {
+        let _ = crate::idempotency::fail(&state.db, rid).await;
+    }
     let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     let body = error_from_ir(
         Protocol::OpenaiChat,
