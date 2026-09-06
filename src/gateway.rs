@@ -601,7 +601,7 @@ fn error_resp(entry: Protocol, request_id: &str, status: u16, message: &str) -> 
 /// 构造 SSE 流式响应。
 fn stream_rsp(request_id: &str, body: Body) -> Response {
     let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, "text/event-stream".parse().unwrap());
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
     h.insert(
         HDR_REQUEST_ID,
         request_id
@@ -1115,7 +1115,7 @@ async fn run_gateway(
         let mut req_headers = reqwest::header::HeaderMap::new();
         req_headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            HeaderValue::from_static("application/json"),
         );
         upstream::apply_auth(
             &mut req_headers,
@@ -1630,7 +1630,7 @@ async fn images_generations(
         let mut req_headers = reqwest::header::HeaderMap::new();
         req_headers.insert(
             reqwest::header::CONTENT_TYPE,
-            "application/json".parse().unwrap(),
+            HeaderValue::from_static("application/json"),
         );
         match image_api {
             ImageApi::Openai | ImageApi::DashscopeSync | ImageApi::DashscopeAsync => {
