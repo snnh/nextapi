@@ -701,13 +701,22 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
 fn parse_usage_metadata(u: &Value) -> IrUsage {
     let mut usage = IrUsage::default();
     usage.prompt_tokens = u["promptTokenCount"].as_u64().unwrap_or(0);
-    usage.completion_tokens = u["candidatesTokenCount"].as_u64().unwrap_or(0);
+    // 口径归一（review P5）：Gemini candidatesTokenCount 不含 thoughtsTokenCount，
+    // 而 OpenAI completion_tokens / Anthropic output_tokens 均含思考 token；
+    // 计价与统计按 completion 计量，故 completion = candidates + thoughts，
+    // 思考量同时入标准槽位 reasoning_tokens（供跨协议转出）。
+    let candidates = u["candidatesTokenCount"].as_u64().unwrap_or(0);
+    let thoughts = u["thoughtsTokenCount"].as_u64().unwrap_or(0);
+    usage.completion_tokens = candidates.saturating_add(thoughts);
     usage.cache_read_tokens = u["cachedContentTokenCount"].as_u64();
     usage.total_tokens = u["totalTokenCount"].as_u64();
-    if let Some(t) = u["thoughtsTokenCount"].as_u64() {
+    if thoughts > 0 {
         usage
             .extra
-            .insert("thoughtsTokenCount".into(), Value::from(t));
+            .insert("thoughtsTokenCount".into(), Value::from(thoughts));
+        usage
+            .extra
+            .insert("reasoning_tokens".into(), Value::from(thoughts));
     }
     // 其余未知字段原样保留
     if let Some(o) = u.as_object() {
@@ -865,11 +874,18 @@ fn reverse_finish_reason(fr: &str) -> String {
 
 fn usage_metadata_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     let mut out = u.extra.clone();
+    // reasoning_tokens 是 IR 标准槽位（review P5 口径归一）：回写为 thoughtsTokenCount，
+    // candidatesTokenCount 需扣减（completion = candidates + thoughts），防双计。
+    let reasoning = u.extra.get("reasoning_tokens").and_then(|v| v.as_u64());
+    out.remove("reasoning_tokens");
     out.insert("promptTokenCount".into(), Value::from(u.prompt_tokens));
     out.insert(
         "candidatesTokenCount".into(),
-        Value::from(u.completion_tokens),
+        Value::from(u.completion_tokens.saturating_sub(reasoning.unwrap_or(0))),
     );
+    if let Some(t) = reasoning {
+        out.insert("thoughtsTokenCount".into(), Value::from(t));
+    }
     if let Some(t) = u.total_tokens {
         out.insert("totalTokenCount".into(), Value::from(t));
     }
@@ -1444,10 +1460,12 @@ mod tests {
 
         let u = resp.usage.as_ref().unwrap();
         assert_eq!(u.prompt_tokens, 10);
-        assert_eq!(u.completion_tokens, 5);
+        // 口径归一（review P5）：completion = candidates(5) + thoughts(2)
+        assert_eq!(u.completion_tokens, 7);
         assert_eq!(u.cache_read_tokens, Some(3));
         assert_eq!(u.total_tokens, Some(15));
         assert_eq!(u.extra["thoughtsTokenCount"], 2);
+        assert_eq!(u.extra["reasoning_tokens"], 2);
 
         // IR → Gemini 响应
         let back = response_from_ir(&resp, &mut c).unwrap();
@@ -1468,7 +1486,10 @@ mod tests {
         assert_eq!(back["candidates"][0]["finishReason"], "STOP");
         assert_eq!(back["usageMetadata"]["promptTokenCount"], 10);
         assert_eq!(back["usageMetadata"]["cachedContentTokenCount"], 3);
+        // 回写防双计：candidates = completion(7) - reasoning(2) = 5
+        assert_eq!(back["usageMetadata"]["candidatesTokenCount"], 5);
         assert_eq!(back["usageMetadata"]["thoughtsTokenCount"], 2);
+        assert!(back["usageMetadata"].get("reasoning_tokens").is_none());
     }
 
     // ---------- 流式文本增量 ----------

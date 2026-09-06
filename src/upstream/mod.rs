@@ -551,9 +551,12 @@ fn truncate_text(bytes: &[u8], max_bytes: usize) -> String {
 }
 
 /// 改写单条 SSE data 载荷并重新编码为 SSE 事件。
-/// - "[DONE]" 原样放行；JSON 解析成功则改写顶层 `model`（存在才改）与 `id`（存在才改）；
+/// - "[DONE]" 原样放行；JSON 解析成功则改写顶层 `model`（存在才改，回写网关模型名）；
+/// - `id` 不改写（review P5 策略固化：透传/转换一律保真上游 id——非流式与转换路径
+///   本来就不改 id，且 Anthropic/Responses 的 id 嵌套在 message/response 对象内够不到；
+///   请求关联走 X-Request-Id 头，无需改写载荷 id）；
 /// - 解析失败原样放行。
-pub fn rewrite_sse_payload(data: &str, model: &str, request_id: &str) -> String {
+pub fn rewrite_sse_payload(data: &str, model: &str) -> String {
     if data.trim() == "[DONE]" {
         return encode_typed_event(data);
     }
@@ -566,12 +569,6 @@ pub fn rewrite_sse_payload(data: &str, model: &str, request_id: &str) -> String 
                         serde_json::Value::String(model.to_string()),
                     );
                 }
-                if obj.contains_key("id") {
-                    obj.insert(
-                        "id".to_string(),
-                        serde_json::Value::String(request_id.to_string()),
-                    );
-                }
             }
             encode_typed_event(&v.to_string())
         }
@@ -580,12 +577,11 @@ pub fn rewrite_sse_payload(data: &str, model: &str, request_id: &str) -> String 
 }
 
 /// 透传 SSE 改写流：把上游字节流解析为 SSE 事件，改写每个 chunk JSON 的
-/// `model`（回写网关模型名）与 `id`（回写 request_id），其余字段原样透传；
+/// `model`（回写网关模型名），`id` 及其余字段原样透传；
 /// 单行解析失败该行原样放行，不中断流。
 pub fn sse_passthrough_stream(
     resp: reqwest::Response,
     gateway_model: String,
-    request_id: String,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
     let state = PassthroughState {
         stream: Box::pin(resp.bytes_stream()),
@@ -593,21 +589,20 @@ pub fn sse_passthrough_stream(
         queue: VecDeque::new(),
         done: false,
         gateway_model,
-        request_id,
     };
     stream::unfold(state, |mut st| async move {
         while st.queue.is_empty() && !st.done {
             match st.stream.next().await {
                 Some(Ok(bytes)) => {
                     for ev in st.parser.feed(&bytes) {
-                        let out = rewrite_sse_payload(&ev, &st.gateway_model, &st.request_id);
+                        let out = rewrite_sse_payload(&ev, &st.gateway_model);
                         st.queue.push_back(Ok(Bytes::from(out.into_bytes())));
                     }
                 }
                 Some(Err(e)) => {
                     st.done = true;
                     for ev in st.parser.finish() {
-                        let out = rewrite_sse_payload(&ev, &st.gateway_model, &st.request_id);
+                        let out = rewrite_sse_payload(&ev, &st.gateway_model);
                         st.queue.push_back(Ok(Bytes::from(out.into_bytes())));
                     }
                     st.queue
@@ -616,7 +611,7 @@ pub fn sse_passthrough_stream(
                 None => {
                     st.done = true;
                     for ev in st.parser.finish() {
-                        let out = rewrite_sse_payload(&ev, &st.gateway_model, &st.request_id);
+                        let out = rewrite_sse_payload(&ev, &st.gateway_model);
                         st.queue.push_back(Ok(Bytes::from(out.into_bytes())));
                     }
                 }
@@ -632,7 +627,6 @@ struct PassthroughState {
     queue: VecDeque<Result<Bytes, std::io::Error>>,
     done: bool,
     gateway_model: String,
-    request_id: String,
 }
 
 /// 转换 SSE 流：上游协议事件 → IR chunk → 入口协议事件编码。
@@ -973,29 +967,23 @@ mod tests {
 
     #[test]
     fn rewrite_sse_payload_core() {
-        // 模型存在 → 改写；id 存在 → 改写
-        let out = rewrite_sse_payload(r#"{"model":"m1","id":"r1","choices":[]}"#, "gm", "rid");
+        // 模型存在 → 改写为网关模型名；id 保真不改写（review P5 策略固化）
+        let out = rewrite_sse_payload(r#"{"model":"m1","id":"r1","choices":[]}"#, "gm");
         assert!(out.starts_with("data: "));
         let v: serde_json::Value =
             serde_json::from_str(out.trim_start_matches("data: ").trim_end()).unwrap();
         assert_eq!(v["model"], json!("gm"));
-        assert_eq!(v["id"], json!("rid"));
+        assert_eq!(v["id"], json!("r1"));
         // 无 model/id → 不改
-        let out2 = rewrite_sse_payload(r#"{"choices":[]}"#, "gm", "rid");
+        let out2 = rewrite_sse_payload(r#"{"choices":[]}"#, "gm");
         let v2: serde_json::Value =
             serde_json::from_str(out2.trim_start_matches("data: ").trim_end()).unwrap();
         assert!(v2.get("model").is_none());
         assert!(v2.get("id").is_none());
         // [DONE] 原样
-        assert_eq!(
-            rewrite_sse_payload("[DONE]", "gm", "rid"),
-            "data: [DONE]\n\n"
-        );
+        assert_eq!(rewrite_sse_payload("[DONE]", "gm"), "data: [DONE]\n\n");
         // 解析失败原样放行
-        assert_eq!(
-            rewrite_sse_payload("not-json", "gm", "rid"),
-            "data: not-json\n\n"
-        );
+        assert_eq!(rewrite_sse_payload("not-json", "gm"), "data: not-json\n\n");
     }
 
     #[test]

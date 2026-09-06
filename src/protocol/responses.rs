@@ -446,9 +446,9 @@ fn content_as_text(content: Option<&IrContent>) -> String {
 }
 
 /// IR part → Responses 输入 content part。
-fn ir_part_to_input_part(p: &IrPart, ctx: &mut ConvCtx) -> Value {
+fn ir_part_to_input_part(p: &IrPart, text_type: &str, ctx: &mut ConvCtx) -> Value {
     match p {
-        IrPart::Text { text } => json_build(&[("type", "input_text"), ("text", text)]),
+        IrPart::Text { text } => json_build(&[("type", text_type), ("text", text)]),
         IrPart::ImageUrl { url } => json_build(&[("type", "input_image"), ("image_url", url)]),
         IrPart::ImageInline { media_type, data } => json_build(&[
             ("type", "input_image"),
@@ -456,7 +456,7 @@ fn ir_part_to_input_part(p: &IrPart, ctx: &mut ConvCtx) -> Value {
         ]),
         IrPart::InputAudio { .. } => {
             ctx.degrade("content.input_audio", "Responses 不支持 input_audio，丢弃");
-            json_build(&[("type", "input_text"), ("text", "")])
+            json_build(&[("type", text_type), ("text", "")])
         }
         IrPart::File { name, url, data } => {
             let mut o = Map::new();
@@ -485,15 +485,20 @@ fn json_build(pairs: &[(&str, &str)]) -> Value {
 }
 
 /// 构造 Responses 输入 message item（roles：user/assistant）。
+/// OpenAI 2025-10 起拒绝 assistant 消息内的 input_text（实测 400：
+/// "Supported values are: 'output_text' and 'refusal'"），文本 part 类型随角色分派。
 fn request_message_item(role: IrRole, content: &IrContent, ctx: &mut ConvCtx) -> Value {
-    let role_str = if role == IrRole::Assistant {
-        "assistant"
+    let (role_str, text_type) = if role == IrRole::Assistant {
+        ("assistant", "output_text")
     } else {
-        "user"
+        ("user", "input_text")
     };
     let parts = match content {
-        IrContent::Text(s) => vec![json_build(&[("type", "input_text"), ("text", s)])],
-        IrContent::Parts(ps) => ps.iter().map(|p| ir_part_to_input_part(p, ctx)).collect(),
+        IrContent::Text(s) => vec![json_build(&[("type", text_type), ("text", s)])],
+        IrContent::Parts(ps) => ps
+            .iter()
+            .map(|p| ir_part_to_input_part(p, text_type, ctx))
+            .collect(),
     };
     json_build_with("message", role_str, parts)
 }
@@ -1694,6 +1699,30 @@ mod tests {
 
     fn ctx() -> ConvCtx {
         ConvCtx::new()
+    }
+
+    #[test]
+    fn assistant_input_uses_output_text() {
+        // OpenAI 2025-10 起拒绝 assistant 消息内的 input_text（实测 400）→ 文本 part 用 output_text
+        let req = IrRequest {
+            messages: vec![
+                IrMessage {
+                    role: IrRole::Assistant,
+                    content: Some(IrContent::Text("prev answer".into())),
+                    ..Default::default()
+                },
+                IrMessage {
+                    role: IrRole::User,
+                    content: Some(IrContent::Text("next".into())),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let out = request_from_ir(&req, &mut ctx()).unwrap();
+        assert_eq!(out["input"][0]["content"][0]["type"], "output_text");
+        assert_eq!(out["input"][0]["content"][0]["text"], "prev answer");
+        assert_eq!(out["input"][1]["content"][0]["type"], "input_text");
     }
 
     fn event_types(evs: &[String]) -> Vec<String> {

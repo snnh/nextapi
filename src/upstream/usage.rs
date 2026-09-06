@@ -62,9 +62,19 @@ pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
             u.prompt_tokens = usage
                 .and_then(|u| u.get("promptTokenCount"))
                 .and_then(token);
-            u.completion_tokens = usage
+            // 口径归一（review P5）：completion = candidatesTokenCount + thoughtsTokenCount
+            // （Gemini 的 candidates 不含思考 token；OpenAI/Anthropic 的输出计数均含思考，
+            // 计价按 completion 计量，口径必须对齐，否则思考模型少计费）
+            let cand = usage
                 .and_then(|u| u.get("candidatesTokenCount"))
                 .and_then(token);
+            let thoughts = usage
+                .and_then(|u| u.get("thoughtsTokenCount"))
+                .and_then(token);
+            u.completion_tokens = match (cand, thoughts) {
+                (None, None) => None,
+                (c, t) => Some(c.unwrap_or(0).saturating_add(t.unwrap_or(0))),
+            };
             u.cache_read_tokens = usage
                 .and_then(|u| u.get("cachedContentTokenCount"))
                 .and_then(token);

@@ -1272,11 +1272,7 @@ async fn run_gateway(
                             entry_protocol,
                         ))
                     } else {
-                        Body::from_stream(upstream::sse_passthrough_stream(
-                            resp,
-                            model.clone(),
-                            request_id.clone(),
-                        ))
+                        Body::from_stream(upstream::sse_passthrough_stream(resp, model.clone()))
                     };
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
