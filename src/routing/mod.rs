@@ -201,7 +201,10 @@ impl Breaker {
         if up.disabled_by.as_deref() == Some("auto") {
             if let Some(until) = up.cooldown_until {
                 if until > now {
-                    let mut states = self.states.lock().unwrap();
+                    let mut states = self
+                        .states
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     states.entry(id).or_insert_with(|| BreakerState::Open {
                         until,
                         consecutive_opens: up.consecutive_failures.max(1) as u32,
@@ -210,7 +213,10 @@ impl Breaker {
                 }
             }
         }
-        let mut states = self.states.lock().unwrap();
+        let mut states = self
+            .states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match states.get(&id).cloned() {
             None => {
                 states.insert(id, BreakerState::Closed { failures: 0 });
@@ -225,7 +231,10 @@ impl Breaker {
                     false
                 } else {
                     states.insert(id, BreakerState::HalfOpen { consecutive_opens });
-                    self.halfopen_since.lock().unwrap().insert(id, now);
+                    self.halfopen_since
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(id, now);
                     true
                 }
             }
@@ -240,7 +249,10 @@ impl Breaker {
                     .map(|since| (now - since).num_seconds() >= HALFOPEN_TIMEOUT_SECS)
                     .unwrap_or(false);
                 if stuck {
-                    self.halfopen_since.lock().unwrap().insert(id, now);
+                    self.halfopen_since
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(id, now);
                     true
                 } else {
                     false
@@ -254,14 +266,21 @@ impl Breaker {
     pub async fn on_success(&self, pool: &sqlx::PgPool, up: &UpstreamRow) {
         let id = up.id;
         {
-            let mut states = self.states.lock().unwrap();
+            let mut states = self
+                .states
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             states.insert(id, BreakerState::Closed { failures: 0 });
         }
-        self.halfopen_since.lock().unwrap().remove(&id);
+        self.halfopen_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id);
 
         if up.disabled_by.as_deref() == Some("auto") {
             let res = sqlx::query(
-                "UPDATE upstreams SET disabled_by=NULL, cooldown_until=NULL, consecutive_failures=0 WHERE id=$1",
+                "UPDATE upstreams SET disabled_by=NULL, cooldown_until=NULL, consecutive_failures=0 \
+                 WHERE id=$1 AND disabled_by='auto'",
             )
             .bind(id)
             .execute(pool)
@@ -288,7 +307,10 @@ impl Breaker {
         // DB 回写基于旧状态推导：并发下 FailuresOnly 可能略滞后于内存计数，
         // 但 Open 边界回写准确（重启恢复用，允许近似）。
         let (next, db) = {
-            let mut states = self.states.lock().unwrap();
+            let mut states = self
+                .states
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let state = states
                 .get(&id)
                 .cloned()
@@ -300,7 +322,10 @@ impl Breaker {
             if matches!(state, BreakerState::HalfOpen { .. })
                 && !matches!(next, BreakerState::HalfOpen { .. })
             {
-                self.halfopen_since.lock().unwrap().remove(&id);
+                self.halfopen_since
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&id);
             }
 
             let db = match (&state, &next) {
@@ -331,7 +356,8 @@ impl Breaker {
             let res = match db {
                 DbUpdate::Open { until, failures } => {
                     sqlx::query(
-                        "UPDATE upstreams SET disabled_by='auto', cooldown_until=$1, consecutive_failures=$2 WHERE id=$3",
+                        "UPDATE upstreams SET disabled_by='auto', cooldown_until=$1, consecutive_failures=$2 \
+                         WHERE id=$3 AND disabled_by IS DISTINCT FROM 'manual'",
                     )
                     .bind(until)
                     .bind(failures)
@@ -340,7 +366,7 @@ impl Breaker {
                     .await
                 }
                 DbUpdate::FailuresOnly { failures } => {
-                    sqlx::query("UPDATE upstreams SET consecutive_failures=$1 WHERE id=$2")
+                    sqlx::query("UPDATE upstreams SET consecutive_failures=$1 WHERE id=$2 AND disabled_by IS DISTINCT FROM 'manual'")
                         .bind(failures)
                         .bind(id)
                         .execute(pool)
@@ -356,8 +382,14 @@ impl Breaker {
 
     /// 手动启停后清除内存状态（由管理 API 调用）。
     pub fn reset(&self, upstream_id: Uuid) {
-        self.states.lock().unwrap().remove(&upstream_id);
-        self.halfopen_since.lock().unwrap().remove(&upstream_id);
+        self.states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&upstream_id);
+        self.halfopen_since
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&upstream_id);
     }
 }
 

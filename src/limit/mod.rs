@@ -46,7 +46,10 @@ impl RateLimiter {
             return Ok(());
         }
         let now = Instant::now();
-        let mut map = self.windows.lock().expect("RPM 窗口锁中毒");
+        let mut map = self
+            .windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let queue = map.entry(key.id).or_default();
         if window_allow(queue, now, limit) {
             Ok(())
@@ -57,7 +60,10 @@ impl RateLimiter {
 
     /// 移除某 Key 的滑动窗口（删除 Key 时调用，防残留，review P3）。
     pub fn remove_key(&self, key_id: Uuid) {
-        self.windows.lock().expect("RPM 窗口锁中毒").remove(&key_id);
+        self.windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&key_id);
     }
 }
 
@@ -132,9 +138,13 @@ pub async fn check_quota(
     {
         Ok(row) => row,
         Err(e) => {
-            // 查询失败：记 warn 放行（用量上限为最终一致，不阻断主链路）
-            tracing::warn!("查询用量上限失败，放行: key={} err={e}", key.id);
-            return Ok(());
+            // 阻断模式下查询失败必须 fail-closed，避免数据库故障绕过用量上限；
+            // warn 模式仍允许请求继续，但明确记录告警。
+            tracing::warn!("查询用量上限失败: key={} err={e}", key.id);
+            if action == "warn" {
+                return Ok(());
+            }
+            return Err(ApiError::Internal("无法确认用量上限状态".to_string()));
         }
     };
 

@@ -412,7 +412,10 @@ impl LoginRateLimiter {
         let now = Instant::now();
         let window = Duration::from_secs(RATE_WINDOW_SECS);
         let idle = Duration::from_secs(IDLE_EVICT_SECS);
-        let mut map = self.0.lock().unwrap();
+        let mut map = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // 新用户名且已达条目上限：先淘汰闲置条目；仍满则拒绝（保守：限速而非放行）
         if !map.contains_key(username) && map.len() >= MAX_RATE_ENTRIES {
             evict_idle_entries(&mut map, now, idle);
