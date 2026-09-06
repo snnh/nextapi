@@ -858,8 +858,8 @@ async fn import_rules(
 async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
     let hot = state.hot.load();
     let cfg = hot.price_import.clone();
-    let timeout_secs = cfg.timeout_secs.clone();
-    let max_size_mb = cfg.max_size_mb.clone();
+    let timeout_secs = cfg.timeout_secs;
+    let max_size_mb = cfg.max_size_mb;
     drop(hot);
 
     if !cfg.allow_url {

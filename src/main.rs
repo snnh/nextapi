@@ -5,7 +5,12 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use arc_swap::ArcSwap;
-use axum::{middleware, routing::get, Router};
+use axum::{
+    extract::DefaultBodyLimit,
+    middleware,
+    routing::get,
+    Router,
+};
 use tracing::{error, info, warn};
 
 mod admin;
@@ -90,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     // 注意：这里必须取「引擎合并后」的 hot（UI > YAML），不能读原始 cfg.hot()，
     // 否则 log_wal_dir/log_queue_capacity/log_async 等 UI 覆盖重启后失效（review P1-#5）。
     let gw = hot.load().gateway.clone();
-    let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.min(1_000_000).max(16));
+    let (log_tx, log_rx) = tokio::sync::mpsc::channel(gw.log_queue_capacity.clamp(16, 1_000_000));
     let wal = logging::wal::WalWriter::new(gw.log_wal_dir.clone().into(), gw.log_wal_file_max_mb);
     // 启动即重放 WAL（失败只 warn）
     if let Err(e) = logging::wal::replay_and_archive(
@@ -254,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
     let log_sink_for_close = state.log_sink.clone();
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/metrics", get(metrics::handle))
         .nest("/api/auth", auth::router())
         .nest(
@@ -267,6 +273,8 @@ async fn main() -> anyhow::Result<()> {
         // M8：管理后台静态资源（web/dist 内嵌；SPA fallback）
         .fallback(embed::spa_fallback)
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        // 网关 JSON/图片请求统一限制 16 MiB，避免 Bytes 提取器被超大 body 消耗内存。
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state);
 
     let addr: SocketAddr = listen
@@ -341,6 +349,17 @@ fn build_proxy_client(p: &crate::entities::ProxyRow) -> Option<reqwest::Client> 
 
 async fn healthz() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// 就绪探针：数据库连接可用时才允许接收流量。
+async fn readyz(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
+    sqlx::query("SELECT 1")
+        .execute(&state.db)
+        .await
+        .map(|_| axum::Json(serde_json::json!({ "status": "ready" })))
+        .map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)
 }
 
 /// 优雅关闭：监听 SIGINT（Ctrl+C）与 SIGTERM（容器/K8s 默认停止信号），任一触发即关闭。

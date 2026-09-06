@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 //! Anthropic Messages 适配器（/v1/messages）。
 //!
 //! 要点（PLAN.md §4.2/§4.4）：
@@ -323,14 +325,12 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
     if let Some(ss) = v.get("stop_sequences") {
         req.stop = if let Some(s) = ss.as_str() {
             Some(vec![s.to_string()])
-        } else if let Some(arr) = ss.as_array() {
-            Some(
+        } else {
+            ss.as_array().map(|arr| {
                 arr.iter()
                     .filter_map(|x| x.as_str().map(String::from))
-                    .collect(),
-            )
-        } else {
-            None
+                    .collect()
+            })
         };
     }
 
@@ -1068,7 +1068,7 @@ pub fn chunk_to_ir(
         "ping" => Ok(None),
         "error" => Err(ConvertError::Parse(format!(
             "Anthropic 流错误: {}",
-            v["error"].to_string()
+            v["error"]
         ))),
         other => {
             ctx.degrade("stream.event.type", format!("未知事件: {other}"));

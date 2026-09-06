@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 //! Gemini generateContent 适配器（/v1beta/models/{model}:generateContent）。
 //!
 //! 要点（PLAN.md §4.2/§4.4）：

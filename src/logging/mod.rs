@@ -293,7 +293,7 @@ fn hour_bucket(ts: DateTime<Utc>) -> DateTime<Utc> {
 
 /// 批量落库（单事务）：usage_logs UNNEST 多行（ON CONFLICT (request_id,ts) DO NOTHING）
 /// + usage_hourly upsert + quota_usage tokens/cost 累加 + last_used_at 批量更新。
-/// 任何一步失败 → 整事务回滚，由调用方写 WAL 兜底。返回实际插入 usage_logs 行数。
+///   任何一步失败 → 整事务回滚，由调用方写 WAL 兜底。返回实际插入 usage_logs 行数。
 ///
 /// 步骤 0：克隆事件为可变副本 → `billing::price_batch` 回填计价字段（cost_cny/cost_usd/
 /// pricing_source/price_used/fx_snapshot）。计价失败 = DB 故障级，按整批失败返回 Err，
@@ -689,8 +689,10 @@ mod tests {
     fn zero_events_returns_zero() {
         // 纯逻辑（无 DB）：空批次直接返回 0，不触碰数据库。
         // 这里无法真正连接 DB，仅验证空批次短路逻辑分支逻辑。
-        assert!(BATCH_MAX > 0);
-        assert!(DEBUG_MAX_BYTES == 64 * 1024);
+        const {
+            assert!(BATCH_MAX > 0);
+            assert!(DEBUG_MAX_BYTES == 64 * 1024);
+        }
     }
 
     #[test]

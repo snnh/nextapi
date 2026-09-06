@@ -29,7 +29,7 @@ pub async fn get_image_task(
     // 1. Key 鉴权（媒体端点走网关 Key；鉴权失败由 authenticate_gateway_key 返回 401）
     let key = match crate::gateway::authenticate_gateway_key(&state, &headers) {
         Ok(k) => k,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // 2. task_id 必须为合法 UUID，否则 400
     let task_uuid = match Uuid::parse_str(task_id.trim()) {
@@ -326,7 +326,8 @@ async fn finalize_succeeded(
     let updated = sqlx::query(
         "UPDATE media_tasks SET status='succeeded', image_count=$2, image_size=$3, raw=$4, \
          finished_at=now(), updated_at=now(), cost_cny=$5, cost_usd=$6 \
-         WHERE id=$1 AND status IN ('pending','processing')",
+         WHERE id=$1 AND status IN ('pending','processing') \
+         RETURNING id",
     )
     .bind(task.id)
     .bind(image_count)

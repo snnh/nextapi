@@ -31,9 +31,12 @@ impl SseParser {
                     self.data_lines.clear();
                 }
             } else if let Some(rest) = line.strip_prefix("data:") {
-                // data: 后允许一个前导空格
+                // data: 后允许一个前导空格；SSE 规范要求保留空 data 行。
                 let rest = rest.strip_prefix(' ').unwrap_or(rest);
                 self.data_lines.push(rest.to_string());
+            } else if line == "data" {
+                // 无冒号的 data 字段等价于空值（SSE 规范字段解析）。
+                self.data_lines.push(String::new());
             }
             // 其他行（event:/id:/retry:/注释）忽略：转换以 data 载荷为准
         }
@@ -41,6 +44,7 @@ impl SseParser {
     }
 
     /// 流结束时冲刷残余（无换行结尾的 data）。
+    /// 即使最后一行不是 data，也必须清空缓冲，避免跨请求复用解析器时污染下一事件。
     pub fn finish(&mut self) -> Vec<String> {
         let mut out = Vec::new();
         if !self.buf.is_empty() {
@@ -93,6 +97,17 @@ mod tests {
         assert!(p.feed(b"data: {\"a\":").is_empty());
         let out = p.feed(b"1}\n\ndata: {\"b\":2}\n\n");
         assert_eq!(out, vec!["{\"a\":1}", "{\"b\":2}"]);
+    }
+
+    #[test]
+    fn parses_crlf_and_single_byte_chunks() {
+        let mut p = SseParser::new();
+        let input = b"data: {\"ok\":true}\r\n\r\n";
+        let mut out = Vec::new();
+        for byte in input {
+            out.extend(p.feed(&[*byte]));
+        }
+        assert_eq!(out, vec!["{\"ok\":true}"]);
     }
 
     #[test]

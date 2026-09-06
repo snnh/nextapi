@@ -148,14 +148,14 @@ fn build_client(
     // proxy_id 取值：body → cfg.proxy_id → proxy.default_proxy_id（非空才取，全空直连）
     let proxy_id = proxy_id_override
         .filter(|s| !s.is_empty())
-        .or_else(|| {
+        .or({
             if cfg.proxy_id.is_empty() {
                 None
             } else {
                 Some(cfg.proxy_id)
             }
         })
-        .or_else(|| {
+        .or({
             if default_proxy_id.is_empty() {
                 None
             } else {

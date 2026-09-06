@@ -6,7 +6,7 @@
 //!     - 未传 / 掩码回传（`"***"`）→ 保持原值；
 //!     - 空串 `""` → 清除密码；
 //!     - 其他 → 视为新明文，加密更新；
-//!   `NEXTAPI_SECRET_KEY` 未设置时禁止设置密码（返回 BadRequest）；
+//!       `NEXTAPI_SECRET_KEY` 未设置时禁止设置密码（返回 BadRequest）；
 //! - POST /{id}/test：真实连通性测试——经代理请求 `proxy.probe_url` 白名单探测地址，
 //!   返回可达性（ok/status/latency_ms/error，对齐 /api/upstreams/{id}/test）；
 //! - 所有写操作写 admin_audit_logs（action 如 proxy.create/update/delete）。

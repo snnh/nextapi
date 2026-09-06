@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 //! OpenAI Responses 适配器（/v1/responses）。
 //!
 //! 要点（PLAN.md §4.2/§4.4）：
@@ -543,12 +545,8 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
                 }
             }
             IrRole::User | IrRole::Assistant => {
-                if m.content.is_some() {
-                    input_items.push(request_message_item(
-                        m.role,
-                        m.content.as_ref().unwrap(),
-                        ctx,
-                    ));
+                if let Some(content) = m.content.as_ref() {
+                    input_items.push(request_message_item(m.role, content, ctx));
                 }
                 for tc in &m.tool_calls {
                     input_items.push(function_call_input_item(tc));

@@ -4,7 +4,7 @@
 //! - `/api/config`：整文件级 YAML 视图（导出掩码；导入/热加载），
 //!   PUT 对掩码值语义 = 保持原值；`/api/config/reload` 只重载 hot 运行参数，
 //!   永不覆盖 DB 中的业务实体。
-//! 两者共享同一配置引擎，禁止各自维护一套默认值。
+//!   两者共享同一配置引擎，禁止各自维护一套默认值。
 
 use axum::{
     extract::State,
@@ -63,7 +63,7 @@ async fn put_settings(
 /// GET /api/config：整文件级 YAML 视图，敏感字段掩码后返回。
 async fn get_config(State(state): State<Arc<AppState>>) -> ApiResult<Json<serde_json::Value>> {
     let cfg = state.file_config.read().unwrap().clone();
-    let mut value = serde_json::to_value(&cfg).map_err(|e| ApiError::internal(e))?;
+    let mut value = serde_json::to_value(&cfg).map_err(ApiError::internal)?;
     config::mask_config_json(&mut value);
     Ok(Json(serde_json::json!({ "config": value })))
 }
@@ -84,7 +84,7 @@ async fn put_config(
         .map_err(|e| ApiError::bad_request(format!("配置解析失败: {e}")))?;
 
     // 写回配置文件（YAML）：先写同目录临时文件再 rename，原子替换防半写损坏（review P2-10）
-    let yaml_str = serde_yaml::to_string(&new_cfg).map_err(|e| ApiError::internal(e))?;
+    let yaml_str = serde_yaml::to_string(&new_cfg).map_err(ApiError::internal)?;
     let path = state.config_path.as_path();
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, yaml_str).map_err(|e| ApiError::internal(format!("配置写入失败: {e}")))?;
@@ -109,7 +109,7 @@ async fn put_config(
 
     // 返回新的 GET 结果
     let cfg = state.file_config.read().unwrap().clone();
-    let mut value = serde_json::to_value(&cfg).map_err(|e| ApiError::internal(e))?;
+    let mut value = serde_json::to_value(&cfg).map_err(ApiError::internal)?;
     config::mask_config_json(&mut value);
     Ok(Json(serde_json::json!({ "config": value })))
 }

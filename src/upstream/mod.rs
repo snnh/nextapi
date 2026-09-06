@@ -117,7 +117,9 @@ impl ClientPools {
     fn build_client(proxy: Option<reqwest::Proxy>) -> reqwest::Client {
         let mut b = reqwest::Client::builder()
             .pool_max_idle_per_host(32)
-            .tcp_keepalive(Duration::from_secs(60));
+            .tcp_keepalive(Duration::from_secs(60))
+            // 连接建立也必须有上限；请求级 timeout 只覆盖 send 后整体请求。
+            .connect_timeout(Duration::from_secs(10));
         if let Some(p) = proxy {
             b = b.proxy(p);
         }
@@ -211,7 +213,7 @@ fn cidr_match(host: &str, cidr: &str) -> bool {
 
 fn ipv6_prefix_match(h: &[u8; 16], n: &[u8; 16], prefix: u32) -> bool {
     let full_bytes = (prefix / 8) as usize;
-    let rem_bits = (prefix % 8) as u32;
+    let rem_bits = prefix % 8;
     if h[..full_bytes] != n[..full_bytes] {
         return false;
     }
@@ -264,7 +266,7 @@ fn encode_path_segment(s: &str) -> String {
 /// - openai_chat/openai_responses：Authorization: Bearer {key}
 /// - anthropic：x-api-key + anthropic-version: 2023-06-01
 /// - gemini：x-goog-api-key
-/// api_key 为 None 时不设置（部分自建上游无需鉴权）。
+///   api_key 为 None 时不设置（部分自建上游无需鉴权）。
 pub fn apply_auth(headers: &mut reqwest::header::HeaderMap, p: Protocol, api_key: Option<&str>) {
     let Some(key) = api_key else { return };
     match p {
@@ -322,7 +324,7 @@ fn set_nested_segs(cur: &mut serde_json::Value, segs: &[&str], value: serde_json
         return;
     }
     // 数字路径段 = 数组索引（review P2-4：原实现把数组强转对象破坏请求结构）
-    let next_is_index = segs.get(1).map_or(false, |s| s.parse::<usize>().is_ok());
+    let next_is_index = segs.get(1).is_some_and(|s| s.parse::<usize>().is_ok());
 
     if segs.len() == 1 {
         match cur {
@@ -429,6 +431,27 @@ fn apply_header_one(
         tracing::warn!("无效请求头名 `{name}` 跳过覆盖");
         return;
     };
+    // 禁止管理员配置覆盖 hop-by-hop 头，避免请求走私及连接语义混淆。
+    // `Host` 由 reqwest/目标 URL 管理，Content-Length 由客户端根据 body 重算。
+    const FORBIDDEN: &[&str] = &[
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+        "content-length",
+    ];
+    if FORBIDDEN
+        .iter()
+        .any(|&n| hname.as_str().eq_ignore_ascii_case(n))
+    {
+        tracing::warn!("禁止覆盖 hop-by-hop 请求头 `{name}`");
+        return;
+    }
     let value_str = header_value_str(value);
     let Ok(hval) = reqwest::header::HeaderValue::from_str(&value_str) else {
         tracing::warn!("无效请求头值 `{name}` 跳过覆盖");
@@ -587,10 +610,8 @@ pub fn sse_passthrough_stream(
                         let out = rewrite_sse_payload(&ev, &st.gateway_model, &st.request_id);
                         st.queue.push_back(Ok(Bytes::from(out.into_bytes())));
                     }
-                    st.queue.push_back(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    )));
+                    st.queue
+                        .push_back(Err(std::io::Error::other(e.to_string())));
                 }
                 None => {
                     st.done = true;
@@ -644,10 +665,8 @@ pub fn sse_convert_stream(
                     for ev in st.parser.finish() {
                         process_convert_frame(&mut st, &ev);
                     }
-                    st.queue.push_back(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    )));
+                    st.queue
+                        .push_back(Err(std::io::Error::other(e.to_string())));
                 }
                 None => {
                     st.done = true;
@@ -719,6 +738,18 @@ mod tests {
     use crate::protocol::ir::Protocol;
     use reqwest::header::HeaderMap;
     use serde_json::json;
+
+    #[test]
+    fn cidr_rejects_private_and_handles_boundaries() {
+        assert!(cidr_match("127.0.0.1", "127.0.0.0/8"));
+        assert!(cidr_match("10.255.255.255", "10.0.0.0/8"));
+        assert!(!cidr_match("192.168.1.1", "10.0.0.0/8"));
+        assert!(cidr_match("::1", "::1/128"));
+        assert!(cidr_match("2001:db8::1", "2001:db8::/32"));
+        assert!(!cidr_match("2001:db9::1", "2001:db8::/32"));
+        assert!(!cidr_match("127.0.0.1", "127.0.0.0/33"));
+        assert!(!cidr_match("127.0.0.1", "127.0.0.0/not-a-prefix"));
+    }
 
     #[test]
     fn retryable_timeout_connect_always_true() {
@@ -975,7 +1006,7 @@ mod tests {
         let snap = Snapshot::default();
         let c = pools.client_for(&up, &snap, "");
         // 直连：无代理也能构建
-        let _ = c.post("http://127.0.0.1:1").send();
+        drop(c.post("http://127.0.0.1:1").send());
     }
 
     #[test]
@@ -1000,7 +1031,7 @@ mod tests {
         up.use_proxy = true;
         up.proxy_id = Some(pid);
         let c = pools.client_for(&up, &snap, "");
-        let _ = c.post("http://127.0.0.1:1").send();
+        drop(c.post("http://127.0.0.1:1").send());
     }
 
     #[test]
@@ -1012,7 +1043,7 @@ mod tests {
         let snap = Snapshot::default();
         let c = pools.client_for(&up, &snap, "");
         // 构建直连客户端（关键是不 panic）
-        let _ = c.post("http://127.0.0.1:1").send();
+        drop(c.post("http://127.0.0.1:1").send());
     }
 
     fn make_upstream() -> UpstreamRow {

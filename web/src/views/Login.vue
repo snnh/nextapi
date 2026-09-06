@@ -72,14 +72,17 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+  background: #1f2421;
+  position: relative;
+  overflow: hidden;
 }
 
 .login-card {
   width: 400px;
   max-width: 92vw;
-  border-radius: 12px;
-  border: none;
+  border-radius: 14px;
+  border: 1px solid #e7e5e0;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .18);
 }
 
 .login-head {
@@ -91,10 +94,8 @@ async function handleLogin() {
   font-size: 34px;
   font-weight: 800;
   letter-spacing: 1px;
-  background: linear-gradient(90deg, #409eff, #67c23a);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #202124;
+  letter-spacing: .5px;
 }
 
 .title {

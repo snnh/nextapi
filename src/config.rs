@@ -68,6 +68,8 @@ pub struct ServerCfg {
     pub admin_jwt_secret: String,
     /// 调试模式：放宽启动检查。仅本地开发使用。
     pub debug: bool,
+    /// 可信反向代理 CIDR；为空时不信任 X-Forwarded-For/X-Real-IP。
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for ServerCfg {
@@ -76,6 +78,7 @@ impl Default for ServerCfg {
             listen: "0.0.0.0:8080".into(),
             admin_jwt_secret: String::new(),
             debug: false,
+            trusted_proxies: Vec::new(),
         }
     }
 }

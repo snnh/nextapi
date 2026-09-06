@@ -1,8 +1,8 @@
 <template>
   <el-container class="layout">
-    <el-aside width="220px" class="aside">
-      <div class="logo">NextAPI</div>
-      <el-menu :default-active="active" router background-color="#001529"
+    <el-aside width="232px" class="aside">
+      <div class="brand"><span class="brand-mark">N</span><div><strong>NextAPI</strong><small>Gateway console</small></div></div>
+      <el-menu :default-active="active" router background-color="#1f2421"
         text-color="rgba(255,255,255,.68)" active-text-color="#fff" class="menu">
         <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
           <el-icon><component :is="m.icon" /></el-icon>
@@ -82,21 +82,43 @@ async function onCommand(cmd: string) {
 .layout {
   height: 100%;
 }
+@media (max-width: 720px) {
+  .aside { width: 64px !important; }
+  .brand { justify-content: center; padding: 18px 8px; }
+  .brand > div:last-child, .menu span { display: none; }
+  .menu .el-menu-item { justify-content: center; padding: 0 !important; }
+  .header { padding: 0 14px; }
+  .page-title { font-size: 15px; }
+}
+
 .aside {
-  background: #001529;
+  background: #1f2421;
 }
-.logo {
-  color: #fff;
-  font-size: 20px;
-  font-weight: 700;
-  padding: 18px 20px;
-  letter-spacing: 1px;
+.brand {
+  color: #f5f3ed;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 18px;
 }
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #d5f36f;
+  color: #1f2421;
+  font-weight: 800;
+}
+.brand strong { display: block; font-size: 17px; letter-spacing: .2px; }
+.brand small { display: block; margin-top: 2px; color: #a8ada6; font-size: 10px; }
 .menu {
   border-right: none;
 }
 .header {
-  background: #fff;
+  background: rgba(255, 255, 255, .92);
+  border-bottom: 1px solid #e7e5e0;
   display: flex;
   align-items: center;
   justify-content: space-between;

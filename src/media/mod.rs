@@ -71,10 +71,10 @@ pub fn parse_image_request(
 ) -> Result<ImageRequest, crate::error::ApiError> {
     // prompt 必须为非空字符串
     let prompt = match body.get("prompt") {
-        Some(serde_json::Value::String(s)) if !s.trim().is_empty() => s.clone(),
+        Some(serde_json::Value::String(s)) if !s.trim().is_empty() && s.len() <= 32 * 1024 => s.clone(),
         _ => {
             return Err(crate::error::ApiError::bad_request(
-                "prompt 必须为非空字符串",
+                "prompt 必须为非空且不超过 32KB 的字符串",
             ))
         }
     };
@@ -89,6 +89,33 @@ pub fn parse_image_request(
             ))
         }
         Some(_) => return Err(crate::error::ApiError::bad_request("size 必须为字符串")),
+    };
+
+    // quality 若提供必须为供应商兼容的有限枚举，拒绝任意值以免误导上游。
+    if let Some(v) = body.get("quality") {
+        let valid = matches!(v.as_str(), Some("standard" | "hd" | "high" | "medium" | "low"));
+        if !valid {
+            return Err(crate::error::ApiError::bad_request(
+                "quality 必须为 standard、hd、high、medium 或 low",
+            ));
+        }
+    }
+
+    // response_format 仅支持 OpenAI 图片接口的 url/b64_json。
+    if let Some(v) = body.get("response_format") {
+        if !matches!(v.as_str(), Some("url" | "b64_json")) {
+            return Err(crate::error::ApiError::bad_request(
+                "response_format 必须为 url 或 b64_json",
+            ));
+        }
+    }
+
+    // seed 若提供必须为整数，避免浮点/字符串静默丢弃。
+    let seed = match body.get("seed") {
+        None => None,
+        Some(v) => Some(v.as_i64().ok_or_else(|| {
+            crate::error::ApiError::bad_request("seed 必须为整数")
+        })?),
     };
 
     // n 若提供必须为 1..=8
@@ -113,7 +140,7 @@ pub fn parse_image_request(
             .map(String::from),
         size,
         n,
-        seed: body.get("seed").and_then(|v| v.as_i64()),
+        seed,
         quality: body
             .get("quality")
             .and_then(|v| v.as_str())
@@ -336,7 +363,7 @@ pub fn parse_image_response(
             let image_count = json
                 .pointer("/usage/image_count")
                 .and_then(|v| v.as_i64())
-                .unwrap_or_else(|| images.len() as i64);
+                .unwrap_or(images.len() as i64);
             let image_size = match (
                 json.pointer("/usage/width").and_then(|v| v.as_i64()),
                 json.pointer("/usage/height").and_then(|v| v.as_i64()),
@@ -411,8 +438,6 @@ pub async fn fetch_task_status(
     let resp = req.send().await.map_err(|e| {
         if e.is_timeout() {
             UpstreamError::Timeout
-        } else if e.is_connect() {
-            UpstreamError::Connect(e.to_string())
         } else {
             UpstreamError::Connect(e.to_string())
         }

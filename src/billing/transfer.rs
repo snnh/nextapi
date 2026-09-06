@@ -302,7 +302,7 @@ fn parse_tree(bytes: &[u8]) -> ApiResult<XNode> {
     let mut root: Option<XNode> = None;
 
     // 子节点入栈：栈空则设为根，否则挂到栈顶的 children。
-    fn push_child(stack: &mut Vec<XNode>, root: &mut Option<XNode>, node: XNode) {
+    fn push_child(stack: &mut [XNode], root: &mut Option<XNode>, node: XNode) {
         if let Some(top) = stack.last_mut() {
             top.children.push(node);
         } else {

@@ -296,13 +296,15 @@ impl SettingsEngine {
             let restart = is_startup;
             // 敏感键保存：要求落库前可加密（与上游 api_key 等语义一致）；
             // 若 NEXTAPI_SECRET_KEY 未配置则拒绝，避免 JWT secret 明文落库（review P4）。
-            if secret && value.is_string() && !value.as_str().unwrap_or_default().is_empty() {
-                if !self.crypto.is_available() {
-                    return Err(crate::error::ApiError::bad_request(format!(
-                        "保存 {key} 需要先配置环境变量 {}（敏感字段落库前强制加密）",
-                        crate::crypto::ENV_SECRET_KEY
-                    )));
-                }
+            if secret
+                && value.is_string()
+                && !value.as_str().unwrap_or_default().is_empty()
+                && !self.crypto.is_available()
+            {
+                return Err(crate::error::ApiError::bad_request(format!(
+                    "保存 {key} 需要先配置环境变量 {}（敏感字段落库前强制加密）",
+                    crate::crypto::ENV_SECRET_KEY
+                )));
             }
             validated.push((key.clone(), value.clone(), secret, restart));
         }
@@ -538,6 +540,7 @@ mod tests {
                 listen: "127.0.0.1:9000".into(),
                 admin_jwt_secret: "s3cret".into(),
                 debug: false,
+                trusted_proxies: vec![],
             },
             database: crate::config::DatabaseCfg {
                 url: "postgres://u:p@h/db".into(),
@@ -556,6 +559,6 @@ mod tests {
             startup_yaml_value(&cfg, "server.admin_jwt_secret").unwrap(),
             "s3cret"
         );
-        assert_eq!(startup_yaml_value(&cfg, "nonexistent").is_none(), true);
+        assert!(startup_yaml_value(&cfg, "nonexistent").is_none());
     }
 }

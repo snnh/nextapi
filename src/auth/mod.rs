@@ -57,6 +57,8 @@ struct Claims {
     sub: String,
     exp: usize,
     iat: usize,
+    #[serde(default)]
+    session_version: i32,
 }
 
 #[derive(Clone)]
@@ -74,12 +76,13 @@ impl JwtService {
     }
 
     /// 签发管理员 token（HS256）。
-    pub fn issue(&self, username: &str) -> anyhow::Result<String> {
+    pub fn issue(&self, username: &str, session_version: i32) -> anyhow::Result<String> {
         let now = Utc::now().timestamp().max(0) as usize;
         let claims = Claims {
             sub: username.to_string(),
             exp: now + self.ttl_secs as usize,
             iat: now,
+            session_version,
         };
         let token = encode(
             &Header::default(),
@@ -90,7 +93,12 @@ impl JwtService {
     }
 
     /// 校验 token，返回主体（用户名）。
+    #[cfg(test)]
     pub fn verify(&self, token: &str) -> anyhow::Result<String> {
+        Ok(self.verify_claims(token)?.sub)
+    }
+
+    fn verify_claims(&self, token: &str) -> anyhow::Result<Claims> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_aud = false; // 我们不用 aud 声明
         let data = decode::<Claims>(
@@ -98,7 +106,7 @@ impl JwtService {
             &DecodingKey::from_secret(self.secret.as_bytes()),
             &validation,
         )?;
-        Ok(data.claims.sub)
+        Ok(data.claims)
     }
 }
 
@@ -154,9 +162,21 @@ async fn login(
     Json(body): Json<LoginReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     // 1. 防爆破：按 username 的 1 分钟滑动窗口限速
-    let ip = client_ip(&headers);
+    let trusted = state
+        .file_config
+        .read()
+        .unwrap()
+        .server
+        .trusted_proxies
+        .clone();
+    let ip = client_ip(&headers, &trusted);
     let limit = state.hot.load().gateway.admin_login_rate_limit_per_min;
-    if !login_rate_limiter().check(&body.username, limit) {
+    let rate_key = format!(
+        "{}:{}",
+        body.username.trim().to_ascii_lowercase(),
+        ip.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string())
+    );
+    if !login_rate_limiter().check(&rate_key, limit) {
         return Err(ApiError::RateLimited);
     }
 
@@ -171,6 +191,7 @@ async fn login(
         return Err(ApiError::Unauthorized);
     };
     let hash: String = row.get("password_hash");
+    let session_version: i32 = row.try_get("session_version").unwrap_or(0);
 
     // 3. argon2 校验密码
     if !verify_password(&hash, &body.password) {
@@ -190,8 +211,8 @@ async fn login(
     // 4. 签发 JWT，写登录成功审计
     let token = state
         .jwt
-        .issue(&body.username)
-        .map_err(|e| ApiError::internal(e))?;
+        .issue(&body.username, session_version)
+        .map_err(ApiError::internal)?;
     audit(
         &state,
         &body.username,
@@ -212,7 +233,7 @@ async fn me(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let username = current_username(&state, &headers)?;
+    let username = current_username(&state, &headers).await?;
     Ok(Json(serde_json::json!({ "username": username })))
 }
 
@@ -222,8 +243,15 @@ async fn change_password(
     headers: HeaderMap,
     Json(body): Json<ChangePasswordReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let username = current_username(&state, &headers)?;
-    let ip = client_ip(&headers);
+    let username = current_username(&state, &headers).await?;
+    let trusted = state
+        .file_config
+        .read()
+        .unwrap()
+        .server
+        .trusted_proxies
+        .clone();
+    let ip = client_ip(&headers, &trusted);
 
     // 强度校验（review P4）：≥8 字符且不得与旧密码相同（避免误操作/弱口令）
     if body.new_password.chars().count() < 8 {
@@ -234,10 +262,11 @@ async fn change_password(
     }
 
     // 查用户（token 有效但用户可能已被删）
-    let row = sqlx::query("SELECT password_hash FROM admin_users WHERE username = $1")
-        .bind(&username)
-        .fetch_optional(&state.db)
-        .await?;
+    let row =
+        sqlx::query("SELECT password_hash, session_version FROM admin_users WHERE username = $1")
+            .bind(&username)
+            .fetch_optional(&state.db)
+            .await?;
     let Some(row) = row else {
         return Err(ApiError::Unauthorized);
     };
@@ -249,8 +278,8 @@ async fn change_password(
     }
 
     // argon2 哈希新密码并更新
-    let new_hash = hash_password(&body.new_password).map_err(|e| ApiError::internal(e))?;
-    sqlx::query("UPDATE admin_users SET password_hash = $1 WHERE username = $2")
+    let new_hash = hash_password(&body.new_password).map_err(ApiError::internal)?;
+    sqlx::query("UPDATE admin_users SET password_hash = $1, session_version = session_version + 1 WHERE username = $2")
         .bind(&new_hash)
         .bind(&username)
         .execute(&state.db)
@@ -278,34 +307,62 @@ pub async fn require_admin(
     mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let username = current_username(&state, req.headers())?;
-    let ip = client_ip(req.headers());
+    let username = current_username(&state, req.headers()).await?;
+    let trusted = state
+        .file_config
+        .read()
+        .unwrap()
+        .server
+        .trusted_proxies
+        .clone();
+    let ip = client_ip(req.headers(), &trusted);
     req.extensions_mut().insert(AdminUsername(username));
     Ok(CURRENT_CLIENT_IP.scope(ip, next.run(req)).await)
 }
 
 /// 客户端 IP（最佳努力，审计展示用途）：X-Forwarded-For 首值 → X-Real-IP。
 /// 说明：XFF 可由客户端伪造，故不将其作为任何安全边界（限速仍以 username 为准）。
-fn client_ip(headers: &HeaderMap) -> Option<std::net::IpAddr> {
-    let raw = headers
+fn client_ip(headers: &HeaderMap, trusted_proxies: &[String]) -> Option<std::net::IpAddr> {
+    if trusted_proxies.is_empty() {
+        return None;
+    }
+    // 仅接受可解析的地址；XFF 存在但首值非法时继续尝试 X-Real-IP，
+    // 避免恶意/异常头让审计 IP 无故丢失。
+    headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split(',').next().map(str::trim))
         .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
         .or_else(|| {
             headers
                 .get("x-real-ip")
                 .and_then(|v| v.to_str().ok())
                 .filter(|s| !s.is_empty())
-        })?;
-    raw.parse().ok()
+                .and_then(|s| s.parse().ok())
+        })
 }
 
 /// 从请求头解析 Bearer 并校验 JWT，返回管理员用户名。
 /// `require_admin` 与被保护的 handler 复用同一逻辑。
-pub fn current_username(state: &AppState, headers: &HeaderMap) -> Result<String, ApiError> {
+pub async fn current_username(state: &AppState, headers: &HeaderMap) -> Result<String, ApiError> {
     let token = bearer_from_headers(headers)?;
-    state.jwt.verify(token).map_err(|_| ApiError::Unauthorized)
+    let claims = state
+        .jwt
+        .verify_claims(token)
+        .map_err(|_| ApiError::Unauthorized)?;
+    // session_version 在改密时递增，使旧 JWT 立即失效。
+    let row = sqlx::query("SELECT session_version FROM admin_users WHERE username = $1")
+        .bind(&claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| ApiError::Unauthorized)?
+        .ok_or(ApiError::Unauthorized)?;
+    let current: i32 = row.try_get("session_version").unwrap_or(0);
+    if current != claims.session_version {
+        return Err(ApiError::Unauthorized);
+    }
+    Ok(claims.sub)
 }
 
 /// 从 Authorization: Bearer 头提取 token。
@@ -548,24 +605,38 @@ mod tests {
     #[test]
     fn client_ip_parses_proxy_headers() {
         let mut h = axum::http::HeaderMap::new();
-        assert_eq!(client_ip(&h), None);
+        assert_eq!(client_ip(&h, &[]), None);
         // XFF 取首个
         h.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
-        assert_eq!(client_ip(&h), Some("1.2.3.4".parse().unwrap()));
-        // 非法值回退 None
+        assert_eq!(
+            client_ip(&h, &["0.0.0.0/0".into()]),
+            Some("1.2.3.4".parse().unwrap())
+        );
+        // 非法值继续回退到 X-Real-IP
         h.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
-        assert_eq!(client_ip(&h), None);
+        h.insert("x-real-ip", "10.0.0.8".parse().unwrap());
+        assert_eq!(
+            client_ip(&h, &["0.0.0.0/0".into()]),
+            Some("10.0.0.8".parse().unwrap())
+        );
         // x-real-ip 兜底
         h.remove("x-forwarded-for");
         h.insert("x-real-ip", "2001:db8::1".parse().unwrap());
-        assert_eq!(client_ip(&h), Some("2001:db8::1".parse().unwrap()));
+        assert_eq!(
+            client_ip(&h, &["::/0".into()]),
+            Some("2001:db8::1".parse().unwrap())
+        );
     }
 
     #[test]
     fn jwt_roundtrip() {
         let svc = JwtService::new("test-secret".into());
-        let token = svc.issue("admin").unwrap();
+        let token = svc.issue("admin", 0).unwrap();
         assert_eq!(svc.verify(&token).unwrap(), "admin");
+        assert_eq!(svc.verify_claims(&token).unwrap().session_version, 0);
+        let newer = svc.issue("admin", 1).unwrap();
+        assert_eq!(svc.verify_claims(&newer).unwrap().session_version, 1);
+        assert_ne!(token, newer);
         // 错误密钥校验失败
         let bad = JwtService::new("other-secret".into());
         assert!(bad.verify(&token).is_err());

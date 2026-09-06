@@ -116,7 +116,7 @@ pub enum BreakerState {
 /// `opens` 为「进入本次打开之前」的连续打开次数（Closed→Open 时为 0，HalfOpen{n}→Open 时为 n）。
 /// 返回 `DEFAULT_COOLDOWN_SECS × 2^opens`，封顶 `MAX_COOLDOWN_SECS`（30 分钟）。
 pub fn cooldown_secs(opens: u32) -> i64 {
-    let secs = (DEFAULT_COOLDOWN_SECS as i64).saturating_mul(1i64 << opens.min(62));
+    let secs = DEFAULT_COOLDOWN_SECS.saturating_mul(1i64 << opens.min(62));
     secs.min(MAX_COOLDOWN_SECS)
 }
 
@@ -202,15 +202,10 @@ impl Breaker {
             if let Some(until) = up.cooldown_until {
                 if until > now {
                     let mut states = self.states.lock().unwrap();
-                    if !states.contains_key(&id) {
-                        states.insert(
-                            id,
-                            BreakerState::Open {
-                                until,
-                                consecutive_opens: up.consecutive_failures.max(1) as u32,
-                            },
-                        );
-                    }
+                    states.entry(id).or_insert_with(|| BreakerState::Open {
+                        until,
+                        consecutive_opens: up.consecutive_failures.max(1) as u32,
+                    });
                     return false;
                 }
             }
@@ -311,7 +306,7 @@ impl Breaker {
             let db = match (&state, &next) {
                 (BreakerState::Open { .. }, BreakerState::Open { .. }) => {
                     Some(DbUpdate::FailuresOnly {
-                        failures: up.consecutive_failures.saturating_add(1) as i32,
+                        failures: up.consecutive_failures.saturating_add(1),
                     })
                 }
                 (_, BreakerState::Open { until, .. }) => Some(DbUpdate::Open {
@@ -642,7 +637,7 @@ mod tests {
         br.on_failure(&pool, &up).await;
         assert!(br.allow(&up));
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&id).unwrap(),
+            br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::Closed { failures: 1 }
         ));
 
@@ -650,7 +645,7 @@ mod tests {
         br.on_failure(&pool, &up).await;
         assert!(!br.allow(&up));
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&id).unwrap(),
+            br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::Open { .. }
         ));
 
@@ -666,14 +661,14 @@ mod tests {
         // 探测在飞，再次 allow 应被拒绝
         assert!(!br.allow(&up));
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&id).unwrap(),
+            br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::HalfOpen { .. }
         ));
 
         // 半开探测成功 → 关闭，计数清零
         br.on_success(&pool, &up).await;
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&id).unwrap(),
+            br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::Closed { failures: 0 }
         ));
         assert!(br.allow(&up));
@@ -705,7 +700,7 @@ mod tests {
                 assert_eq!(*consecutive_opens, 2);
                 let secs = (*until - before).num_seconds();
                 assert!(
-                    secs >= 115 && secs <= 125,
+                    (115..=125).contains(&secs),
                     "cooldown should be ~120s, got {secs}s"
                 );
                 assert!(*until > after);
@@ -755,7 +750,7 @@ mod tests {
             .insert(up.id, BreakerState::Closed { failures: 0 });
         br.on_failure(&pool, &up).await;
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&up.id).unwrap(),
+            br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Closed { failures: 0 }
         ));
 
@@ -773,7 +768,7 @@ mod tests {
         // DB 行为 auto 禁用：on_success 应清零计数并恢复
         br.on_success(&pool, &up).await;
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&up.id).unwrap(),
+            br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Closed { failures: 0 }
         ));
     }
@@ -782,14 +777,14 @@ mod tests {
     async fn breaker_db_cooldown_blocks_after_restart() {
         // review P4：进程重启后内存状态为空，但 DB 行 disabled_by='auto' 且冷却未到期 →
         // allow() 应拒绝放行并导入 Open 状态（冷却期内的流量不得直击故障上游）。
-        let pool = lazy_pool();
+        let _pool = lazy_pool();
         let br = Breaker::new();
         let mut up = upstream(2, Some("auto"));
         up.consecutive_failures = 4;
         up.cooldown_until = Some(Utc::now() + Duration::seconds(120));
         assert!(!br.allow(&up));
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&up.id).unwrap(),
+            br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Open {
                 consecutive_opens: 4,
                 ..
@@ -800,7 +795,7 @@ mod tests {
         up.cooldown_until = Some(Utc::now() - Duration::seconds(1));
         assert!(br.allow(&up));
         assert!(matches!(
-            &*br.states.lock().unwrap().get(&up.id).unwrap(),
+            br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Closed { failures: 0 }
         ));
         // 内存已有状态时 DB 冷却不覆盖内存判定（仍在 Open 窗口内 → 拒绝）

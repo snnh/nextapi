@@ -295,7 +295,7 @@ mod cross_protocol_tests {
         assert!(text.contains("1+1=?"), "用户消息应保留: {out}");
         assert!(text.contains("保持简洁"), "system 内容应保留: {out}");
         assert!(
-            out["messages"].as_array().map_or(false, |a| !a.is_empty()),
+            out["messages"].as_array().is_some_and(|a| !a.is_empty()),
             "messages 应有内容: {out}"
         );
     }

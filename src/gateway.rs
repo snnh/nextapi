@@ -7,7 +7,7 @@
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -158,7 +158,7 @@ fn append_chunk(collect: &Mutex<StreamCollect>, bytes: &[u8], start: Instant) {
 
 /// 将 axum::Error 映射为 std::io::Error（供 Body::from_stream 的 Err 类型约束）。
 fn to_io_err(e: axum::Error) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, e.into_inner())
+    std::io::Error::other(e.into_inner())
 }
 
 /// 打包一次流式记账上下文，供 TeeStream 在流结束时 spawn 处理。
@@ -377,17 +377,32 @@ fn hash_key(key: &str) -> String {
 pub(crate) fn authenticate_gateway_key(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<ApiKeyRow, Response> {
+) -> Result<ApiKeyRow, Box<Response>> {
     let request_id = Uuid::new_v4().to_string();
     let Some(raw_key) = extract_api_key(headers, Entry::OpenaiChat) else {
-        return Err(error_resp(Protocol::OpenaiChat, &request_id, 401, "未授权"));
+        return Err(Box::new(error_resp(
+            Protocol::OpenaiChat,
+            &request_id,
+            401,
+            "未授权",
+        )));
     };
     let snap = state.cache.snapshot();
     let Some(key) = snap.api_keys.get(&hash_key(&raw_key)).cloned() else {
-        return Err(error_resp(Protocol::OpenaiChat, &request_id, 401, "未授权"));
+        return Err(Box::new(error_resp(
+            Protocol::OpenaiChat,
+            &request_id,
+            401,
+            "未授权",
+        )));
     };
     if !key.is_usable() {
-        return Err(error_resp(Protocol::OpenaiChat, &request_id, 401, "未授权"));
+        return Err(Box::new(error_resp(
+            Protocol::OpenaiChat,
+            &request_id,
+            401,
+            "未授权",
+        )));
     }
     Ok(key)
 }
@@ -556,7 +571,7 @@ fn json_rsp(
     body: serde_json::Value,
 ) -> Response {
     let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     h.insert(
         HDR_REQUEST_ID,
         request_id
@@ -841,7 +856,7 @@ async fn run_gateway(
     // 2. Key 鉴权（复用 authenticate_gateway_key；媒体端点亦走此函数）
     let key = match authenticate_gateway_key(&state, &headers) {
         Ok(k) => k,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let snap = state.cache.snapshot();
 
@@ -884,7 +899,7 @@ async fn run_gateway(
     };
     let debug_active = key.debug_active();
     // params_meta 在 body 解析后计算（早退路径不引用，故延迟初始化）。
-    let params_meta: serde_json::Value;
+
     let mut debug_req: Option<(serde_json::Value, bool)> = None;
 
     // 预取热配置（避免跨 await 持有 ArcSwap guard）
@@ -927,7 +942,8 @@ async fn run_gateway(
     tmpl.stream = is_stream(&body_value, gemini_stream);
     let stream = tmpl.stream;
     let max_tokens = extract_max_tokens(&body_value);
-    params_meta = crate::upstream::usage::request_params_meta(entry_protocol, &body_value);
+    let params_meta: serde_json::Value =
+        crate::upstream::usage::request_params_meta(entry_protocol, &body_value);
     tmpl.usage_raw = Some(serde_json::json!({ "params": params_meta.clone() }));
     if debug_active {
         debug_req = Some(crate::logging::redact::redact_and_truncate(
@@ -1416,7 +1432,7 @@ async fn images_generations(
     // 1. Key 鉴权（媒体端点走网关 Key，同主链路）
     let key = match authenticate_gateway_key(&state, &headers) {
         Ok(k) => k,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let snap = state.cache.snapshot();
     let debug_active = key.debug_active();
@@ -1914,7 +1930,7 @@ async fn video_tasks_placeholder(_task_id: Path<String>) -> Response {
 /// （review P4：此前公开可枚举模型清单与上游拓扑）。
 async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if let Err(resp) = authenticate_gateway_key(&state, &headers) {
-        return resp;
+        return *resp;
     }
     let request_id = Uuid::new_v4().to_string();
     let snap = state.cache.snapshot();

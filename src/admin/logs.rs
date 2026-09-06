@@ -255,6 +255,14 @@ fn build_log_filter(q: &LogQuery, tz: &str) -> ApiResult<LogFilter> {
         .map(parse_uuid)
         .transpose()?;
 
+    if to_ts <= from_ts {
+        return Err(ApiError::bad_request("to_ts 必须晚于 from_ts"));
+    }
+    // 限制单次查询跨度，避免日志/统计接口消耗无限数据库资源。
+    if to_ts.signed_duration_since(from_ts) > chrono::Duration::days(366) {
+        return Err(ApiError::bad_request("日志查询时间跨度不能超过 366 天"));
+    }
+
     Ok(LogFilter {
         from_ts,
         to_ts,
@@ -383,7 +391,7 @@ fn opt_i32(v: Option<i32>) -> String {
 /// CSV 单元格转义：引号/逗号/换行 + 公式注入前缀中和（= + - @ 开头前置单引号，CWE-1236）。
 fn csv_escape(s: &str) -> String {
     let s = match s.chars().next() {
-        Some(c) if matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r') => {
+        Some('=' | '+' | '-' | '@' | '\t' | '\r') => {
             let mut t = String::with_capacity(s.len() + 1);
             t.push('\'');
             t.push_str(s);

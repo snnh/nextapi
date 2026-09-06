@@ -106,7 +106,7 @@ async fn replace_routes(
         }
         if r.override_model
             .as_deref()
-            .map_or(false, |m| m.chars().count() > 255)
+            .is_some_and(|m| m.chars().count() > 255)
         {
             return Err(ApiError::bad_request("override_model 不能超过 255 字符"));
         }

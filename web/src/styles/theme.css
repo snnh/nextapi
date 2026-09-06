@@ -1,0 +1,28 @@
+:root {
+  --el-color-primary: #556b2f;
+  --el-color-primary-light-3: #83985c;
+  --el-color-primary-light-5: #aab996;
+  --el-color-primary-light-7: #d4dcc7;
+  --el-color-primary-light-9: #f0f3ec;
+  --el-border-radius-base: 7px;
+  --el-border-radius-small: 5px;
+  --el-bg-color-page: #f7f7f5;
+  --el-border-color: #e3e1dc;
+  --el-text-color-primary: #202124;
+  --el-text-color-regular: #4f534e;
+}
+
+.el-button--primary {
+  --el-button-bg-color: #556b2f;
+  --el-button-border-color: #556b2f;
+  --el-button-hover-bg-color: #667f39;
+  --el-button-hover-border-color: #667f39;
+}
+
+.el-card { --el-card-border-color: #e7e5e0; }
+.el-table { --el-table-border-color: #eceae5; --el-table-header-bg-color: #fafaf8; }
+.el-menu-item { transition: background-color .15s ease, color .15s ease; }
+.el-menu-item:hover { background-color: rgba(213, 243, 111, .08) !important; }
+.el-menu-item.is-active { background-color: rgba(213, 243, 111, .15) !important; color: #d5f36f !important; border-right: 2px solid #d5f36f; }
+.el-input__wrapper, .el-select__wrapper { box-shadow: 0 0 0 1px #deddd8 inset; }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px #556b2f inset; }

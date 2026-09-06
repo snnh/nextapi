@@ -7,10 +7,10 @@ body,
 }
 
 body {
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', Arial, sans-serif;
-  background: #f0f2f5;
-  color: #303133;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: #f7f7f5;
+  color: #202124;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -21,13 +21,16 @@ body {
 
 .page-card {
   background: #fff;
-  border-radius: 8px;
-  padding: 16px;
+  border: 1px solid #e7e5e0;
+  border-radius: 10px;
+  padding: 20px;
   margin-bottom: 16px;
+  box-shadow: 0 1px 2px rgba(35, 31, 24, .03);
 }
 
 .toolbar {
   display: flex;
+  min-height: 32px;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
@@ -40,7 +43,7 @@ body {
 
 /* 说明性灰色小字 */
 .hint {
-  color: #909399;
+  color: #777b76;
   font-size: 12px;
   line-height: 1.6;
 }
@@ -72,4 +75,15 @@ body {
 .dlg-wide {
   width: 860px;
   max-width: 96vw;
+}
+
+.page > .toolbar:first-child { padding: 2px 0 4px; }
+.el-card__header { font-weight: 600; color: #30332f; }
+@media (max-width: 720px) {
+  .page { padding: 12px; }
+  .page-card { padding: 14px; }
+  .toolbar { align-items: stretch; }
+  .toolbar > .el-button, .toolbar > .el-input, .toolbar > .el-select { max-width: 100%; }
+  .toolbar .spacer { display: none; }
+  .el-table { font-size: 12px; }
 }

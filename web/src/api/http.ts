@@ -31,6 +31,7 @@ export function errMsg(e: unknown): string {
 }
 
 const http = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE || undefined,
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 })

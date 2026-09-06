@@ -11,6 +11,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+
+type FxRateTuple = (String, String, Decimal);
 use sqlx::PgPool;
 
 use crate::entities::FxRateRow;
@@ -155,7 +157,7 @@ fn json_num_to_decimal(v: &serde_json::Value) -> Option<Decimal> {
 fn parse_rates_json(
     v: &serde_json::Value,
     base: &str,
-) -> ApiResult<(Vec<String>, Vec<(String, String, Decimal)>)> {
+) -> ApiResult<(Vec<String>, Vec<FxRateTuple>)> {
     let rates = v
         .get("rates")
         .ok_or_else(|| ApiError::internal("汇率响应缺少 rates 字段"))?;
@@ -177,10 +179,7 @@ fn parse_rates_json(
 }
 
 /// 解析 ECB 每日汇率 XML（base=EUR）。过滤到 symbols（非空时）；返回 (pairs, (EUR,cur,rate)) 列表。
-fn parse_ecb(
-    xml: &[u8],
-    symbols: &[String],
-) -> ApiResult<(Vec<String>, Vec<(String, String, Decimal)>)> {
+fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<FxRateTuple>)> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -398,7 +397,7 @@ mod tests {
         let set = build_fx_set(&rows, Utc::now(), 60);
         let (v, fx) = set.convert("CNY", "USD", Decimal::from(72)).unwrap();
         let fxr = fx.unwrap();
-        assert_eq!(fxr.inverse, true);
+        assert!(fxr.inverse);
         // 逆汇率 ≈ 1/7.2，用容差断言避免精度差异。
         let inv = fxr.rate;
         assert!(
@@ -419,7 +418,7 @@ mod tests {
         let set = build_fx_set(&rows, Utc::now(), 60);
         let (v, fx) = set.convert("CNY", "USD", Decimal::from(100)).unwrap();
         assert_eq!(v, Decimal::from(14));
-        assert_eq!(fx.unwrap().inverse, false);
+        assert!(!fx.unwrap().inverse);
     }
 
     #[test]

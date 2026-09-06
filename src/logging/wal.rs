@@ -356,11 +356,33 @@ mod tests {
     }
 
     #[test]
+    fn decode_file_ignores_truncated_tail() {
+        let dir = std::env::temp_dir().join(format!("wal-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wal-test.jsonl");
+        let good = encode_line(&mk_event(1_700_000_002));
+        std::fs::write(&path, format!("{good}\n{{\"event\":")).unwrap();
+        let events = decode_file(&path).unwrap();
+        assert_eq!(events.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn should_roll_boundary() {
         assert!(!should_roll(0, 100, 0)); // max_bytes=0 视为不限
         assert!(!should_roll(90, 10, 100));
         assert!(should_roll(99, 2, 100));
         assert!(should_roll(0, 101, 100));
+    }
+
+    #[tokio::test]
+    async fn append_empty_batch_does_not_create_directory() {
+        let dir = std::env::temp_dir().join(format!("wal-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = WalWriter::with_max_bytes(dir.clone(), 512);
+        w.append(&[]).await.unwrap();
+        assert!(!dir.exists());
     }
 
     #[tokio::test]

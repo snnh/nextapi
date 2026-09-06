@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 //! OpenAI Chat Completions 适配器（/v1/chat/completions）。
 //!
 //! 这是 IR 的枢轴协议，转换最接近恒等：字段名归一化（max_completion_tokens→max_tokens）、
@@ -249,10 +251,7 @@ fn parse_tools(v: &Value, ctx: &mut ConvCtx) -> Result<Vec<IrTool>, ConvertError
             out.push(IrTool {
                 name: f["name"].as_str().unwrap_or_default().to_string(),
                 description: f["description"].as_str().map(String::from),
-                parameters: f
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| json_object()),
+                parameters: f.get("parameters").cloned().unwrap_or_else(json_object),
             });
         } else {
             ctx.degrade(

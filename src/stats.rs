@@ -259,7 +259,7 @@ async fn series_hourly(
         qb.push(" AND model = ").push_bind(m.clone());
     }
     // GROUP BY 用实际表达式避免 `hour` 别名与输入列名歧义；ORDER BY 用序号引用输出列。
-    qb.push(&format!(
+    qb.push(format!(
         " GROUP BY date_trunc('{g}', hour), model ORDER BY 1, 2"
     ));
 

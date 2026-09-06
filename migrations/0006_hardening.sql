@@ -1,4 +1,8 @@
 -- M8.5 硬化（深度 review P2 批次）：
+-- 0. 管理员会话版本：修改密码后立即吊销旧 JWT。
+ALTER TABLE admin_users
+    ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
+
 -- 1. usage_logs DEFAULT 分区：承接 ts 落在预建窗口之外的行
 --    （上游未来时间戳/清理后滞留等），避免整批 INSERT 失败（review P2-4）；
 --    DEFAULT 分区永不被手动整分区清理（其行属越界数据，由管理员另行处理）。
