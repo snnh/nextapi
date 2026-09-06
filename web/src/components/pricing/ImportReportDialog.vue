@@ -100,7 +100,7 @@ const emit = defineEmits<{
 .stat-num {
   font-size: 22px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .stat-num.success {
   color: #67c23a;
@@ -113,7 +113,7 @@ const emit = defineEmits<{
 }
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
   margin-top: 2px;
 }
 </style>

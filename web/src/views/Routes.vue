@@ -1,6 +1,6 @@
 <template>
   <div class="page" v-loading="pageLoading">
-    <el-alert type="info" :closable="false" show-icon class="page-card">
+    <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
       <template #title>模型 → 上游绑定（模型名支持 <span class="mono">*</span> 通配）</template>
       <div class="hint">
         <div>· 优先级数字小者优先；同优先级按权重加权。</div>

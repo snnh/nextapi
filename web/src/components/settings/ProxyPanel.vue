@@ -432,7 +432,7 @@ load()
 }
 .hint {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
   margin-top: 6px;
 }
 </style>

@@ -134,7 +134,7 @@ async function check() {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .summary-grid {
   display: grid;
@@ -151,11 +151,11 @@ async function check() {
 }
 .summary-label {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .summary-value {
   font-size: 14px;
-  color: #303133;
+  color: #1f2329;
   word-break: break-all;
 }
 .check-btn {
@@ -163,7 +163,7 @@ async function check() {
 }
 .hint {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .version-row {
   display: flex;
@@ -179,12 +179,12 @@ async function check() {
 }
 .version-sub {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .version-big {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .version-arrow {
   color: #c0c4cc;
@@ -204,7 +204,7 @@ async function check() {
 .notes-title {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .notes-pre {
   margin: 0;

@@ -630,7 +630,7 @@ async function copySecret() {
 }
 .rate-label {
   width: 44px;
-  color: #606266;
+  color: #4b5563;
   font-size: 13px;
 }
 .quota-select {
@@ -651,6 +651,6 @@ async function copySecret() {
   padding: 12px 16px;
   width: 100%;
   box-sizing: border-box;
-  color: #303133;
+  color: #1f2329;
 }
 </style>

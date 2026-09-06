@@ -428,7 +428,7 @@ async function submitProvision() {
 .preset-name {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .preset-desc {
   min-height: 36px;

@@ -15,14 +15,14 @@
     <div v-loading="loading">
       <el-row :gutter="16">
         <el-col v-for="m in metricCards" :key="m.label" :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card" shadow="hover">
+          <el-card class="stat-card" shadow="never">
             <div class="stat-label">{{ m.label }}</div>
             <div class="stat-value">{{ m.value }}</div>
             <div v-if="m.sub" class="stat-sub hint">{{ m.sub }}</div>
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :md="8" :lg="4">
-          <el-card class="stat-card" shadow="hover">
+          <el-card class="stat-card" shadow="never">
             <div class="stat-label">延迟</div>
             <div class="stat-value delay">
               <span>P50 <b>{{ fmtDur(summary?.p50_ms) }}</b></span>
@@ -48,7 +48,7 @@
               <el-table-column label="请求数" width="90" align="right">
                 <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
               </el-table-column>
-              <el-table-column label="Tokens" width="110" align="right">
+              <el-table-column label="Token 数" width="110" align="right">
                 <template #default="{ row }">{{ fmtInt(row.tokens) }}</template>
               </el-table-column>
               <el-table-column label="成本" width="110" align="right">
@@ -66,7 +66,7 @@
               <el-table-column label="请求数" width="90" align="right">
                 <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
               </el-table-column>
-              <el-table-column label="Tokens" width="110" align="right">
+              <el-table-column label="Token 数" width="110" align="right">
                 <template #default="{ row }">{{ fmtInt(row.tokens) }}</template>
               </el-table-column>
               <el-table-column label="成本" width="110" align="right">
@@ -112,7 +112,7 @@ const metricCards = computed(() => {
   return [
     { label: '请求数', value: fmtInt(s?.requests), sub: '' },
     { label: '成功率', value: fmtPct(s?.success_rate), sub: '' },
-    { label: '总 tokens', value: fmtInt(s?.total_tokens), sub: '' },
+    { label: '总 Token 数', value: fmtInt(s?.total_tokens), sub: '' },
     {
       label: `成本（${currency.value}）`,
       value: fmtMoney(s?.cost_display),
@@ -222,18 +222,20 @@ watch([range, currency], () => loadAll())
 <style scoped>
 .stat-card {
   margin-bottom: 16px;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: #6b7280;
   margin-bottom: 8px;
 }
 
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
   line-height: 1.2;
 }
 
@@ -247,7 +249,7 @@ watch([range, currency], () => loadAll())
 
 .stat-value.delay b {
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 
 .stat-sub {

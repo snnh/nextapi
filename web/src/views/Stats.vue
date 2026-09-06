@@ -393,7 +393,7 @@ function exportCsv() {
 }
 
 .f-label {
-  color: #606266;
+  color: #4b5563;
   font-size: 13px;
   white-space: nowrap;
 }

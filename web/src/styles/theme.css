@@ -21,6 +21,8 @@
 
 .el-card { --el-card-border-color: #e5e7eb; }
 .el-table { --el-table-border-color: #eceef1; --el-table-header-bg-color: #fafbfc; }
+.el-table th.el-table__cell { font-weight: 600; color: #4b5563; }
+.el-tabs__item { font-weight: 500; }
 .el-menu-item { transition: background-color .15s ease, color .15s ease; }
 .el-menu-item:hover { background-color: #f3f4f6 !important; }
 .el-menu-item.is-active { background-color: #eef3fe !important; color: #3a6ff7 !important; border-right: 2px solid #3a6ff7; }

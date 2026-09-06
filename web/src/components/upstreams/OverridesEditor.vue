@@ -123,7 +123,7 @@ function removeRow(g: GroupKey, i: number) {
 .ov-group-head {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
   margin-bottom: 8px;
 }
 .ov-row {

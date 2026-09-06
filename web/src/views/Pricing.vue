@@ -1,5 +1,6 @@
 <template>
   <div class="page" v-loading="pageLoading">
+    <div class="page-card tabs-card">
     <el-tabs v-model="activeTab" @tab-change="onTabChange">
       <!-- ===== Tab1 价格规则 ===== -->
       <el-tab-pane label="价格规则" name="rules">
@@ -220,6 +221,7 @@
         <FxPanel />
       </el-tab-pane>
     </el-tabs>
+    </div>
 
     <!-- 规则新建/编辑弹窗 -->
     <RuleFormDialog ref="formDialogRef" :upstreams="upstreams" @saved="onRuleSaved" />
@@ -499,7 +501,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .seg-tip {
   font-size: 12px;

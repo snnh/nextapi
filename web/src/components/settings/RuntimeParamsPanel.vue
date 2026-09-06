@@ -334,14 +334,14 @@ async function save() {
 }
 .toolbar .hint {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .toolbar .spacer {
   flex: 1;
 }
 .source-stats {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .group-card {
   margin-bottom: 16px;
@@ -352,12 +352,12 @@ async function save() {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .group-count {
   font-size: 12px;
   font-weight: 400;
-  color: #909399;
+  color: #6b7280;
 }
 .setting-row {
   display: flex;
@@ -380,7 +380,7 @@ async function save() {
 .key-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
   background: #f5f7fa;
   border-radius: 4px;
   padding: 1px 6px;
@@ -388,7 +388,7 @@ async function save() {
 }
 .label-text {
   font-size: 14px;
-  color: #303133;
+  color: #1f2329;
 }
 .help-icon {
   color: #c0c4cc;

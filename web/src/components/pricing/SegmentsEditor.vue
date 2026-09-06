@@ -193,7 +193,7 @@ function isCrossMidnight(win: SegWindow): boolean {
 .seg-title {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
   white-space: nowrap;
 }
 .seg-name {
@@ -215,7 +215,7 @@ function isCrossMidnight(win: SegWindow): boolean {
 }
 .seg-label {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
   width: 76px;
   flex-shrink: 0;
 }
@@ -231,13 +231,13 @@ function isCrossMidnight(win: SegWindow): boolean {
   gap: 6px;
 }
 .seg-window-arrow {
-  color: #909399;
+  color: #6b7280;
 }
 .seg-token {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #606266;
+  color: #4b5563;
 }
 </style>

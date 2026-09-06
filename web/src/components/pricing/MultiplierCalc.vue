@@ -54,7 +54,7 @@ function fill() {
   flex-wrap: wrap;
 }
 .mc-op {
-  color: #909399;
+  color: #6b7280;
 }
 .mc-result {
   font-size: 15px;

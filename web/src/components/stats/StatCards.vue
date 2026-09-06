@@ -53,14 +53,14 @@ const cards = computed(() => {
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: #6b7280;
   margin-bottom: 8px;
 }
 
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
   line-height: 1.2;
 }
 
@@ -74,7 +74,7 @@ const cards = computed(() => {
 
 .stat-value.delay b {
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 
 .stat-sub {

@@ -16,7 +16,7 @@ body {
 
 /* 通用页面容器：白底卡片 + 内边距 */
 .page {
-  padding: 16px;
+  padding: 20px;
 }
 
 .page-card {
@@ -27,13 +27,18 @@ body {
   margin-bottom: 16px;
 }
 
+/* 标签页卡片（设置/价格等整页 tabs） */
+.tabs-card {
+  padding: 4px 20px 20px;
+}
+
 .toolbar {
   display: flex;
   min-height: 32px;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .toolbar .spacer {

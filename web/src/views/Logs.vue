@@ -599,7 +599,7 @@ async function confirmCleanup() {
 }
 
 .f-label {
-  color: #606266;
+  color: #4b5563;
   font-size: 13px;
   white-space: nowrap;
 }
@@ -616,7 +616,7 @@ async function confirmCleanup() {
   justify-content: space-between;
   margin-bottom: 12px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 
 .proto-cell {
@@ -634,13 +634,13 @@ async function confirmCleanup() {
   display: flex;
   gap: 8px;
   font-size: 12px;
-  color: #303133;
+  color: #1f2329;
 }
 
 .cost-cell {
   font-size: 12px;
   line-height: 1.5;
-  color: #303133;
+  color: #1f2329;
 }
 
 .pagination {

@@ -1,6 +1,7 @@
 <template>
   <div class="page" v-loading="settingsLoading">
-    <el-tabs v-model="activeTab">
+    <div class="page-card tabs-card">
+      <el-tabs v-model="activeTab">
       <el-tab-pane label="运行参数" name="runtime">
         <runtime-params-panel :settings="settings" @saved="loadSettings" />
       </el-tab-pane>
@@ -16,7 +17,8 @@
       <el-tab-pane label="系统" name="system" lazy>
         <system-info-panel />
       </el-tab-pane>
-    </el-tabs>
+      </el-tabs>
+    </div>
   </div>
 </template>
 

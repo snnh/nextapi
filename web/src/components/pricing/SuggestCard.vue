@@ -113,7 +113,7 @@ function adopt(rule: PriceRuleRow) {
   margin-bottom: 10px;
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .suggest-groups {
   display: flex;
@@ -162,7 +162,7 @@ function adopt(rule: PriceRuleRow) {
 }
 .suggest-segs {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .suggest-no-seg {
   font-size: 12px;

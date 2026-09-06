@@ -199,14 +199,14 @@ onMounted(() => {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .hint {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .config-actions {
   display: flex;
@@ -220,7 +220,7 @@ onMounted(() => {
 .notes-title {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: #1f2329;
 }
 .config-pre {
   margin: 0;

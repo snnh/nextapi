@@ -161,7 +161,7 @@ load()
 }
 .hint {
   font-size: 12px;
-  color: #909399;
+  color: #6b7280;
 }
 .muted {
   color: #c0c4cc;
