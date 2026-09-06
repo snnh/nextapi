@@ -9,8 +9,8 @@ body,
 body {
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
-  background: #f7f7f5;
-  color: #202124;
+  background: #f5f6f8;
+  color: #1f2329;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -21,11 +21,10 @@ body {
 
 .page-card {
   background: #fff;
-  border: 1px solid #e7e5e0;
-  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
   padding: 20px;
   margin-bottom: 16px;
-  box-shadow: 0 1px 2px rgba(35, 31, 24, .03);
 }
 
 .toolbar {
@@ -43,7 +42,7 @@ body {
 
 /* 说明性灰色小字 */
 .hint {
-  color: #777b76;
+  color: #6b7280;
   font-size: 12px;
   line-height: 1.6;
 }
@@ -78,7 +77,7 @@ body {
 }
 
 .page > .toolbar:first-child { padding: 2px 0 4px; }
-.el-card__header { font-weight: 600; color: #30332f; }
+.el-card__header { font-weight: 600; color: #1f2329; }
 @media (max-width: 720px) {
   .page { padding: 12px; }
   .page-card { padding: 14px; }

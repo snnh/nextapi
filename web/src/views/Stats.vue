@@ -57,7 +57,7 @@
           <span class="hint">切换指标：</span>
           <el-radio-group v-model="metric" size="small">
             <el-radio-button value="requests">请求数</el-radio-button>
-            <el-radio-button value="tokens">Tokens</el-radio-button>
+            <el-radio-button value="tokens">Token 数</el-radio-button>
             <el-radio-button value="cost">成本</el-radio-button>
           </el-radio-group>
         </div>
@@ -77,7 +77,7 @@
           <el-table-column label="错误" width="88" align="right">
             <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
           </el-table-column>
-          <el-table-column label="Tokens" width="128" align="right">
+          <el-table-column label="Token 数" width="128" align="right">
             <template #default="{ row }">{{ fmtInt((row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0)) }}</template>
           </el-table-column>
           <el-table-column label="成本" width="128" align="right">
@@ -239,7 +239,7 @@ const detailRows = computed(() =>
 
 // —— 趋势图 ——
 const metricName = computed(() => {
-  if (metric.value === 'tokens') return 'Tokens'
+  if (metric.value === 'tokens') return 'Token 数'
   if (metric.value === 'cost') return `成本(${currency.value})`
   return '请求数'
 })
@@ -283,13 +283,13 @@ const chartOption = computed<EChartsOption>(() => {
     if (metric.value === 'tokens') {
       return {
         tooltip: { trigger: 'axis' },
-        legend: { data: ['总 Tokens'], top: 8 },
+        legend: { data: ['总 Token 数'], top: 8 },
         grid,
         xAxis: { type: 'category', boundaryGap: false, data: labels },
-        yAxis: { type: 'value', name: 'Tokens' },
+        yAxis: { type: 'value', name: 'Token 数' },
         series: [
           {
-            name: '总 Tokens',
+            name: '总 Token 数',
             type: 'line',
             smooth: true,
             data: pts.map((p) => (p.prompt_tokens ?? 0) + (p.completion_tokens ?? 0)),

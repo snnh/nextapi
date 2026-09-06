@@ -1,9 +1,9 @@
 <template>
   <el-container class="layout">
     <el-aside width="232px" class="aside">
-      <div class="brand"><span class="brand-mark">N</span><div><strong>NextAPI</strong><small>Gateway console</small></div></div>
-      <el-menu :default-active="active" router background-color="#1f2421"
-        text-color="rgba(255,255,255,.68)" active-text-color="#fff" class="menu">
+      <div class="brand"><span class="brand-mark">N</span><div><strong>NextAPI</strong><small>网关控制台</small></div></div>
+      <el-menu :default-active="active" router background-color="transparent"
+        text-color="#4b5563" active-text-color="#3a6ff7" class="menu">
         <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
           <el-icon><component :is="m.icon" /></el-icon>
           <span>{{ m.title }}</span>
@@ -92,10 +92,11 @@ async function onCommand(cmd: string) {
 }
 
 .aside {
-  background: #1f2421;
+  background: #fff;
+  border-right: 1px solid #e5e7eb;
 }
 .brand {
-  color: #f5f3ed;
+  color: #1f2329;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -106,38 +107,38 @@ async function onCommand(cmd: string) {
   height: 30px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: #d5f36f;
-  color: #1f2421;
-  font-weight: 800;
+  border-radius: 7px;
+  background: #3a6ff7;
+  color: #fff;
+  font-weight: 700;
 }
-.brand strong { display: block; font-size: 17px; letter-spacing: .2px; }
-.brand small { display: block; margin-top: 2px; color: #a8ada6; font-size: 10px; }
+.brand strong { display: block; font-size: 16px; letter-spacing: .2px; }
+.brand small { display: block; margin-top: 2px; color: #9ca3af; font-size: 11px; }
 .menu {
   border-right: none;
 }
 .header {
-  background: rgba(255, 255, 255, .92);
-  border-bottom: 1px solid #e7e5e0;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
 }
 .page-title {
   font-size: 16px;
   font-weight: 600;
+  color: #1f2329;
 }
 .user {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
-  color: #303133;
+  color: #4b5563;
 }
 .main {
   padding: 0;
   overflow-y: auto;
-  background: #f0f2f5;
+  background: #f5f6f8;
 }
 </style>

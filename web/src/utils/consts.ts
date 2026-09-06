@@ -55,7 +55,7 @@ export const CURRENCIES = ['CNY', 'USD'] as const
 
 // —— 配额 ——
 export const QUOTA_UNIT_LABELS: Record<QuotaUnit, string> = {
-  tokens: 'Tokens',
+  tokens: 'Token 数',
   cost_cny: '成本（CNY）',
   cost_usd: '成本（USD）',
 }

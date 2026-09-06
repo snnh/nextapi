@@ -13,7 +13,7 @@
       <el-button type="primary" :icon="Search" @click="search">查询</el-button>
       <el-button :icon="Refresh" @click="reset">重置</el-button>
       <div class="spacer" />
-      <span class="hint">管理端操作审计（登录 / CRUD / 清理等）。</span>
+      <span class="hint">管理端操作审计（登录 / 增删改 / 清理等）。</span>
     </div>
 
     <el-card shadow="never">

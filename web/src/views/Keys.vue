@@ -81,10 +81,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="Debug" width="130">
+        <el-table-column label="调试" width="130">
           <template #default="{ row }">
             <template v-if="row.debug_enabled">
-              <el-tooltip v-if="row.debug_expires_at" :content="`Debug 记录到期：${fmtTime(row.debug_expires_at)}`" placement="top">
+              <el-tooltip v-if="row.debug_expires_at" :content="`调试记录到期：${fmtTime(row.debug_expires_at)}`" placement="top">
                 <el-tag size="small" type="success">开启</el-tag>
               </el-tooltip>
               <el-tag v-else size="small" type="success">开启</el-tag>
@@ -220,13 +220,13 @@
           <el-checkbox v-if="isEdit" v-model="form.passthroughClear">清除透传上游</el-checkbox>
         </el-form-item>
 
-        <el-divider content-position="left">Debug</el-divider>
+        <el-divider content-position="left">调试</el-divider>
 
-        <el-form-item label="Debug 模式">
+        <el-form-item label="调试模式">
           <el-switch v-model="form.debug_enabled" />
         </el-form-item>
 
-        <el-form-item label="Debug 到期">
+        <el-form-item label="调试到期">
           <el-date-picker
             v-model="form.debug_expires_at"
             type="datetime"
@@ -235,7 +235,7 @@
             style="width: 320px"
           />
           <div class="hint" style="width: 100%">
-            Debug 模式完整记录请求/响应（脱敏后），最长时间受运行参数 log_debug_ttl_minutes 限制，到时自动关闭。
+            调试模式完整记录请求/响应（脱敏后），最长时间受运行参数 log_debug_ttl_minutes 限制，到时自动关闭。
           </div>
         </el-form-item>
       </el-form>
