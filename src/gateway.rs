@@ -562,6 +562,36 @@ fn order_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
     ordered
 }
 
+/// 异步版请求构建：转换目标为 Gemini 时先受控下载 URL 图片转 inlineData
+/// （参考 new-api：URL 一律下载转 inlineData，不用 fileData.fileUri 直传，
+/// 兼容旧模型与 Gemini 中转）。其余情况委托同步 build_outbound。
+/// img_cache 由调用方在重试循环外持有，同 URL 跨候选只下载一次。
+async fn build_outbound_any(
+    state: &AppState,
+    entry: Protocol,
+    mode: Mode,
+    body: &serde_json::Value,
+    stream: bool,
+    upstream_model: &str,
+    upstream: &UpstreamRow,
+    img_cache: &mut crate::media::resolve::ResolveCache,
+) -> Result<Outbound, ConvertError> {
+    if let Mode::Convert(Protocol::Gemini) = mode {
+        let mut ctx = ConvCtx::new();
+        let mut ir = protocol::request_to_ir(entry, body, &mut ctx)?;
+        ir.model = upstream_model.to_string();
+        ir.stream = stream;
+        crate::media::resolve::resolve_url_images(state, &mut ir, img_cache, &mut ctx).await;
+        let out = protocol::request_from_ir(Protocol::Gemini, &ir, &mut ctx)?;
+        return Ok(Outbound {
+            body: out,
+            protocol: Protocol::Gemini,
+            mode,
+        });
+    }
+    build_outbound(entry, mode, body, stream, upstream_model, upstream)
+}
+
 /// 构建待发送上游的请求体（透传改写 / 协议转换），并处理流式 usage 采集兜底。
 fn build_outbound(
     entry: Protocol,
@@ -1256,6 +1286,8 @@ async fn run_gateway(
     let mut last_idx: u32 = 0;
     let mut last_protocol_out: Option<String> = None;
     let mut last_convert_mode: Option<String> = None;
+    // URL 图片下载缓存：跨候选共享，同 URL 只下载一次（含失败结果）。
+    let mut img_cache = crate::media::resolve::ResolveCache::new();
     'outer: for attempt in &attempts {
         let route = &attempt.candidate.route;
         let upstream = &attempt.candidate.upstream;
@@ -1267,14 +1299,18 @@ async fn run_gateway(
             .unwrap_or_else(|| model.clone());
         let overrides = upstream.overrides();
 
-        let outbound = match build_outbound(
+        let outbound = match build_outbound_any(
+            &state,
             entry_protocol,
             mode,
             &body_value,
             stream,
             &up_model,
             upstream,
-        ) {
+            &mut img_cache,
+        )
+        .await
+        {
             Ok(o) => o,
             Err(cvt) => {
                 // 转换失败且入口协议受支持 → PassthroughFallback（PLAN §3.2）

@@ -2,6 +2,7 @@
 //! 契约 contracts/m6-media.md §3，M6-A 实现。
 
 pub mod download;
+pub mod resolve;
 pub mod tasks;
 
 use serde::{Deserialize, Serialize};
