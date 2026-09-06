@@ -42,6 +42,7 @@ pub struct ImageRequest {
     pub seed: Option<i64>,
     /// 透传 OpenAI 系；其余忽略
     pub quality: Option<String>,
+    pub response_format: Option<String>,
     /// 阿里系透传
     pub watermark: Option<bool>,
 }
@@ -145,8 +146,16 @@ pub fn parse_image_request(
             .get("quality")
             .and_then(|v| v.as_str())
             .map(String::from),
+        response_format: body
+            .get("response_format")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         watermark: body.get("watermark").and_then(|v| v.as_bool()),
     })
+}
+
+fn req_response_format(req: &ImageRequest) -> Option<String> {
+    req.response_format.clone()
 }
 
 /// 校验 size 是否为 ^\d+x\d+$（小写 x）
@@ -185,6 +194,12 @@ pub fn build_image_request(
             }
             if let Some(q) = &req.quality {
                 body.insert("quality".to_string(), serde_json::Value::String(q.clone()));
+            }
+            if let Some(seed) = req.seed {
+                body.insert("seed".to_string(), serde_json::Value::from(seed));
+            }
+            if let Some(format) = req_response_format(req) {
+                body.insert("response_format".to_string(), serde_json::Value::String(format));
             }
             (
                 "/v1/images/generations".to_string(),
@@ -312,8 +327,13 @@ pub fn parse_image_response(
                     .map(String::from);
                 images.push(ImageData { url, b64_json: b64 });
             }
+            if images.is_empty() {
+                return Err(UpstreamError::BodyRead(
+                    "OpenAI 图片响应 data 为空或缺少 url/b64_json".to_string(),
+                ));
+            }
             Ok(ImageOutcome::Created {
-                image_count: data.len() as i64,
+                image_count: images.len() as i64,
                 images,
                 image_size: req_size.map(|s| s.to_string()),
             })
@@ -336,6 +356,11 @@ pub fn parse_image_response(
                         }
                     }
                 }
+            }
+            if images.is_empty() {
+                return Err(UpstreamError::BodyRead(
+                    "Gemini 图片响应缺少 inlineData 图片内容".to_string(),
+                ));
             }
             Ok(ImageOutcome::Created {
                 image_count: images.len() as i64,
@@ -360,9 +385,16 @@ pub fn parse_image_response(
                     }
                 }
             }
-            let image_count = json
+            if images.is_empty() {
+                return Err(UpstreamError::BodyRead(
+                    "DashScope 图片响应缺少图片 URL".to_string(),
+                ));
+            }
+            let reported_count = json
                 .pointer("/usage/image_count")
-                .and_then(|v| v.as_i64())
+                .and_then(|v| v.as_i64());
+            let image_count = reported_count
+                .filter(|&n| n > 0 && n >= images.len() as i64)
                 .unwrap_or(images.len() as i64);
             let image_size = match (
                 json.pointer("/usage/width").and_then(|v| v.as_i64()),
@@ -773,7 +805,7 @@ mod tests {
     #[test]
     fn build_openai_passthrough() {
         let req = parse_image_request(&json!({
-            "prompt":"p","size":"1024x1024","n":2,"quality":"hd","seed":7,"negative_prompt":"x"
+            "prompt":"p","size":"1024x1024","n":2,"quality":"hd","seed":7,"response_format":"b64_json","negative_prompt":"x"
         }))
         .unwrap();
         let (path, body) = build_image_request(ImageApi::Openai, "gpt-image-2", &req);
@@ -783,8 +815,9 @@ mod tests {
         assert_eq!(body["size"], json!("1024x1024"));
         assert_eq!(body["n"], json!(2));
         assert_eq!(body["quality"], json!("hd"));
-        // seed / negative_prompt / watermark 不进入 OpenAI 透传体
-        assert!(body.get("seed").is_none());
+        assert_eq!(body["response_format"], json!("b64_json"));
+        assert_eq!(body["seed"], json!(7));
+        // negative_prompt / watermark 不进入 OpenAI 透传体
         assert!(body.get("negative_prompt").is_none());
         assert!(body.get("watermark").is_none());
     }
