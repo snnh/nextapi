@@ -85,13 +85,44 @@ fn parse_generation_config(gc: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) {
             );
         }
     }
-    // responseMimeType/responseSchema → response_format（从简：json 模式 → json_object）
+    // candidateCount → n；seed → seed（review P5：此前整体消费却静默丢弃）
+    if let Some(cc) = gc["candidateCount"].as_u64() {
+        match u32::try_from(cc) {
+            Ok(n) => req.n = Some(n),
+            Err(_) => ctx.degrade("generationConfig.candidateCount", "超出 u32 范围，丢弃"),
+        }
+    }
+    if let Some(s) = gc["seed"].as_i64() {
+        req.seed = Some(s);
+    }
+    // 其余已知但无 IR 槽位的 generationConfig 字段记降级（此前静默丢弃）
+    for k in [
+        "presencePenalty",
+        "frequencyPenalty",
+        "responseLogprobs",
+        "logprobs",
+        "topLogprobs",
+        "thinkingConfig",
+        "mediaResolution",
+    ] {
+        if gc.get(k).is_some() {
+            ctx.degrade(
+                format!("generationConfig.{k}"),
+                format!("generationConfig.{k} 无 IR 槽位，丢弃"),
+            );
+        }
+    }
+    // responseMimeType/responseSchema → response_format
+    // （review P5：json_schema 需 {name, schema} 包装，此前裸 schema 直接塞入，
+    // 转 OpenAI 后形状非法）
     let mime = gc["responseMimeType"].as_str();
     let schema = gc.get("responseSchema");
     if mime == Some("application/json") {
         if let Some(s) = schema {
-            req.response_format =
-                Some(serde_json::json!({"type": "json_schema", "json_schema": s}));
+            req.response_format = Some(serde_json::json!({
+                "type": "json_schema",
+                "json_schema": { "name": "response", "schema": s }
+            }));
         } else {
             req.response_format = Some(serde_json::json!({"type": "json_object"}));
         }
@@ -176,11 +207,27 @@ fn parse_content(
                     text_parts.push(t.to_string());
                 }
             } else if let Some(id) = p.get("inlineData") {
+                let mime = id["mimeType"].as_str().unwrap_or_default();
+                // IR 仅有图片内联槽位；audio/* 等非图片类型记降级并丢弃
+                // （review P5：此前不区分 mimeType 一律按图片，跨协议语义错误）
+                if !mime.is_empty() && !mime.starts_with("image/") {
+                    ctx.degrade(
+                        "content.part.inlineData",
+                        format!("非图片 inlineData（{mime}）无 IR 槽位，丢弃"),
+                    );
+                    continue;
+                }
                 media_parts.push(IrPart::ImageInline {
-                    media_type: id["mimeType"].as_str().unwrap_or_default().to_string(),
+                    media_type: mime.to_string(),
                     data: id["data"].as_str().unwrap_or_default().to_string(),
                 });
             } else if let Some(fd) = p.get("fileData") {
+                if fd.get("mimeType").is_some() {
+                    ctx.degrade(
+                        "content.part.fileData.mimeType",
+                        "fileData 的 mimeType 无 IR 槽位，丢弃",
+                    );
+                }
                 let uri = fd["fileUri"].as_str().unwrap_or_default();
                 media_parts.push(IrPart::File {
                     name: fd["displayName"].as_str().unwrap_or_default().to_string(),
@@ -621,8 +668,11 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
                     "responseMimeType".into(),
                     Value::String("application/json".into()),
                 );
+                // Gemini 需要裸 schema：解包 OpenAI 的 {name, schema} 包装；
+                // 无内层 schema（如直接裸传）则原样使用（review P5）
                 if let Some(s) = rf.get("json_schema") {
-                    gc.insert("responseSchema".into(), s.clone());
+                    let bare = s.get("schema").cloned().unwrap_or_else(|| s.clone());
+                    gc.insert("responseSchema".into(), bare);
                 }
             }
             _ => {}
@@ -696,8 +746,16 @@ fn parse_response_content(content: &Value, ctx: &mut ConvCtx) -> IrMessage {
                     text_parts.push(t.to_string());
                 }
             } else if let Some(id) = p.get("inlineData") {
+                let mime = id["mimeType"].as_str().unwrap_or_default();
+                if !mime.is_empty() && !mime.starts_with("image/") {
+                    ctx.degrade(
+                        "response.content.inlineData",
+                        format!("非图片 inlineData（{mime}）无 IR 槽位，丢弃"),
+                    );
+                    continue;
+                }
                 media_parts.push(IrPart::ImageInline {
-                    media_type: id["mimeType"].as_str().unwrap_or_default().to_string(),
+                    media_type: mime.to_string(),
                     data: id["data"].as_str().unwrap_or_default().to_string(),
                 });
             } else if let Some(fc) = p.get("functionCall") {
@@ -903,8 +961,9 @@ pub struct StreamState {
     // 入站
     pub next_tool_index: u32,
     pub role_sent: bool,
+    /// 入站多候选降级只记一次（ConvCtx 按帧新建，否则每帧刷 warn）
+    pub multi_candidate_noted: bool,
     // 出站：工具调用聚合与发出跟踪
-    pub tool_agg: ToolCallAggregator,
     pub tool_names: HashMap<u32, String>,
     pub tool_args: HashMap<u32, String>,
     pub tool_ids: HashMap<u32, String>,
@@ -934,54 +993,57 @@ pub fn chunk_to_ir(
     let mut delta = IrDelta::default();
     let mut finish_reason: Option<String> = None;
 
-    if let Some(c) = v
-        .get("candidates")
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-    {
-        // content + parts
-        if let Some(content) = c.get("content") {
-            if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
-                for p in parts {
-                    if let Some(t) = p["text"].as_str() {
-                        if p["thought"].as_bool().unwrap_or(false) {
-                            delta.reasoning_content = Some(t.to_string());
-                        } else {
-                            // 文本增量：同一 chunk 多 text part 拼接
-                            match &mut delta.content {
-                                Some(existing) => existing.push_str(t),
-                                None => delta.content = Some(t.to_string()),
+    if let Some(arr) = v.get("candidates").and_then(|c| c.as_array()) {
+        // 流式多候选（candidateCount>1）只取首个，其余增量丢弃（review P5：记一次降级）
+        if arr.len() > 1 && !st.multi_candidate_noted {
+            st.multi_candidate_noted = true;
+            ctx.degrade("stream.candidates", "流式多候选仅取首个，其余候选增量丢弃");
+        }
+        if let Some(c) = arr.first() {
+            // content + parts
+            if let Some(content) = c.get("content") {
+                if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                    for p in parts {
+                        if let Some(t) = p["text"].as_str() {
+                            if p["thought"].as_bool().unwrap_or(false) {
+                                delta.reasoning_content = Some(t.to_string());
+                            } else {
+                                // 文本增量：同一 chunk 多 text part 拼接
+                                match &mut delta.content {
+                                    Some(existing) => existing.push_str(t),
+                                    None => delta.content = Some(t.to_string()),
+                                }
                             }
+                        } else if let Some(fc) = p.get("functionCall") {
+                            let name = fc["name"].as_str().unwrap_or_default().to_string();
+                            let arguments = args_to_string(&fc["args"]);
+                            let idx = st.next_tool_index;
+                            st.next_tool_index += 1;
+                            delta.tool_calls.push(IrToolCallDelta {
+                                index: idx,
+                                id: Some(format!("{name}_{idx}")),
+                                name: Some(name),
+                                arguments: Some(arguments),
+                            });
+                        } else {
+                            ctx.degrade("stream.content.part", "未知流式 part 结构，丢弃");
                         }
-                    } else if let Some(fc) = p.get("functionCall") {
-                        let name = fc["name"].as_str().unwrap_or_default().to_string();
-                        let arguments = args_to_string(&fc["args"]);
-                        let idx = st.next_tool_index;
-                        st.next_tool_index += 1;
-                        delta.tool_calls.push(IrToolCallDelta {
-                            index: idx,
-                            id: Some(format!("{name}_{idx}")),
-                            name: Some(name),
-                            arguments: Some(arguments),
-                        });
-                    } else {
-                        ctx.degrade("stream.content.part", "未知流式 part 结构，丢弃");
+                    }
+                }
+                // 首帧带角色
+                if !st.role_sent {
+                    st.role_sent = true;
+                    if delta.role.is_none() {
+                        delta.role = Some(IrRole::Assistant);
                     }
                 }
             }
-            // 首帧带角色
-            if !st.role_sent {
-                st.role_sent = true;
-                if delta.role.is_none() {
-                    delta.role = Some(IrRole::Assistant);
-                }
+            if let Some(fr) = c["finishReason"].as_str() {
+                finish_reason = Some(normalize_finish_reason(fr));
+                chunk
+                    .extra
+                    .insert("gemini_finish_reason".into(), Value::String(fr.to_string()));
             }
-        }
-        if let Some(fr) = c["finishReason"].as_str() {
-            finish_reason = Some(normalize_finish_reason(fr));
-            chunk
-                .extra
-                .insert("gemini_finish_reason".into(), Value::String(fr.to_string()));
         }
     }
 
@@ -1057,7 +1119,6 @@ pub fn chunk_from_ir(
 
     // 工具增量：累积，参数成合法 JSON 后才发 functionCall part
     for tc in &delta.tool_calls {
-        st.tool_agg.feed(tc);
         let i = tc.index;
         if let Some(name) = &tc.name {
             st.tool_names.insert(i, name.clone());
