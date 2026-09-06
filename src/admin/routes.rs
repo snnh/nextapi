@@ -104,7 +104,10 @@ async fn replace_routes(
         if r.model_pattern.chars().count() > 255 {
             return Err(ApiError::bad_request("model_pattern 不能超过 255 字符"));
         }
-        if r.override_model.as_deref().is_some_and(|m| m.trim().is_empty()) {
+        if r.override_model
+            .as_deref()
+            .is_some_and(|m| m.trim().is_empty())
+        {
             return Err(ApiError::bad_request("override_model 不能为空字符串"));
         }
         if r.override_model

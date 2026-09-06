@@ -5,12 +5,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use arc_swap::ArcSwap;
-use axum::{
-    extract::DefaultBodyLimit,
-    middleware,
-    routing::get,
-    Router,
-};
+use axum::{extract::DefaultBodyLimit, middleware, routing::get, Router};
 use tracing::{error, info, warn};
 
 mod admin;

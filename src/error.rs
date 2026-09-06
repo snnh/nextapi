@@ -53,17 +53,20 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let request_id = uuid::Uuid::new_v4().to_string();
-        let mut response = (status, Json(serde_json::json!({
-            "error": { "message": self.to_string(), "type": "nextapi_error" }
-        }))).into_response();
+        let mut response = (
+            status,
+            Json(serde_json::json!({
+                "error": { "message": self.to_string(), "type": "nextapi_error" }
+            })),
+        )
+            .into_response();
         if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
             response.headers_mut().insert("x-request-id", value);
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
-            response.headers_mut().insert(
-                "retry-after",
-                axum::http::HeaderValue::from_static("1"),
-            );
+            response
+                .headers_mut()
+                .insert("retry-after", axum::http::HeaderValue::from_static("1"));
         }
         response
     }

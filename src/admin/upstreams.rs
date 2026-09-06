@@ -486,10 +486,18 @@ fn validate_upstream(
     let parsed = reqwest::Url::parse(base_url.trim())
         .map_err(|_| ApiError::bad_request("base_url 必须是合法 URL"))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(ApiError::bad_request("base_url 仅支持带主机的 http/https URL"));
+        return Err(ApiError::bad_request(
+            "base_url 仅支持带主机的 http/https URL",
+        ));
     }
-    if parsed.username() != "" || parsed.password().is_some() || parsed.query().is_some() || parsed.fragment().is_some() {
-        return Err(ApiError::bad_request("base_url 不得包含用户名、密码、查询参数或片段"));
+    if parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(ApiError::bad_request(
+            "base_url 不得包含用户名、密码、查询参数或片段",
+        ));
     }
     if let Some(ps) = protocols {
         if ps.len() > MAX_PROTOCOLS {

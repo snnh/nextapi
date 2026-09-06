@@ -571,7 +571,10 @@ fn json_rsp(
     body: serde_json::Value,
 ) -> Response {
     let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     h.insert(
         HDR_REQUEST_ID,
         request_id
@@ -601,7 +604,10 @@ fn error_resp(entry: Protocol, request_id: &str, status: u16, message: &str) -> 
 /// 构造 SSE 流式响应。
 fn stream_rsp(request_id: &str, body: Body) -> Response {
     let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
     h.insert(
         HDR_REQUEST_ID,
         request_id

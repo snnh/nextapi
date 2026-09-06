@@ -174,7 +174,8 @@ async fn login(
     let rate_key = format!(
         "{}:{}",
         body.username.trim().to_ascii_lowercase(),
-        ip.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string())
+        ip.map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     );
     if !login_rate_limiter().check(&rate_key, limit) {
         return Err(ApiError::RateLimited);

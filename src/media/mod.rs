@@ -72,7 +72,9 @@ pub fn parse_image_request(
 ) -> Result<ImageRequest, crate::error::ApiError> {
     // prompt 必须为非空字符串
     let prompt = match body.get("prompt") {
-        Some(serde_json::Value::String(s)) if !s.trim().is_empty() && s.len() <= 32 * 1024 => s.clone(),
+        Some(serde_json::Value::String(s)) if !s.trim().is_empty() && s.len() <= 32 * 1024 => {
+            s.clone()
+        }
         _ => {
             return Err(crate::error::ApiError::bad_request(
                 "prompt 必须为非空且不超过 32KB 的字符串",
@@ -94,7 +96,10 @@ pub fn parse_image_request(
 
     // quality 若提供必须为供应商兼容的有限枚举，拒绝任意值以免误导上游。
     if let Some(v) = body.get("quality") {
-        let valid = matches!(v.as_str(), Some("standard" | "hd" | "high" | "medium" | "low"));
+        let valid = matches!(
+            v.as_str(),
+            Some("standard" | "hd" | "high" | "medium" | "low")
+        );
         if !valid {
             return Err(crate::error::ApiError::bad_request(
                 "quality 必须为 standard、hd、high、medium 或 low",
@@ -114,9 +119,10 @@ pub fn parse_image_request(
     // seed 若提供必须为整数，避免浮点/字符串静默丢弃。
     let seed = match body.get("seed") {
         None => None,
-        Some(v) => Some(v.as_i64().ok_or_else(|| {
-            crate::error::ApiError::bad_request("seed 必须为整数")
-        })?),
+        Some(v) => Some(
+            v.as_i64()
+                .ok_or_else(|| crate::error::ApiError::bad_request("seed 必须为整数"))?,
+        ),
     };
 
     // n 若提供必须为 1..=8
@@ -199,7 +205,10 @@ pub fn build_image_request(
                 body.insert("seed".to_string(), serde_json::Value::from(seed));
             }
             if let Some(format) = req_response_format(req) {
-                body.insert("response_format".to_string(), serde_json::Value::String(format));
+                body.insert(
+                    "response_format".to_string(),
+                    serde_json::Value::String(format),
+                );
             }
             (
                 "/v1/images/generations".to_string(),
@@ -390,9 +399,7 @@ pub fn parse_image_response(
                     "DashScope 图片响应缺少图片 URL".to_string(),
                 ));
             }
-            let reported_count = json
-                .pointer("/usage/image_count")
-                .and_then(|v| v.as_i64());
+            let reported_count = json.pointer("/usage/image_count").and_then(|v| v.as_i64());
             let image_count = reported_count
                 .filter(|&n| n > 0 && n >= images.len() as i64)
                 .unwrap_or(images.len() as i64);
