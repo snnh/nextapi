@@ -1,18 +1,26 @@
 <template>
   <el-container class="layout">
-    <el-aside width="232px" class="aside">
-      <div class="brand"><span class="brand-mark">N</span><div><strong>NextAPI</strong><small>网关控制台</small></div></div>
-      <el-menu :default-active="active" router background-color="transparent"
-        text-color="#4b5563" active-text-color="#3a6ff7" class="menu">
+    <el-aside :width="collapsed ? '64px' : '220px'" class="aside">
+      <div class="brand" :class="{ 'brand-collapsed': collapsed }">
+        <span class="brand-mark">N</span>
+        <div v-show="!collapsed" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
+      </div>
+      <el-menu :default-active="active" router :collapse="collapsed" :collapse-transition="false"
+        background-color="transparent" text-color="#4b5563" active-text-color="#3a6ff7" class="menu">
         <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
           <el-icon><component :is="m.icon" /></el-icon>
-          <span>{{ m.title }}</span>
+          <template #title><span>{{ m.title }}</span></template>
         </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
       <el-header class="header">
-        <div class="page-title">{{ route.meta.title ?? '' }}</div>
+        <div class="header-left">
+          <el-icon class="collapse-btn" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="collapsed = !collapsed">
+            <Expand v-if="collapsed" /><Fold v-else />
+          </el-icon>
+          <div class="page-title">{{ route.meta.title ?? '' }}</div>
+        </div>
         <el-dropdown @command="onCommand">
           <span class="user">
             <el-icon><UserFilled /></el-icon>
@@ -40,7 +48,7 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { ArrowDown, UserFilled } from '@element-plus/icons-vue'
+import { ArrowDown, Expand, Fold, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 
@@ -61,6 +69,7 @@ const menus = computed(() => {
 })
 
 const active = computed(() => route.path)
+const collapsed = ref(false)
 const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()
 
 async function onCommand(cmd: string) {
@@ -83,9 +92,8 @@ async function onCommand(cmd: string) {
   height: 100%;
 }
 @media (max-width: 720px) {
-  .aside { width: 64px !important; }
   .brand { justify-content: center; padding: 18px 8px; }
-  .brand > div:last-child, .menu span { display: none; }
+  .brand-text, .menu span { display: none; }
   .menu .el-menu-item { justify-content: center; padding: 0 !important; }
   .header { padding: 0 14px; }
   .page-title { font-size: 15px; }
@@ -94,6 +102,8 @@ async function onCommand(cmd: string) {
 .aside {
   background: #fff;
   border-right: 1px solid #e5e7eb;
+  transition: width .2s ease;
+  overflow: hidden;
 }
 .brand {
   color: #1f2329;
@@ -101,8 +111,14 @@ async function onCommand(cmd: string) {
   align-items: center;
   gap: 10px;
   padding: 20px 18px;
+  white-space: nowrap;
+}
+.brand-collapsed {
+  justify-content: center;
+  padding: 20px 0;
 }
 .brand-mark {
+  flex-shrink: 0;
   width: 30px;
   height: 30px;
   display: grid;
@@ -123,6 +139,22 @@ async function onCommand(cmd: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.collapse-btn {
+  font-size: 18px;
+  color: #4b5563;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+}
+.collapse-btn:hover {
+  background: #f3f4f6;
+  color: #1f2329;
 }
 .page-title {
   font-size: 16px;
