@@ -517,7 +517,22 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         );
     }
     if let Some(tc) = &req.tool_choice {
-        body.insert("tool_choice".into(), tc.clone());
+        // 跨协议形状归一（review P5）：Responses 的 {"type":"function","name":"x"}
+        // 转 Chat 需包装为 {"type":"function","function":{"name":"x"}}
+        let tc = match tc {
+            Value::Object(o)
+                if o.get("type").and_then(|t| t.as_str()) == Some("function")
+                    && o.get("function").is_none()
+                    && o.get("name").is_some() =>
+            {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {"name": o.get("name").cloned().unwrap_or_default()},
+                })
+            }
+            other => other.clone(),
+        };
+        body.insert("tool_choice".into(), tc);
     }
     if let Some(t) = req.temperature {
         body.insert("temperature".into(), json_number_f64(t));
@@ -580,6 +595,12 @@ fn parse_usage(u: &Value) -> IrUsage {
         }
     }
     if let Some(details) = u.get("completion_tokens_details") {
+        // reasoning_tokens 提升为 IR 标准槽位（供跨协议转出；嵌套 details 原样保留）
+        if let Some(rt) = details["reasoning_tokens"].as_u64() {
+            usage
+                .extra
+                .insert("reasoning_tokens".into(), Value::from(rt));
+        }
         usage
             .extra
             .insert("completion_tokens_details".into(), details.clone());
@@ -669,6 +690,17 @@ fn choice_to_json(c: &IrChoice) -> Value {
 
 fn usage_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     let mut out = u.extra.clone();
+    // reasoning_tokens 归一槽位移入 completion_tokens_details（review P5：跨协议归一，
+    // 此前来自 Responses 的顶层 reasoning_tokens 原样铺底成 Chat 非法 usage 键）；
+    // Responses 专属 details 键不属于 Chat usage，丢弃并记 degrade。
+    let rt = out.remove("reasoning_tokens");
+    if out.remove("output_tokens_details").is_some() || out.remove("input_tokens_details").is_some()
+    {
+        ctx.degrade(
+            "usage.details",
+            "Responses 专属 usage details 已按 Chat 形状归一",
+        );
+    }
     out.insert("prompt_tokens".into(), Value::from(u.prompt_tokens));
     out.insert("completion_tokens".into(), Value::from(u.completion_tokens));
     if let Some(t) = u.total_tokens {
@@ -678,6 +710,14 @@ fn usage_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
         let mut pd = Map::new();
         pd.insert("cached_tokens".into(), Value::from(c));
         out.insert("prompt_tokens_details".into(), Value::Object(pd));
+    }
+    if let Some(rt) = rt {
+        let mut ctd = match out.remove("completion_tokens_details") {
+            Some(Value::Object(m)) => m,
+            _ => Map::new(),
+        };
+        ctd.insert("reasoning_tokens".into(), rt);
+        out.insert("completion_tokens_details".into(), Value::Object(ctd));
     }
     if u.cache_write_tokens.is_some() {
         ctx.degrade(
@@ -1221,5 +1261,64 @@ mod tests {
         });
         let resp = response_to_ir(&rj, &mut c).unwrap();
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
+    }
+
+    /// review P5 回归：usage 跨协议归一。Chat 入站把 reasoning_tokens 提升到标准槽位；
+    /// 出站移入 completion_tokens_details，Responses 专属 details 键不泄漏进 Chat usage。
+    #[test]
+    fn usage_reasoning_tokens_normalized() {
+        let mut c = ctx();
+        // Chat 入站：completion_tokens_details.reasoning_tokens → extra["reasoning_tokens"]
+        let rj = serde_json::json!({
+            "id": "x", "model": "m", "created": 1,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+                "completion_tokens_details": {"reasoning_tokens": 2, "audio_tokens": 0}
+            }
+        });
+        let resp = response_to_ir(&rj, &mut c).unwrap();
+        let usage = resp.usage.as_ref().unwrap();
+        assert_eq!(usage.extra["reasoning_tokens"], 2);
+
+        // Chat 出站：reasoning_tokens 嵌套回 details，无裸键
+        let back = response_from_ir(&resp, &mut c).unwrap();
+        assert_eq!(
+            back["usage"]["completion_tokens_details"]["reasoning_tokens"],
+            2
+        );
+        assert!(back["usage"].get("reasoning_tokens").is_none());
+
+        // 来自 Responses 的 extra 形状（顶层 reasoning_tokens + output_tokens_details）→ Chat
+        let mut u2 = IrUsage {
+            prompt_tokens: 3,
+            completion_tokens: 4,
+            ..Default::default()
+        };
+        u2.extra.insert("reasoning_tokens".into(), Value::from(7));
+        u2.extra.insert(
+            "output_tokens_details".into(),
+            serde_json::json!({"reasoning_tokens": 7}),
+        );
+        let out = usage_to_json(&u2, &mut c);
+        assert_eq!(out["completion_tokens_details"]["reasoning_tokens"], 7);
+        assert!(out.get("reasoning_tokens").is_none());
+        assert!(out.get("output_tokens_details").is_none());
+    }
+
+    /// review P5 回归：Responses 形状 tool_choice 转 Chat 时包装 function 对象。
+    #[test]
+    fn tool_choice_responses_shape_wrapped() {
+        let mut c = ctx();
+        let mut req = IrRequest {
+            model: "gpt-5".into(),
+            ..Default::default()
+        };
+        req.tool_choice = Some(serde_json::json!({"type": "function", "name": "get_weather"}));
+        let body = request_from_ir(&req, &mut c).unwrap();
+        assert_eq!(
+            body["tool_choice"],
+            serde_json::json!({"type": "function", "function": {"name": "get_weather"}})
+        );
     }
 }

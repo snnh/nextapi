@@ -607,7 +607,22 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         );
     }
     if let Some(tc) = &req.tool_choice {
-        body.insert("tool_choice".into(), tc.clone());
+        // 跨协议形状归一（review P5）：Chat 的 {"type":"function","function":{"name":"x"}}
+        // 转 Responses 需摊平为 {"type":"function","name":"x"}
+        let tc = match tc {
+            Value::Object(o)
+                if o.get("type").and_then(|t| t.as_str()) == Some("function")
+                    && o.get("name").is_none()
+                    && o.get("function").and_then(|f| f.get("name")).is_some() =>
+            {
+                serde_json::json!({
+                    "type": "function",
+                    "name": o["function"]["name"].clone(),
+                })
+            }
+            other => other.clone(),
+        };
+        body.insert("tool_choice".into(), tc);
     }
     if let Some(t) = req.temperature {
         body.insert("temperature".into(), json_number_f64(t));
@@ -864,6 +879,20 @@ fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     if let Some(rt) = u.extra.get("reasoning_tokens") {
         output_details.insert("reasoning_tokens".into(), rt.clone());
     }
+    // Chat 形状 completion_tokens_details 归一消费：子字段并入 output_details
+    // （reasoning_tokens 由上方标准槽位优先），该键不再原样透传进 Responses usage
+    // （review P5：跨协议 usage 键形状归一）。
+    if let Some(d) = u
+        .extra
+        .get("completion_tokens_details")
+        .and_then(|v| v.as_object())
+    {
+        for (k, val) in d {
+            output_details
+                .entry(k.clone())
+                .or_insert_with(|| val.clone());
+        }
+    }
     if let Some(d) = u
         .extra
         .get("output_tokens_details")
@@ -883,7 +912,11 @@ fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     }
 
     for (k, val) in &u.extra {
-        if k != "reasoning_tokens" && k != "output_tokens_details" && k != "input_tokens_details" {
+        if k != "reasoning_tokens"
+            && k != "output_tokens_details"
+            && k != "input_tokens_details"
+            && k != "completion_tokens_details"
+        {
             out.insert(k.clone(), val.clone());
         }
     }
@@ -1918,6 +1951,43 @@ mod tests {
         assert_eq!(
             back["usage"]["output_tokens_details"]["reasoning_tokens"],
             2
+        );
+    }
+
+    /// review P5 回归：Chat 形状 usage（completion_tokens_details）转 Responses 时
+    /// 归一进 output_tokens_details，不再原样透传 Chat 专属键。
+    #[test]
+    fn usage_completion_details_normalized_to_responses() {
+        let mut c = ctx();
+        let mut u = IrUsage {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            ..Default::default()
+        };
+        u.extra.insert(
+            "completion_tokens_details".into(),
+            serde_json::json!({"reasoning_tokens": 3, "audio_tokens": 1}),
+        );
+        let out = usage_from_ir(&u, &mut c);
+        assert_eq!(out["output_tokens_details"]["reasoning_tokens"], 3);
+        assert_eq!(out["output_tokens_details"]["audio_tokens"], 1);
+        assert!(out.get("completion_tokens_details").is_none());
+    }
+
+    /// review P5 回归：Chat 形状 tool_choice 转 Responses 时摊平 name。
+    #[test]
+    fn tool_choice_chat_shape_flattened() {
+        let mut c = ctx();
+        let mut req = IrRequest {
+            model: "gpt-5".into(),
+            ..Default::default()
+        };
+        req.tool_choice =
+            Some(serde_json::json!({"type": "function", "function": {"name": "get_weather"}}));
+        let body = request_from_ir(&req, &mut c).unwrap();
+        assert_eq!(
+            body["tool_choice"],
+            serde_json::json!({"type": "function", "name": "get_weather"})
         );
     }
 
