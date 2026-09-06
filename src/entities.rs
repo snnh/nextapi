@@ -181,10 +181,10 @@ impl ProxyRow {
     /// 用户名/密码做百分号编码（review P4：含 `@ : # /` 或非 ASCII 的凭据此前会拼出
     /// 非法 URL，凭据静默失效甚至被截断）。
     pub fn proxy_url(&self) -> String {
-        let scheme = if self.kind == "socks5" {
-            "socks5"
-        } else {
-            "http"
+        let scheme = match self.kind.as_str() {
+            "socks5" => "socks5",
+            "https" => "https",
+            _ => "http",
         };
         let host = &self.host;
         let port = self.port;
