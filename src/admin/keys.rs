@@ -408,6 +408,9 @@ fn validate_key_limits(
     const MAX_ITEM_LEN: usize = 255;
     const MAX_PASSTHROUGH: usize = 200;
 
+    if name.trim().is_empty() {
+        return Err(ApiError::bad_request("name 不能为空"));
+    }
     if name.chars().count() > MAX_NAME {
         return Err(ApiError::bad_request(format!(
             "name 不能超过 {MAX_NAME} 字符"
@@ -435,9 +438,9 @@ fn validate_key_limits(
             )));
         }
         for m in ms {
-            if m.chars().count() > MAX_ITEM_LEN {
+            if m.trim().is_empty() || m.chars().count() > MAX_ITEM_LEN {
                 return Err(ApiError::bad_request(format!(
-                    "模型名不能超过 {MAX_ITEM_LEN} 字符"
+                    "模型名不能为空且不能超过 {MAX_ITEM_LEN} 字符"
                 )));
             }
         }
@@ -449,7 +452,7 @@ fn validate_key_limits(
             )));
         }
         for p in ps {
-            if p.chars().count() > MAX_ITEM_LEN {
+            if p.trim().is_empty() || p.chars().count() > MAX_ITEM_LEN {
                 return Err(ApiError::bad_request(format!(
                     "上游名不能超过 {MAX_ITEM_LEN} 字符"
                 )));
