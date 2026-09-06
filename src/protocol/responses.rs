@@ -75,7 +75,8 @@ fn parse_response_role(role: Option<&str>, ctx: &mut ConvCtx) -> IrRole {
     match role {
         Some("user") => IrRole::User,
         Some("assistant") => IrRole::Assistant,
-        Some("system") => IrRole::System,
+        // developer 为 o 系/gpt-5 的系统消息角色（review P5：此前按 user 降级，系统提示语义丢失）
+        Some("system") | Some("developer") => IrRole::System,
         Some(other) => {
             ctx.degrade(
                 "input.message.role",
@@ -590,8 +591,9 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     if let Some(mt) = req.max_tokens {
         body.insert("max_output_tokens".into(), Value::from(mt));
     }
-    if let Some(s) = req.seed {
-        body.insert("seed".into(), Value::from(s));
+    if req.seed.is_some() {
+        // Responses API 不支持 seed（review P5：此前直接写入请求体，与本文件头注释矛盾）
+        ctx.degrade("seed", "Responses 不支持 seed，忽略");
     }
     if req.n.is_some() {
         ctx.degrade("n", "Responses 不支持 n，忽略");
@@ -862,7 +864,7 @@ fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
 }
 
 /// 构造 Responses 输出 message item。
-fn output_message_item(role: IrRole, text: &str) -> Value {
+fn output_message_item(role: IrRole, text: &str, id: &str) -> Value {
     let mut content = Vec::new();
     if !text.is_empty() {
         let mut part = Map::new();
@@ -870,13 +872,13 @@ fn output_message_item(role: IrRole, text: &str) -> Value {
         part.insert("text".into(), Value::String(text.to_string()));
         content.push(Value::Object(part));
     }
-    json_build_item_message(role, content)
+    json_build_item_message(role, content, id)
 }
 
 /// 构造输出 message item（type=message, status=completed）。
-fn json_build_item_message(role: IrRole, content: Vec<Value>) -> Value {
+fn json_build_item_message(role: IrRole, content: Vec<Value>, id: &str) -> Value {
     let mut o = Map::new();
-    o.insert("id".into(), Value::String(format!("msg_{}", rand_suffix())));
+    o.insert("id".into(), Value::String(id.to_string()));
     o.insert("type".into(), Value::String("message".into()));
     o.insert("status".into(), Value::String("completed".into()));
     o.insert(
@@ -900,7 +902,7 @@ fn output_function_call_item(tc: &IrToolCall) -> Value {
 }
 
 /// 构造输出 reasoning item。
-fn output_reasoning_item(text: &str) -> Value {
+fn output_reasoning_item(text: &str, id: &str) -> Value {
     let mut summary = Vec::new();
     if !text.is_empty() {
         let mut part = Map::new();
@@ -909,22 +911,23 @@ fn output_reasoning_item(text: &str) -> Value {
         summary.push(Value::Object(part));
     }
     let mut o = Map::new();
-    o.insert("id".into(), Value::String(format!("rs_{}", rand_suffix())));
+    o.insert("id".into(), Value::String(id.to_string()));
     o.insert("type".into(), Value::String("reasoning".into()));
     o.insert("status".into(), Value::String("completed".into()));
     o.insert("summary".into(), Value::Array(summary));
     Value::Object(o)
 }
 
-/// 生成短随机后缀（保证 item id 唯一，避免碰撞）。
+/// 生成短随机后缀（纳秒 + 原子计数器，保证同进程内单调不碰撞）。
 fn rand_suffix() -> String {
-    // 用当前纳秒 + 简单哈希组成足够唯一的后缀
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{:x}", n)
+    let s = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{n:x}{s:x}")
 }
 
 /// IR → 非流式响应 JSON。
@@ -935,20 +938,33 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
     body.insert("created_at".into(), Value::from(resp.created));
     body.insert("model".into(), Value::String(resp.model.clone()));
 
+    // status 由 finish_reason 推导（review P5：此前恒 completed，length/failed 语义被反转）；
+    // extra 里上游原有的 incomplete_details 优先保留。
+    let finish = resp
+        .choices
+        .first()
+        .and_then(|c| c.finish_reason.as_deref());
     let has_incomplete = resp.extra.contains_key("incomplete_details");
-    body.insert(
-        "status".into(),
-        Value::String(
-            if has_incomplete {
-                "incomplete"
-            } else {
-                "completed"
-            }
-            .into(),
-        ),
-    );
+    let status = match finish {
+        Some("length") => "incomplete",
+        Some("failed") => "failed",
+        _ if has_incomplete => "incomplete",
+        _ => "completed",
+    };
+    body.insert("status".into(), Value::String(status.into()));
     if let Some(details) = resp.extra.get("incomplete_details") {
         body.insert("incomplete_details".into(), details.clone());
+    } else if status == "incomplete" {
+        body.insert(
+            "incomplete_details".into(),
+            serde_json::json!({ "reason": "max_output_tokens" }),
+        );
+    }
+    if status == "failed" {
+        body.insert(
+            "error".into(),
+            serde_json::json!({ "code": "server_error", "message": "上游响应失败" }),
+        );
     }
 
     let mut output = Vec::new();
@@ -958,13 +974,14 @@ pub fn response_from_ir(resp: &IrResponse, ctx: &mut ConvCtx) -> Result<Value, C
             output.push(output_message_item(
                 msg.role,
                 &content_as_text(Some(content)),
+                &format!("msg_{}", rand_suffix()),
             ));
         }
         for tc in &msg.tool_calls {
             output.push(output_function_call_item(tc));
         }
         if let Some(rc) = &msg.reasoning_content {
-            output.push(output_reasoning_item(rc));
+            output.push(output_reasoning_item(rc, &format!("rs_{}", rand_suffix())));
         }
     }
     body.insert("output".into(), Value::Array(output));
@@ -1131,7 +1148,15 @@ pub fn chunk_to_ir(
             if text.is_empty() {
                 return Ok(None);
             }
-            let index = st.item_to_index.get(&item_id).copied().unwrap_or(0);
+            // 未知 item_id（added 帧未到/不匹配）：此前静默并入工具 0 且无日志（review P5），
+            // 现记 degrade 并丢弃该增量，避免参数串拼错工具。
+            let Some(&index) = st.item_to_index.get(&item_id) else {
+                ctx.degrade(
+                    "stream.function_call_arguments.delta",
+                    format!("未知 item_id，丢弃参数增量: {item_id}"),
+                );
+                return Ok(None);
+            };
             let (call_id, name) = st.fn_meta.get(&index).cloned().unwrap_or_default();
             let mut chunk = base_chunk(st);
             chunk.choices.push(IrChunkChoice {
@@ -1171,6 +1196,53 @@ pub fn chunk_to_ir(
             }
             Ok(Some(chunk))
         }
+        // 上游流式失败（review P5）：此前落入 other 分支记 degrade 后丢弃，下游还会
+        // 补发伪造的 completed，把失败伪装成成功。现显式映射为 finish=failed 的终止 chunk，
+        // 由出站侧发 response.failed / 对应协议的失败终止。
+        "response.failed" => {
+            let resp = &v["response"];
+            let msg = resp
+                .pointer("/error/message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("未知错误");
+            ctx.degrade("stream.response.failed", format!("上游响应失败: {msg}"));
+            let mut chunk = base_chunk(st);
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta::default(),
+                finish_reason: Some("failed".into()),
+            });
+            if let Some(u) = resp.get("usage") {
+                chunk.usage = Some(parse_responses_usage(u));
+            }
+            Ok(Some(chunk))
+        }
+        // 流内独立 error 事件（部分实现在流中途发 error 后继续/终止）
+        "error" => {
+            let msg = v["message"].as_str().unwrap_or("未知错误");
+            ctx.degrade("stream.error", format!("上游流错误事件: {msg}"));
+            let mut chunk = base_chunk(st);
+            chunk.choices.push(IrChunkChoice {
+                index: 0,
+                delta: IrDelta::default(),
+                finish_reason: Some("failed".into()),
+            });
+            Ok(Some(chunk))
+        }
+        // 良性生命周期事件：正常流每轮必现，显式无操作跳过（此前全落 other 分支
+        // 产生大量 degrade 噪音，淹没真实降级，review P5）。
+        "response.in_progress"
+        | "response.queued"
+        | "response.output_text.done"
+        | "response.content_part.added"
+        | "response.content_part.done"
+        | "response.function_call_arguments.done"
+        | "response.reasoning_summary_part.added"
+        | "response.reasoning_summary_part.done"
+        | "response.reasoning_summary_text.done"
+        | "response.output_text.annotation.added"
+        | "response.refusal.delta"
+        | "response.refusal.done" => Ok(None),
         other => {
             ctx.degrade("stream.event.type", format!("未知事件，忽略: {other}"));
             Ok(None)
@@ -1211,14 +1283,21 @@ fn json_build_event(type_: &str, payload: Value) -> Value {
 
 /// 构造 message output_item.added 事件。
 fn encode_output_item_added_message(st: &StreamState) -> Result<String, ConvertError> {
-    let item = json_build_item_message(IrRole::Assistant, vec![]);
+    // item.id 必须与 delta 的 item_id 及 completed 帧内 item.id 一致（review P5）：
+    // 统一使用 st.message_item_id（分配时已带 msg_ 前缀）。
+    let mut item = Map::new();
+    item.insert("id".into(), Value::String(st.message_item_id.clone()));
+    item.insert("type".into(), Value::String("message".into()));
+    item.insert("status".into(), Value::String("in_progress".into()));
+    item.insert("role".into(), Value::String("assistant".into()));
+    item.insert("content".into(), Value::Array(vec![]));
     let mut o = Map::new();
     o.insert(
         "type".into(),
         Value::String("response.output_item.added".into()),
     );
     o.insert("output_index".into(), Value::from(st.message_output_index));
-    o.insert("item".into(), item);
+    o.insert("item".into(), Value::Object(item));
     json_to_string(&Value::Object(o))
 }
 
@@ -1325,14 +1404,28 @@ fn encode_function_call_arguments_delta(
     json_to_string(&Value::Object(o))
 }
 
-/// 基于 st 累积状态构建 response.completed 的 response 对象。
-fn build_completed_response(st: &StreamState, usage: Option<&IrUsage>, ctx: &mut ConvCtx) -> Value {
+/// 基于 st 累积状态构建终止帧（completed/incomplete/failed）的 response 对象。
+/// item id 复用 added/delta 阶段的 st 内 id（review P5：此前 completed 帧重新随机生成，
+/// 导致同一 item 在 added/delta/completed 三类事件中 id 互不一致）。
+fn build_final_response(
+    st: &StreamState,
+    usage: Option<&IrUsage>,
+    ctx: &mut ConvCtx,
+    status: &str,
+) -> Value {
     let mut output = Vec::new();
     if st.message_item_added {
-        output.push(output_message_item(IrRole::Assistant, &st.message_text));
+        output.push(output_message_item(
+            IrRole::Assistant,
+            &st.message_text,
+            &st.message_item_id,
+        ));
     }
     if st.reasoning_item_added {
-        output.push(output_reasoning_item(&st.reasoning_text));
+        output.push(output_reasoning_item(
+            &st.reasoning_text,
+            &st.reasoning_item_id,
+        ));
     }
     let mut tools: Vec<&FnItemState> = st.tool_items.values().collect();
     tools.sort_by_key(|t| t.output_index);
@@ -1345,7 +1438,19 @@ fn build_completed_response(st: &StreamState, usage: Option<&IrUsage>, ctx: &mut
     resp.insert("id".into(), Value::String(st.id.clone()));
     resp.insert("object".into(), Value::String("response".into()));
     resp.insert("created_at".into(), Value::from(st.created_at));
-    resp.insert("status".into(), Value::String("completed".into()));
+    resp.insert("status".into(), Value::String(status.into()));
+    if status == "incomplete" {
+        resp.insert(
+            "incomplete_details".into(),
+            serde_json::json!({ "reason": "max_output_tokens" }),
+        );
+    }
+    if status == "failed" {
+        resp.insert(
+            "error".into(),
+            serde_json::json!({ "code": "server_error", "message": "上游响应失败" }),
+        );
+    }
     resp.insert("model".into(), Value::String(st.model.clone()));
     resp.insert("output".into(), Value::Array(output));
     resp.insert("usage".into(), usage_val);
@@ -1370,10 +1475,36 @@ fn encode_response_completed(
     chunk: &IrChunk,
     ctx: &mut ConvCtx,
 ) -> Result<String, ConvertError> {
-    let resp = build_completed_response(st, chunk.usage.as_ref(), ctx);
+    let resp = build_final_response(st, chunk.usage.as_ref(), ctx, "completed");
     json_to_string(&Value::Object({
         let mut o = Map::new();
         o.insert("type".into(), Value::String("response.completed".into()));
+        o.insert("response".into(), resp);
+        o
+    }))
+}
+
+/// 构造终止帧事件：按 finish_reason 选择 completed / incomplete / failed。
+/// failed/incomplete 语义来自上游（review P5：此前无论成败恒发 completed，
+/// 上游流式失败被伪装成成功响应）。
+fn encode_response_finished(
+    st: &StreamState,
+    chunk: &IrChunk,
+    ctx: &mut ConvCtx,
+) -> Result<String, ConvertError> {
+    let finish = chunk
+        .choices
+        .first()
+        .and_then(|c| c.finish_reason.as_deref());
+    let (status, etype) = match finish {
+        Some("failed") => ("failed", "response.failed"),
+        Some("length") => ("incomplete", "response.incomplete"),
+        _ => return encode_response_completed(st, chunk, ctx),
+    };
+    let resp = build_final_response(st, chunk.usage.as_ref(), ctx, status);
+    json_to_string(&Value::Object({
+        let mut o = Map::new();
+        o.insert("type".into(), Value::String(etype.into()));
         o.insert("response".into(), resp);
         o
     }))
@@ -1404,7 +1535,7 @@ pub fn chunk_from_ir(
                     st.message_item_added = true;
                     st.message_output_index = st.next_output_index;
                     st.next_output_index += 1;
-                    st.message_item_id = format!("item_{}", st.message_output_index);
+                    st.message_item_id = format!("msg_{}", rand_suffix());
                     events.push(encode_output_item_added_message(st)?);
                 }
                 st.message_text.push_str(content);
@@ -1418,7 +1549,7 @@ pub fn chunk_from_ir(
                     st.reasoning_item_added = true;
                     st.reasoning_output_index = st.next_output_index;
                     st.next_output_index += 1;
-                    st.reasoning_item_id = format!("item_{}", st.reasoning_output_index);
+                    st.reasoning_item_id = format!("rs_{}", rand_suffix());
                     events.push(encode_output_item_added_reasoning(st)?);
                 }
                 st.reasoning_text.push_str(rc);
@@ -1433,7 +1564,7 @@ pub fn chunk_from_ir(
                 st.next_output_index += 1;
                 let state = FnItemState {
                     output_index,
-                    item_id: format!("item_{}", output_index),
+                    item_id: format!("fc_{}", rand_suffix()),
                     call_id: tc.id.clone().unwrap_or_default(),
                     name: tc.name.clone().unwrap_or_default(),
                     arguments: String::new(),
@@ -1450,7 +1581,7 @@ pub fn chunk_from_ir(
         }
     }
 
-    // finish_reason 或 usage → response.completed
+    // finish_reason 或 usage → 终止帧（completed / incomplete / failed 按 finish 分派）
     let has_finish = chunk
         .choices
         .first()
@@ -1459,19 +1590,21 @@ pub fn chunk_from_ir(
     let has_usage = chunk.usage.is_some();
     if (has_finish || has_usage) && !st.completed {
         st.completed = true;
-        events.push(encode_response_completed(st, chunk, ctx)?);
+        events.push(encode_response_finished(st, chunk, ctx)?);
     }
 
     Ok(events)
 }
 
-/// 流终止：若未发过 completed 则补发一个（无 usage）；否则返回空。
+/// 流终止：若未发过终止帧则补发 completed（无 usage）；否则返回空。
+/// 注意：本函数仅在「上游流正常 EOF 但无 finish 帧」时触发（上游连接错误走
+/// 流错误通道，不会到这里）；补发 completed 是对截断流的务实兜底。
 pub fn stream_end(st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
     if st.completed {
         return Ok(vec![]);
     }
     st.completed = true;
-    let resp = build_completed_response(st, None, ctx);
+    let resp = build_final_response(st, None, ctx, "completed");
     let mut o = Map::new();
     o.insert("type".into(), Value::String("response.completed".into()));
     o.insert("response".into(), resp);
@@ -1940,6 +2073,96 @@ mod tests {
         assert_eq!(resp.len(), 1);
         let ev = serde_json::from_str::<Value>(&resp[0]).unwrap();
         assert_eq!(ev["type"], "response.completed");
+    }
+
+    /// review P5 回归：同一 message item 在 added/delta/completed 三类事件中 id 一致，
+    /// 且带 msg_ 前缀（此前三处各自随机生成，客户端按 item_id 关联事件会失配）。
+    #[test]
+    fn stream_item_ids_consistent_across_events() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let mk = |text: &str, finish: Option<&str>| IrChunk {
+            id: "resp_1".into(),
+            model: "gpt-5".into(),
+            created: 1,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: Some(text.into()),
+                    ..Default::default()
+                },
+                finish_reason: finish.map(String::from),
+            }],
+            ..Default::default()
+        };
+        let mut evs: Vec<Value> = Vec::new();
+        for ch in [mk("he", None), mk("llo", Some("stop"))] {
+            for e in chunk_from_ir(&ch, &mut st, &mut c).unwrap() {
+                evs.push(serde_json::from_str(&e).unwrap());
+            }
+        }
+        let added_id = evs
+            .iter()
+            .find(|e| e["type"] == "response.output_item.added")
+            .unwrap()["item"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(added_id.starts_with("msg_"));
+        for e in evs
+            .iter()
+            .filter(|e| e["type"] == "response.output_text.delta")
+        {
+            assert_eq!(e["item_id"].as_str().unwrap(), added_id);
+        }
+        let completed = evs
+            .iter()
+            .find(|e| e["type"] == "response.completed")
+            .unwrap();
+        assert_eq!(
+            completed["response"]["output"][0]["id"].as_str().unwrap(),
+            added_id
+        );
+    }
+
+    /// review P5 回归：上游 response.failed 不再被丢弃后伪装成 completed，
+    /// 入站映射为 finish=failed，出站立发 response.failed 帧。
+    #[test]
+    fn stream_failed_event_propagates() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let created = serde_json::json!({
+            "type": "response.created",
+            "response": {"id": "resp_x", "model": "gpt-5", "created_at": 1}
+        });
+        chunk_to_ir(&created.to_string(), &mut st, &mut c).unwrap();
+        let failed = serde_json::json!({
+            "type": "response.failed",
+            "response": {"status": "failed", "error": {"code": "server_error", "message": "boom"}}
+        });
+        let ch = chunk_to_ir(&failed.to_string(), &mut st, &mut c)
+            .unwrap()
+            .expect("failed 应产出终止 chunk");
+        assert_eq!(ch.choices[0].finish_reason.as_deref(), Some("failed"));
+
+        let mut st2 = StreamState::default();
+        let evs = chunk_from_ir(&ch, &mut st2, &mut c).unwrap();
+        let types: Vec<String> = evs
+            .iter()
+            .map(|e| {
+                serde_json::from_str::<Value>(e).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(types.contains(&"response.failed".to_string()));
+        let failed_ev = evs
+            .iter()
+            .map(|e| serde_json::from_str::<Value>(e).unwrap())
+            .find(|e| e["type"] == "response.failed")
+            .unwrap();
+        assert_eq!(failed_ev["response"]["status"], "failed");
     }
 
     /// 入站工具链（review P1-#9）：output_item.added 后随 arguments delta，
