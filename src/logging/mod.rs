@@ -171,6 +171,23 @@ impl LogSink {
             drop(tx);
         }
     }
+
+    /// 队列状态（M10.4 运维状态）：Some((已用, 容量))；log_async=false 时为 None。
+    pub fn queue_status(&self) -> Option<(usize, usize)> {
+        let g = self.queue.lock().unwrap_or_else(|p| p.into_inner());
+        g.as_ref()
+            .map(|tx| (tx.max_capacity() - tx.capacity(), tx.max_capacity()))
+    }
+
+    /// 队列溢出累计次数（写 WAL 兜底的条数）。
+    pub fn overflow_total(&self) -> u64 {
+        self.overflows.get()
+    }
+
+    /// WAL 目录（运维状态展示文件数/总大小）。
+    pub fn wal_dir(&self) -> &std::path::Path {
+        self.wal.dir()
+    }
 }
 
 // ---------------------------------------------------------------------------

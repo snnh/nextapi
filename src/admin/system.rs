@@ -28,7 +28,120 @@ use crate::state::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/version", get(get_version))
+        .route("/status", get(get_status))
         .route("/check-update", post(check_update))
+}
+
+/// GET /status：运维状态摘要（M10.4 / PLAN.md §4.4）。
+/// 安全边界：不返回 API Key、密码、JWT、加密字段或请求体——错误摘要截断至 120 字符。
+async fn get_status(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminUsername,
+) -> ApiResult<Json<serde_json::Value>> {
+    // 1. 数据库连通性 + 延迟
+    let db_start = Instant::now();
+    let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
+    let db_latency = db_start.elapsed().as_millis() as i64;
+
+    // 2. 配置来源计数（system_settings.source：ui/file/…）
+    let source_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT source, count(*) FROM system_settings GROUP BY source")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+    let mut settings_sources = serde_json::Map::new();
+    for (src, n) in source_rows {
+        settings_sources.insert(src, serde_json::Value::from(n));
+    }
+
+    // 3. 日志队列 / WAL 状态
+    let (queue_used, queue_capacity) = state
+        .log_sink
+        .queue_status()
+        .map(|(u, c)| (Some(u as i64), Some(c as i64)))
+        .unwrap_or((None, None));
+    let (wal_files, wal_bytes) = std::fs::read_dir(state.log_sink.wal_dir())
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+                .fold((0i64, 0i64), |(nf, nb), e| {
+                    (
+                        nf + 1,
+                        nb + e.metadata().map(|m| m.len()).unwrap_or(0) as i64,
+                    )
+                })
+        })
+        .unwrap_or((0, 0));
+
+    // 4. 媒体轮询状态
+    let poller_cfg = state.hot.load().media_poller.clone();
+    let pending_tasks: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM media_tasks WHERE status = 'pending'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+
+    // 5. 熔断/异常上游（快照读，零 DB）
+    let snap = state.cache.snapshot();
+    let breakers: Vec<serde_json::Value> = snap
+        .upstreams
+        .values()
+        .filter(|u| {
+            u.disabled_by.is_some() || u.consecutive_failures > 0 || u.cooldown_until.is_some()
+        })
+        .map(|u| {
+            serde_json::json!({
+                "name": u.name,
+                "consecutive_failures": u.consecutive_failures,
+                "disabled_by": u.disabled_by,
+                "cooldown_until": u.cooldown_until.map(|t| t.to_rfc3339()),
+            })
+        })
+        .collect();
+
+    // 6. 最近错误摘要（最近 5 条失败明细；error 截断 120 字符）
+    let recent_errors: Vec<(chrono::DateTime<chrono::Utc>, String, i32, Option<String>)> =
+        sqlx::query_as(
+            "SELECT ts, model, status, error FROM usage_logs WHERE status >= 400 \
+             ORDER BY ts DESC LIMIT 5",
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+    let recent_errors: Vec<serde_json::Value> = recent_errors
+        .into_iter()
+        .map(|(ts, model, status, err)| {
+            serde_json::json!({
+                "ts": ts.to_rfc3339(),
+                "model": model,
+                "status": status,
+                "error": err.map(|e| e.chars().take(120).collect::<String>()),
+            })
+        })
+        .collect();
+
+    let uptime = (chrono::Utc::now() - state.started_at).num_seconds();
+    Ok(Json(serde_json::json!({
+        "version": state.version,
+        "started_at": state.started_at.to_rfc3339(),
+        "uptime_secs": uptime,
+        "database": { "ok": db_ok, "latency_ms": db_latency },
+        "settings_sources": settings_sources,
+        "logging": {
+            "queue_used": queue_used,
+            "queue_capacity": queue_capacity,
+            "overflow_total": state.log_sink.overflow_total(),
+            "wal_files": wal_files,
+            "wal_bytes": wal_bytes,
+        },
+        "media_poller": {
+            "interval_secs": poller_cfg.interval_secs,
+            "max_age_hours": poller_cfg.max_age_hours,
+            "pending_tasks": pending_tasks,
+        },
+        "breakers": breakers,
+        "recent_errors": recent_errors,
+    })))
 }
 
 /// GET /version：网关版本 + 启动时间（RFC3339）。

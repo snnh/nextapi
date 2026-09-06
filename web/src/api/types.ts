@@ -692,6 +692,30 @@ export interface AuditRow {
 // system（/api/system，M8 后端补丁）
 // ---------------------------------------------------------------------------
 
+/** 运维状态摘要（/api/system/status，M10.4） */
+export interface SystemStatusResp {
+  version: string
+  started_at: string
+  uptime_secs: number
+  database: { ok: boolean; latency_ms: number }
+  settings_sources: Record<string, number>
+  logging: {
+    queue_used: number | null
+    queue_capacity: number | null
+    overflow_total: number
+    wal_files: number
+    wal_bytes: number
+  }
+  media_poller: { interval_secs: number; max_age_hours: number; pending_tasks: number }
+  breakers: {
+    name: string
+    consecutive_failures: number
+    disabled_by: string | null
+    cooldown_until: string | null
+  }[]
+  recent_errors: { ts: string; model: string; status: number; error: string | null }[]
+}
+
 export interface VersionResp {
   version: string
   started_at: string

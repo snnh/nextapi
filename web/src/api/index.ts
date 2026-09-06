@@ -51,6 +51,7 @@ import type {
   UnpricedItem,
   UpstreamIn,
   UpstreamOut,
+  SystemStatusResp,
   VersionResp,
 } from './types'
 
@@ -254,6 +255,7 @@ export const auditApi = {
 // ---------------------------------------------------------------------------
 export const systemApi = {
   version: () => http.get<VersionResp>('/api/system/version').then((r) => r.data),
+  status: () => http.get<SystemStatusResp>('/api/system/status').then((r) => r.data),
   checkUpdate: (body?: CheckUpdateReq) =>
     http.post<CheckUpdateResp>('/api/system/check-update', body ?? {}).then((r) => r.data),
 }

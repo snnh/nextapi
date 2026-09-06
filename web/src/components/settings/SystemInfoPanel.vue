@@ -14,6 +14,58 @@
 
     <el-card shadow="never" class="card">
       <template #header>
+        <div class="card-head">
+          <span>运行状态</span>
+          <el-button link type="primary" :icon="Refresh" @click="loadStatus">刷新</el-button>
+        </div>
+      </template>
+      <el-descriptions v-if="status" :column="2" border>
+        <el-descriptions-item label="运行时长">{{ fmtUptime(status.uptime_secs) }}</el-descriptions-item>
+        <el-descriptions-item label="数据库">
+          <el-tag :type="status.database.ok ? 'success' : 'danger'" size="small">
+            {{ status.database.ok ? '正常' : '异常' }}
+          </el-tag>
+          <span class="hint" style="margin-left: 6px">{{ status.database.latency_ms }}ms</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="配置来源">{{ settingsSourceText }}</el-descriptions-item>
+        <el-descriptions-item label="日志队列">
+          <template v-if="status.logging.queue_capacity != null">
+            {{ status.logging.queue_used }} / {{ status.logging.queue_capacity }}
+            <span class="hint">（溢出 {{ status.logging.overflow_total }}）</span>
+          </template>
+          <span v-else>同步直写（无队列）</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="WAL 兜底">
+          {{ status.logging.wal_files }} 个文件 / {{ fmtBytes(status.logging.wal_bytes) }}
+        </el-descriptions-item>
+        <el-descriptions-item label="媒体轮询">
+          {{ status.media_poller.interval_secs > 0 ? `每 ${status.media_poller.interval_secs}s` : '已停用' }}
+          <span class="hint">（待回联任务 {{ status.media_poller.pending_tasks }}）</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="熔断上游" :span="2">
+          <template v-if="status.breakers.length">
+            <el-tag v-for="b in status.breakers" :key="b.name" size="small" type="danger" effect="plain" style="margin-right: 6px">
+              {{ b.name }}（连续失败 {{ b.consecutive_failures }}<template v-if="b.disabled_by">，{{ b.disabled_by === 'manual' ? '手动禁用' : '自动熔断' }}</template>）
+            </el-tag>
+          </template>
+          <span v-else class="hint">无</span>
+        </el-descriptions-item>
+      </el-descriptions>
+      <template v-if="status?.recent_errors.length">
+        <el-divider content-position="left">最近错误</el-divider>
+        <el-table :data="status.recent_errors" size="small">
+          <el-table-column label="时间" width="170">
+            <template #default="{ row }">{{ fmtTime(row.ts) }}</template>
+          </el-table-column>
+          <el-table-column prop="model" label="模型" width="160" show-overflow-tooltip />
+          <el-table-column prop="status" label="状态码" width="80" align="center" />
+          <el-table-column prop="error" label="错误摘要" min-width="240" show-overflow-tooltip />
+        </el-table>
+      </template>
+    </el-card>
+
+    <el-card shadow="never" class="card">
+      <template #header>
         <div class="card-head"><span>YAML 配置</span></div>
       </template>
       <div class="hint" style="margin-bottom: 12px">
@@ -75,9 +127,10 @@ import { configApi, systemApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
 import { downloadText } from '@/utils/download'
-import type { ConfigFileView, VersionResp } from '@/api/types'
+import type { ConfigFileView, SystemStatusResp, VersionResp } from '@/api/types'
 
 const version = ref<VersionResp | null>(null)
+const status = ref<SystemStatusResp | null>(null)
 const config = ref<ConfigFileView | null>(null)
 const pageLoading = ref(false)
 const exporting = ref(false)
@@ -90,6 +143,35 @@ const importText = ref('')
 const configText = computed(() =>
   config.value ? JSON.stringify(config.value, null, 2) : '',
 )
+
+const settingsSourceText = computed(() => {
+  const s = status.value?.settings_sources
+  if (!s || !Object.keys(s).length) return '-'
+  const labels: Record<string, string> = { ui: '界面', file: 'YAML', env: '环境变量' }
+  return Object.entries(s)
+    .map(([k, n]) => `${labels[k] ?? k} ${n}`)
+    .join(' · ')
+})
+
+function fmtUptime(secs: number): string {
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
+  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
+  return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+async function loadStatus() {
+  try {
+    status.value = await systemApi.status()
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  }
+}
 
 async function loadVersion() {
   try {
@@ -183,7 +265,7 @@ async function doImport() {
 
 onMounted(() => {
   pageLoading.value = true
-  Promise.all([loadVersion(), loadConfig()]).finally(() => {
+  Promise.all([loadVersion(), loadConfig(), loadStatus()]).finally(() => {
     pageLoading.value = false
   })
 })
