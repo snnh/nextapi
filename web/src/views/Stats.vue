@@ -264,11 +264,11 @@ const chartOption = computed<EChartsOption>(() => {
         grid,
         xAxis: { type: 'category', boundaryGap: true, data: labels },
         yAxis: [
-          { type: 'value', name: '请求数' },
-          { type: 'value', name: `成本(${currency.value})` },
+          { type: 'value' },
+          { type: 'value', splitLine: { show: false } },
         ],
         series: [
-          { name: '请求数', type: 'bar', data: pts.map((p) => p.requests), yAxisIndex: 0 },
+          { name: '请求数', type: 'bar', barMaxWidth: 48, data: pts.map((p) => p.requests), yAxisIndex: 0 },
           {
             name: `成本(${currency.value})`,
             type: 'line',
@@ -286,7 +286,7 @@ const chartOption = computed<EChartsOption>(() => {
         legend: { data: ['总 Token 数'], top: 8 },
         grid,
         xAxis: { type: 'category', boundaryGap: false, data: labels },
-        yAxis: { type: 'value', name: 'Token 数' },
+        yAxis: { type: 'value' },
         series: [
           {
             name: '总 Token 数',
@@ -303,7 +303,7 @@ const chartOption = computed<EChartsOption>(() => {
       legend: { data: [`成本(${currency.value})`], top: 8 },
       grid,
       xAxis: { type: 'category', boundaryGap: false, data: labels },
-      yAxis: { type: 'value', name: `成本(${currency.value})` },
+      yAxis: { type: 'value' },
       series: [
         {
           name: `成本(${currency.value})`,
