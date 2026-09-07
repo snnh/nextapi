@@ -51,7 +51,9 @@ pub struct CodexOAuth {
 /// base64url（无填充）解码。
 fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     use base64::Engine;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .ok()
 }
 
 /// 解 JWT payload（不验签——仅提取 claim，凭证本身来自用户粘贴/官方端点）。
@@ -83,7 +85,12 @@ pub fn parse_auth_json(raw: &str) -> Result<CodexOAuth, String> {
     let v: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| format!("auth.json 不是合法 JSON: {e}"))?;
     let tokens = v.get("tokens").ok_or("auth.json 缺少 tokens 字段")?;
-    let get = |k: &str| tokens.get(k).and_then(|x| x.as_str()).filter(|s| !s.is_empty());
+    let get = |k: &str| {
+        tokens
+            .get(k)
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+    };
 
     let access_token = get("access_token")
         .ok_or("tokens.access_token 缺失")?
@@ -95,8 +102,7 @@ pub fn parse_auth_json(raw: &str) -> Result<CodexOAuth, String> {
         .map(str::to_string)
         .or_else(|| get("id_token").and_then(account_id_from_jwt))
         .ok_or("无法确定 account_id（tokens.account_id 与 id_token claim 均缺失）")?;
-    let expires_at = exp_from_jwt(&access_token)
-        .unwrap_or_else(|| Utc::now().timestamp() + 3600);
+    let expires_at = exp_from_jwt(&access_token).unwrap_or_else(|| Utc::now().timestamp() + 3600);
 
     Ok(CodexOAuth {
         access_token,
@@ -188,9 +194,8 @@ pub async fn aggregate_stream_to_json(
             handle(ev, &mut completed);
         }
     }
-    completed.ok_or_else(|| {
-        super::UpstreamError::BodyRead("codex 流缺少 response.completed 帧".into())
-    })
+    completed
+        .ok_or_else(|| super::UpstreamError::BodyRead("codex 流缺少 response.completed 帧".into()))
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +204,10 @@ pub async fn aggregate_stream_to_json(
 
 /// 取有效 access_token：未临期直接返回；否则 per-upstream 加锁刷新。
 /// 返回 (access_token, account_id)。失败返回错误描述（调用方走熔断/故障转移）。
-pub async fn ensure_token(state: &Arc<AppState>, up: &UpstreamRow) -> Result<(String, String), String> {
+pub async fn ensure_token(
+    state: &Arc<AppState>,
+    up: &UpstreamRow,
+) -> Result<(String, String), String> {
     let now = Utc::now().timestamp();
     if let Some(o) = up.oauth_plain.as_ref() {
         if o.expires_at - now > REFRESH_SKEW_SECS {
@@ -211,10 +219,7 @@ pub async fn ensure_token(state: &Arc<AppState>, up: &UpstreamRow) -> Result<(St
 
     // per-upstream 锁：并发请求只刷新一次
     let lock = {
-        let mut locks = state
-            .codex_locks
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut locks = state.codex_locks.lock().unwrap_or_else(|p| p.into_inner());
         locks
             .entry(up.id)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -382,7 +387,8 @@ mod tests {
         assert!(parse_auth_json("{}").is_err());
         assert!(parse_auth_json("{\"tokens\":{}}").is_err());
         assert!(
-            parse_auth_json("{\"tokens\":{\"access_token\":\"a\",\"refresh_token\":\"r\"}}").is_err()
+            parse_auth_json("{\"tokens\":{\"access_token\":\"a\",\"refresh_token\":\"r\"}}")
+                .is_err()
         );
     }
 

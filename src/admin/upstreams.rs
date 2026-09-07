@@ -713,7 +713,9 @@ async fn refresh_oauth(
         None,
     )
     .await?;
-    Ok(Json(serde_json::json!({ "ok": true, "account_id": account })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "account_id": account }),
+    ))
 }
 
 /// api_key 更新语义：未传或掩码 → Keep；空串 → Clear；其他 → Set(新明文)。
