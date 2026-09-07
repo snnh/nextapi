@@ -172,6 +172,8 @@ export interface UpstreamOut {
 }
 
 export interface UpstreamExtra {
+  /** 分协议 base_url 覆盖（gateway 调用时按协议选用） */
+  protocol_base_urls?: Record<string, string> | null
   protocol_priority?: ProtocolName[]
   overrides?: Overrides
   media_base_url?: string | null
@@ -246,6 +248,8 @@ export interface Preset {
   base_url: string
   protocols: ProtocolName[]
   media_base_url: string | null
+  /** 分协议 base_url 覆盖（多根供应商，如 DeepSeek 的 Anthropic 根） */
+  protocol_base_urls?: Record<string, string>
   description: string
 }
 

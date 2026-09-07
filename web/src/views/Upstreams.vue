@@ -28,6 +28,11 @@
               <div v-if="p.media_base_url" class="hint preset-media">
                 媒体基础地址：{{ p.media_base_url }}
               </div>
+              <div v-if="p.protocol_base_urls" class="hint preset-media">
+                <div v-for="(url, proto) in p.protocol_base_urls" :key="proto">
+                  {{ PROTOCOL_LABEL(proto) }} 地址：{{ url }}
+                </div>
+              </div>
               <el-button size="small" type="primary" @click="openProvision(p)">接入</el-button>
             </el-card>
           </el-col>
@@ -160,6 +165,15 @@
         <el-form-item label="Base URL">
           <el-input :model-value="provisionPreset?.base_url" readonly />
         </el-form-item>
+        <template v-if="provisionPreset?.protocol_base_urls">
+          <el-form-item
+            v-for="(url, proto) in provisionPreset.protocol_base_urls"
+            :key="proto"
+            :label="`${PROTOCOL_LABEL(String(proto))} 地址`"
+          >
+            <el-input :model-value="String(url)" readonly />
+          </el-form-item>
+        </template>
       </el-form>
 
       <div v-if="provisionResult" class="provision-result">
