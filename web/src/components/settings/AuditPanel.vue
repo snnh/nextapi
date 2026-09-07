@@ -107,7 +107,11 @@ function showSummary(row: AuditRow) {
   summaryVisible.value = true
 }
 
+// 请求序号：防翻页/筛选并发时旧响应覆盖（发布审阅前端 M2）
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const r = await auditApi.list({
@@ -116,12 +120,14 @@ async function load() {
       action: action.value.trim() || undefined,
       object_type: objectType.value.trim() || undefined,
     })
+    if (seq !== loadSeq) return
     rows.value = r.items
     total.value = r.total
   } catch (e) {
+    if (seq !== loadSeq) return
     ElMessage.error(errMsg(e))
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

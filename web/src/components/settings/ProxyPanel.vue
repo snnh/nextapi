@@ -371,9 +371,11 @@ async function submit() {
       ElMessage.success('代理已创建')
     }
     dlg.visible = false
+    dlg.form.password = '' // 敏感字段用完即清（发布审阅前端 M3）
     load()
   } catch (e) {
     ElMessage.error(errMsg(e))
+    dlg.form.password = ''
   } finally {
     saving.value = false
   }

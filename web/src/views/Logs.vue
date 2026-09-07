@@ -386,16 +386,22 @@ function buildQuery(): LogListQuery {
 
 let suppressPageEvent = false
 
+// 请求序号：旧响应到达时丢弃，防乱序覆盖新条件的结果（发布审阅前端 M2）
+let loadSeq = 0
+
 async function loadLogs() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const resp = await logApi.list(buildQuery())
+    if (seq !== loadSeq) return
     rows.value = resp.items
     total.value = resp.total
   } catch (e) {
+    if (seq !== loadSeq) return
     ElMessage.error(errMsg(e))
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -454,7 +460,7 @@ onMounted(() => {
 
 // —— 展示辅助 ——
 function keyLabel(k: ApiKeyRow): string {
-  return `${k.name} · ${k.prefix}`
+  return `${k.name || '(未命名)'} · ${k.prefix}`
 }
 
 function keyText(row?: LogItem | null): string {

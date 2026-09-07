@@ -390,9 +390,11 @@ async function submit() {
       ElMessage.success('上游已创建')
     }
     visible.value = false
+    form.api_key = '' // 敏感字段用完即清（发布审阅前端 M3）
     emit('saved')
   } catch (e) {
     ElMessage.error(errMsg(e))
+    form.api_key = '' // 失败也清：避免已输入的新密钥长期驻留
   } finally {
     saving.value = false
   }

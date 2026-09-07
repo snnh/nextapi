@@ -118,7 +118,7 @@ async function previewFile() {
   }
   filePreviewLoading.value = true
   try {
-    const r = await pricingApi.importFile(f, true)
+    const r = await pricingApi.importFile(f, fileDryRun.value)
     lastSource.kind = 'file'
     lastSource.file = f
     lastSource.url = ''

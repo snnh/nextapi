@@ -274,17 +274,24 @@ const filterUpstream = ref('')
 const filterModel = ref('')
 const togglingSet = reactive(new Set<string>())
 
+// 请求序号：防筛选并发时旧响应覆盖（发布审阅前端 M2）
+let rulesSeq = 0
+
 async function loadRules() {
+  const seq = ++rulesSeq
   rulesLoading.value = true
   try {
-    rules.value = await pricingApi.list(
+    const resp = await pricingApi.list(
       filterUpstream.value || undefined,
       filterModel.value.trim() || undefined,
     )
+    if (seq !== rulesSeq) return
+    rules.value = resp
   } catch (e) {
+    if (seq !== rulesSeq) return
     ElMessage.error(errMsg(e))
   } finally {
-    rulesLoading.value = false
+    if (seq === rulesSeq) rulesLoading.value = false
   }
 }
 

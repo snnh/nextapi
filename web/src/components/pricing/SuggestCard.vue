@@ -73,7 +73,11 @@ watch(
   { immediate: true },
 )
 
+// 请求序号：300ms 防抖之外仍可能先发慢返回覆盖后发结果（发布审阅前端 M2）
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   if (!props.upstream || !props.model) {
     groups.value = []
     return
@@ -81,11 +85,13 @@ async function load() {
   loading.value = true
   try {
     const resp = await pricingApi.suggest(props.upstream, props.model)
+    if (seq !== loadSeq) return
     groups.value = resp.items ?? []
   } catch {
+    if (seq !== loadSeq) return
     groups.value = []
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

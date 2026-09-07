@@ -1,5 +1,11 @@
 <template>
-  <el-dialog v-model="visible" title="修改密码" width="440px" :close-on-click-modal="false">
+  <el-dialog
+    v-model="visible"
+    title="修改密码"
+    width="440px"
+    :close-on-click-modal="false"
+    @closed="resetForm"
+  >
     <el-form ref="formRef" :model="form" :rules="rules" label-width="90px" @submit.prevent>
       <el-form-item label="原密码" prop="old_password">
         <el-input v-model="form.old_password" type="password" show-password autocomplete="current-password" />
@@ -52,6 +58,13 @@ function open() {
   form.new_password = ''
   form.confirm = ''
   visible.value = true
+}
+
+/** 关闭（含成功）后清空表单，防密码驻留内存 */
+function resetForm() {
+  form.old_password = ''
+  form.new_password = ''
+  form.confirm = ''
 }
 
 async function submit() {

@@ -317,6 +317,11 @@ const chartOption = computed<EChartsOption>(() => {
   }
 
   // 分组：按维度聚合，取请求数 Top 8，各指标单独成线
+  // 维度分组返回的是 (bucket × dimension) 逐行展开：labels 必须先按 bucket 去重，
+  // 否则同一时间点渲染 N 次且各线数据错位（发布审阅前端 M1）。
+  const buckets = [...new Set(pts.map((p) => p.bucket))]
+  const dimLabels = buckets.map(fmtBucket)
+
   const totals = new Map<string, number>()
   for (const p of pts) totals.set(p.dimension, (totals.get(p.dimension) ?? 0) + p.requests)
   const topDims = [...totals.entries()]
@@ -335,7 +340,7 @@ const chartOption = computed<EChartsOption>(() => {
       type: 'line' as const,
       smooth: true,
       connectNulls: true,
-      data: labels.map((_, i) => byBuck.get(pts[i].bucket) ?? null),
+      data: buckets.map((b) => byBuck.get(b) ?? null),
     }
   })
 
@@ -347,7 +352,7 @@ const chartOption = computed<EChartsOption>(() => {
       top: 8,
     },
     grid,
-    xAxis: { type: 'category', boundaryGap: false, data: labels },
+    xAxis: { type: 'category', boundaryGap: false, data: dimLabels },
     yAxis: { type: 'value', name: metricName.value },
     series,
   }
