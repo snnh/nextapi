@@ -77,6 +77,95 @@
         <ProtocolPriorityEditor v-model="form.protocolPriority" :selected="standardSelected" />
       </el-form-item>
 
+      <template v-if="isEdit">
+        <el-divider content-position="left">模型与路由</el-divider>
+
+        <el-form-item label="同步策略">
+          <div style="width: 100%">
+            <el-radio-group v-model="form.model_sync">
+              <el-radio-button value="manual">手动管理</el-radio-button>
+              <el-radio-button value="auto">跟随上游自动更新</el-radio-button>
+            </el-radio-group>
+            <div class="hint" style="margin-top: 6px">
+              自动模式：按系统间隔（model_sync.interval_minutes）拉取上游模型列表并全量对账——新模型自动建路由、
+              消失模型自动删托管路由；手动路由（含其他渠道）绝不受影响。保存后生效。
+            </div>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="form.model_sync === 'auto'" label="排除名单">
+          <el-select
+            v-model="form.model_exclude"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="输入模型名回车加入：同步时跳过，已托管的会移除"
+            style="width: 100%"
+          >
+            <el-option v-for="m in form.model_exclude" :key="m" :value="m" :label="m" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="模型列表">
+          <div class="models-block">
+            <div class="models-toolbar">
+              <el-button size="small" :loading="modelsLoading" @click="fetchModels">拉取模型列表</el-button>
+              <span v-if="modelsFetchedAt && !usingCache" class="hint">最近拉取：{{ fmtTime(modelsFetchedAt) }}</span>
+              <span v-if="usingCache" class="hint">以下为缓存列表（{{ modelItems.length }} 个），点击「拉取」获取最新</span>
+            </div>
+            <el-alert v-if="modelsError" type="warning" :closable="false" :title="modelsError" style="margin-bottom: 8px" />
+            <el-checkbox-group v-if="modelItems.length && !usingCache" v-model="selectedModels">
+              <div v-for="it in modelItems" :key="it.name" class="model-row">
+                <el-checkbox
+                  :value="it.name"
+                  :disabled="form.model_sync === 'auto' || it.status !== 'new'"
+                  class="model-check"
+                >
+                  <span class="model-name">{{ it.name }}</span>
+                </el-checkbox>
+                <el-tag size="small" :type="MODEL_TAG[it.status]" effect="plain">{{ MODEL_STATUS[it.status] }}</el-tag>
+              </div>
+            </el-checkbox-group>
+            <div v-else-if="modelItems.length && usingCache" class="cache-list">
+              <el-tag v-for="m in modelItems" :key="m.name" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+                {{ m.name }}
+              </el-tag>
+            </div>
+            <div v-else class="hint">尚未拉取；点击「拉取模型列表」查看该渠道可用模型。</div>
+            <div v-if="modelItems.length && !usingCache" class="models-actions">
+              <template v-if="form.model_sync === 'auto'">
+                <el-button size="small" type="primary" :loading="syncing" @click="syncNow">立即同步（全量对账）</el-button>
+              </template>
+              <template v-else>
+                <el-button size="small" :disabled="!newModelNames.length" @click="selectedModels = [...newModelNames]">
+                  全选新模型（{{ newModelNames.length }}）
+                </el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  :disabled="!selectedModels.length"
+                  :loading="syncing"
+                  @click="addSelected"
+                >
+                  为选中模型生成路由（{{ selectedModels.length }}）
+                </el-button>
+              </template>
+            </div>
+            <el-alert
+              v-if="syncReport"
+              type="success"
+              :closable="false"
+              style="margin-top: 8px"
+              :title="syncReportText"
+            />
+          </div>
+        </el-form-item>
+      </template>
+      <el-form-item v-else label="模型与路由">
+        <span class="hint">保存后可在编辑页管理：拉取上游模型列表、勾选生成路由或开启自动跟随更新。</span>
+      </el-form-item>
+
       <el-divider content-position="left">运行</el-divider>
 
       <el-form-item label="超时（ms）" prop="timeout_ms">
@@ -175,6 +264,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { fmtTime } from '@/utils/format'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   DEFAULT_PRIORITY,
@@ -186,11 +276,13 @@ import {
 import { upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type {
+  ModelSyncReport,
   Overrides,
   ProtocolName,
   ProxyOut,
   UpstreamExtra,
   UpstreamIn,
+  UpstreamModelItem,
   UpstreamOut,
 } from '@/api/types'
 import OverridesEditor from './OverridesEditor.vue'
@@ -207,6 +299,21 @@ const isEdit = ref(false)
 const editingId = ref('')
 const advancedOpen = ref<string[]>([])
 const formRef = ref<FormInstance>()
+
+const MODEL_STATUS: Record<UpstreamModelItem['status'], string> = {
+  new: '未路由',
+  routed_manual: '已路由·手动',
+  routed_auto: '已路由·自动',
+  routed_other: '他渠道占用',
+  excluded: '已排除',
+}
+const MODEL_TAG: Record<UpstreamModelItem['status'], 'success' | 'info' | 'warning' | 'danger' | 'primary'> = {
+  new: 'info',
+  routed_manual: 'success',
+  routed_auto: 'primary',
+  routed_other: 'warning',
+  excluded: 'danger',
+}
 
 interface FormState {
   name: string
@@ -229,6 +336,8 @@ interface FormState {
   capTools: 'unset' | 'on' | 'off'
   capVision: 'unset' | 'on' | 'off'
   capMaxContext: number | undefined
+  model_sync: 'manual' | 'auto'
+  model_exclude: string[]
 }
 
 function defaultForm(): FormState {
@@ -253,6 +362,102 @@ function defaultForm(): FormState {
     capTools: 'unset',
     capVision: 'unset',
     capMaxContext: undefined,
+    model_sync: 'manual',
+    model_exclude: [],
+  }
+}
+
+// ---- 模型与路由（编辑态） ----
+const modelsLoading = ref(false)
+const syncing = ref(false)
+const modelItems = ref<UpstreamModelItem[]>([])
+const selectedModels = ref<string[]>([])
+const modelsFetchedAt = ref('')
+const modelsError = ref('')
+const usingCache = ref(false)
+const syncReport = ref<ModelSyncReport | null>(null)
+
+const newModelNames = computed(() =>
+  modelItems.value.filter((m) => m.status === 'new').map((m) => m.name),
+)
+
+const syncReportText = computed(() => {
+  const r = syncReport.value
+  if (!r) return ''
+  const parts = [
+    `新增 ${r.added.length}`,
+    `移除 ${r.removed.length}`,
+    `保留 ${r.kept}`,
+  ]
+  if (r.excluded) parts.push(`排除 ${r.excluded}`)
+  if (r.skipped.length) parts.push(`跳过（已有路由）${r.skipped.length}`)
+  return `同步完成：${parts.join(' · ')}`
+})
+
+function resetModels(upstream?: UpstreamOut) {
+  modelsError.value = ''
+  selectedModels.value = []
+  syncReport.value = null
+  modelsFetchedAt.value = upstream?.models_fetched_at ?? ''
+  const cache = upstream?.models_cache ?? []
+  if (cache.length) {
+    modelItems.value = cache.map((name) => ({ name, status: 'new' as const }))
+    usingCache.value = true
+  } else {
+    modelItems.value = []
+    usingCache.value = false
+  }
+}
+
+async function fetchModels() {
+  modelsLoading.value = true
+  modelsError.value = ''
+  try {
+    const resp = await upstreamApi.fetchModels(editingId.value)
+    modelItems.value = resp.items
+    modelsFetchedAt.value = resp.fetched_at
+    usingCache.value = false
+    selectedModels.value = []
+  } catch (e) {
+    modelsError.value = errMsg(e)
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+async function syncNow() {
+  syncing.value = true
+  modelsError.value = ''
+  try {
+    // 先把当前策略/排除落库，再对账（报告基于最新配置）
+    await upstreamApi.update(editingId.value, {
+      name: form.name.trim(),
+      base_url: form.base_url.trim(),
+      model_sync: form.model_sync,
+      model_exclude: [...form.model_exclude],
+    })
+    syncReport.value = await upstreamApi.syncModels(editingId.value)
+    await fetchModels()
+    emit('saved')
+  } catch (e) {
+    modelsError.value = errMsg(e)
+  } finally {
+    syncing.value = false
+  }
+}
+
+async function addSelected() {
+  if (!selectedModels.value.length) return
+  syncing.value = true
+  modelsError.value = ''
+  try {
+    syncReport.value = await upstreamApi.addModelRoutes(editingId.value, selectedModels.value)
+    await fetchModels()
+    emit('saved')
+  } catch (e) {
+    modelsError.value = errMsg(e)
+  } finally {
+    syncing.value = false
   }
 }
 
@@ -325,8 +530,11 @@ function open(upstream?: UpstreamOut) {
     base.capTools = caps?.tools === true ? 'on' : caps?.tools === false ? 'off' : 'unset'
     base.capVision = caps?.vision === true ? 'on' : caps?.vision === false ? 'off' : 'unset'
     base.capMaxContext = caps?.max_context ?? undefined
+    base.model_sync = upstream.model_sync ?? 'manual'
+    base.model_exclude = [...(upstream.model_exclude ?? [])]
   }
   Object.assign(form, base)
+  resetModels(upstream)
   visible.value = true
 }
 
@@ -362,6 +570,8 @@ function buildBody(): UpstreamIn {
     use_proxy: form.use_proxy,
     proxy_id: form.use_proxy ? form.proxy_id || null : null,
     extra: buildExtra(),
+    model_sync: form.model_sync,
+    model_exclude: [...form.model_exclude],
   }
   if (isEdit.value) {
     if (form.clearKey) body.api_key = ''
@@ -420,5 +630,48 @@ defineExpose({ open })
 .caps-label {
   font-size: 13px;
   color: #6b7280;
+}
+.models-block {
+  width: 100%;
+}
+.models-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+.model-check {
+  margin-right: 0;
+  min-width: 0;
+}
+.model-name {
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.models-block .el-checkbox-group {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid #eceef1;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.cache-list {
+  border: 1px dashed #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.models-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 </style>

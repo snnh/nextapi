@@ -55,6 +55,8 @@ import type {
   UpstreamOut,
   SystemStatusResp,
   VersionResp,
+  UpstreamModelsResp,
+  ModelSyncReport,
 } from './types'
 
 // ---------------------------------------------------------------------------
@@ -96,6 +98,15 @@ export const upstreamApi = {
     http.put<UpstreamOut>(`/api/upstreams/${id}`, body).then((r) => r.data),
   remove: (id: string) => http.delete<OkResp>(`/api/upstreams/${id}`).then((r) => r.data),
   test: (id: string) => http.post<TestResp>(`/api/upstreams/${id}/test`).then((r) => r.data),
+  /** 实时拉取上游模型列表（含路由状态标注） */
+  fetchModels: (id: string) =>
+    http.get<UpstreamModelsResp>(`/api/upstreams/${id}/models`).then((r) => r.data),
+  /** 自动模式：立即全量对账托管路由 */
+  syncModels: (id: string) =>
+    http.post<ModelSyncReport>(`/api/upstreams/${id}/models/sync`).then((r) => r.data),
+  /** 手动模式：为勾选模型创建手动路由 */
+  addModelRoutes: (id: string, models: string[]) =>
+    http.post<ModelSyncReport>(`/api/upstreams/${id}/models/routes`, { models }).then((r) => r.data),
 }
 
 // ---------------------------------------------------------------------------

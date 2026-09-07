@@ -405,6 +405,7 @@ mod tests {
         assert_eq!(r3.unwrap().source, "manual");
     }
 
+    #[test]
     fn manual_overrides_auto() {
         let dt = Utc.timestamp_opt(1_750_000_000, 0).unwrap();
         let rows = vec![

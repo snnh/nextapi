@@ -287,6 +287,10 @@ mod tests {
             use_proxy: false,
             proxy_id: None,
             extra,
+            model_sync: "manual".into(),
+            model_exclude: vec![],
+            models_cache: serde_json::json!([]),
+            models_fetched_at: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

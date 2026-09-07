@@ -278,6 +278,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // 渠道模型自动同步（model_sync='auto' 的上游定时对账托管路由）。
+    // 任务内部每轮读 hot 配置，enabled=false/interval=0 时空转（热加载可再打开）。
+    {
+        let state_ms = state.clone();
+        tokio::spawn(admin::model_sync::run_model_sync_task(state_ms));
+    }
+
     // M6：媒体任务轮询（图片异步任务闭环计费）。media_poller.interval_secs=0 时不启动
     // （poller 内部也会在读到 0 时自行退出，此处显式判断避免空转任务）。
     {

@@ -469,6 +469,7 @@ mod tests {
             retry_status_codes: vec![429, 500],
             lock_upstream: false,
             sort_order,
+            managed_by: None,
             created_at: now,
             updated_at: now,
         }
@@ -493,6 +494,10 @@ mod tests {
             use_proxy: false,
             proxy_id: None,
             extra: serde_json::json!({}),
+            model_sync: "manual".into(),
+            model_exclude: vec![],
+            models_cache: serde_json::json!([]),
+            models_fetched_at: None,
             created_at: now,
             updated_at: now,
         }

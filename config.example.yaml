@@ -206,3 +206,9 @@ update_check:
 media_poller:
   interval_secs: 5
   max_age_hours: 24
+
+# 渠道模型自动同步：model_sync='auto' 的渠道定时拉取上游模型列表并对账托管路由
+# （只增删 managed_by='auto' 的路由，绝不覆盖手动路由；model_exclude 名单除外）
+model_sync:
+  enabled: true
+  interval_minutes: 30               # 0 = 仅手动触发
