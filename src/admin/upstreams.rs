@@ -35,6 +35,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", get(list_upstreams).post(create_upstream))
         .route("/{id}", put(update_upstream).delete(delete_upstream))
         .route("/{id}/test", post(test_upstream))
+        .route("/{id}/oauth/refresh", post(refresh_oauth))
 }
 
 /// upstreams 表行（含加密列；对外绝不输出 api_key_enc）。
@@ -60,6 +61,7 @@ struct UpstreamDbRow {
     model_exclude: Vec<String>,
     models_cache: serde_json::Value,
     models_fetched_at: Option<DateTime<Utc>>,
+    oauth_enc: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -87,11 +89,29 @@ struct UpstreamOut {
     model_exclude: Vec<String>,
     models_cache: serde_json::Value,
     models_fetched_at: Option<DateTime<Utc>>,
+    /// Codex OAuth：仅暴露状态（账号/过期），绝不输出 token
+    has_oauth: bool,
+    oauth_account_id: Option<String>,
+    oauth_expires_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-fn to_out(row: UpstreamDbRow) -> UpstreamOut {
+fn to_out(row: UpstreamDbRow, crypto: &crate::crypto::Crypto) -> UpstreamOut {
+    // oauth 元数据（account_id/expires_at）：解密仅取非敏感字段展示
+    let (oauth_account_id, oauth_expires_at) = match row.oauth_enc.as_deref() {
+        Some(enc) if !enc.is_empty() => match crypto.decrypt(enc) {
+            Ok(json) => match serde_json::from_str::<crate::upstream::codex::CodexOAuth>(&json) {
+                Ok(o) => (
+                    Some(o.account_id),
+                    chrono::DateTime::from_timestamp(o.expires_at, 0),
+                ),
+                Err(_) => (None, None),
+            },
+            Err(_) => (None, None),
+        },
+        _ => (None, None),
+    };
     UpstreamOut {
         has_api_key: row.api_key_enc.is_some(),
         id: row.id,
@@ -113,6 +133,9 @@ fn to_out(row: UpstreamDbRow) -> UpstreamOut {
         model_exclude: row.model_exclude,
         models_cache: row.models_cache,
         models_fetched_at: row.models_fetched_at,
+        has_oauth: row.oauth_enc.is_some(),
+        oauth_account_id,
+        oauth_expires_at,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }
@@ -124,6 +147,8 @@ struct CreateUpstreamReq {
     name: String,
     #[serde(default)]
     kind: Option<String>,
+    /// codex 渠道可缺省（默认官方后端地址）；其余渠道空串由 validate_upstream 拒绝
+    #[serde(default)]
     base_url: String,
     #[serde(default)]
     api_key: Option<String>,
@@ -149,6 +174,9 @@ struct CreateUpstreamReq {
     /// 自动同步排除名单
     #[serde(default)]
     model_exclude: Option<Vec<String>>,
+    /// Codex 渠道：粘贴 codex CLI 的 auth.json 原文（解析后加密存储，不落明文）
+    #[serde(default)]
+    auth_json: Option<String>,
 }
 
 /// 更新上游请求体（全字段 Option）。
@@ -182,6 +210,8 @@ struct UpdateUpstreamReq {
     model_sync: Option<String>,
     #[serde(default)]
     model_exclude: Option<Vec<String>>,
+    #[serde(default)]
+    auth_json: Option<String>,
 }
 
 /// GET /：列表（has_api_key 布尔；绝不输出 api_key）。
@@ -193,11 +223,11 @@ async fn list_upstreams(
         "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
          breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
          use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
-         created_at, updated_at FROM upstreams ORDER BY name",
+         oauth_enc, created_at, updated_at FROM upstreams ORDER BY name",
     )
     .fetch_all(&state.db)
     .await?;
-    let items: Vec<UpstreamOut> = rows.into_iter().map(to_out).collect();
+    let items: Vec<UpstreamOut> = rows.into_iter().map(|r| to_out(r, &state.crypto)).collect();
     Ok(Json(serde_json::json!({ "items": items })))
 }
 
@@ -205,8 +235,20 @@ async fn list_upstreams(
 async fn create_upstream(
     State(state): State<Arc<AppState>>,
     admin: AdminUsername,
-    Json(body): Json<CreateUpstreamReq>,
+    Json(mut body): Json<CreateUpstreamReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    // Codex 渠道默认值补全须在 validate 之前（base_url 可缺省）
+    let is_codex = body.auth_json.is_some() || body.kind.as_deref() == Some("codex");
+    if is_codex && body.base_url.trim().is_empty() {
+        body.base_url = crate::upstream::codex::DEFAULT_BASE_URL.to_string();
+    }
+    if is_codex && body.kind.is_none() {
+        body.kind = Some("codex".to_string());
+    }
+    if is_codex && body.protocols.is_none() {
+        body.protocols = Some(vec!["openai_responses".to_string()]);
+    }
+
     validate_upstream(
         &body.name,
         &body.base_url,
@@ -236,12 +278,18 @@ async fn create_upstream(
     let model_exclude = body.model_exclude.clone().unwrap_or_default();
     validate_model_sync(&model_sync, &model_exclude)?;
 
+    // Codex 渠道：auth.json 解析加密
+    let oauth_enc = match api_key_semantics(body.auth_json.as_deref()) {
+        ApiKeySemantics::Keep | ApiKeySemantics::Clear => None,
+        ApiKeySemantics::Set(raw) => Some(encrypt_auth_json(&state, &raw)?),
+    };
+
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO upstreams \
          (name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, breaker_threshold, \
           probe_model, consecutive_failures, disabled_by, cooldown_until, use_proxy, proxy_id, extra, \
-          model_sync, model_exclude) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,NULL,$11,$12,$13,$14,$15) RETURNING id",
+          model_sync, model_exclude, oauth_enc) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,NULL,$11,$12,$13,$14,$15,$16) RETURNING id",
     )
     .bind(&body.name)
     .bind(body.kind.as_deref().unwrap_or("custom"))
@@ -258,6 +306,7 @@ async fn create_upstream(
     .bind(&extra)
     .bind(model_sync)
     .bind(&model_exclude)
+    .bind(&oauth_enc)
     .fetch_one(&state.db)
     .await?;
 
@@ -278,7 +327,7 @@ async fn create_upstream(
     .await?;
 
     let row = fetch_upstream(&state, id).await?;
-    Ok(Json(serde_json::json!(to_out(row))))
+    Ok(Json(serde_json::json!(to_out(row, &state.crypto))))
 }
 
 /// PUT /{id}：部分更新；api_key 语义见模块注释；enabled 切换见模块注释。
@@ -306,6 +355,13 @@ async fn update_upstream(
         .model_exclude
         .unwrap_or_else(|| row.model_exclude.clone());
     validate_model_sync(&model_sync, &model_exclude)?;
+
+    // auth_json：未传/掩码保持、空串清除、其他按 auth.json 解析加密更新
+    let oauth_enc = match api_key_semantics(body.auth_json.as_deref()) {
+        ApiKeySemantics::Keep => row.oauth_enc.clone(),
+        ApiKeySemantics::Clear => None,
+        ApiKeySemantics::Set(raw) => Some(encrypt_auth_json(&state, &raw)?),
+    };
 
     validate_upstream(
         &name,
@@ -357,8 +413,8 @@ async fn update_upstream(
         "UPDATE upstreams SET name=$1, kind=$2, base_url=$3, api_key_enc=$4, protocols=$5, \
          enabled=$6, timeout_ms=$7, breaker_threshold=$8, probe_model=$9, consecutive_failures=$10, \
          disabled_by=$11, cooldown_until=$12, use_proxy=$13, proxy_id=$14, extra=$15, \
-         model_sync=$16, model_exclude=$17, updated_at=now() \
-         WHERE id=$18",
+         model_sync=$16, model_exclude=$17, oauth_enc=$18, updated_at=now() \
+         WHERE id=$19",
     )
     .bind(&name)
     .bind(&kind)
@@ -377,6 +433,7 @@ async fn update_upstream(
     .bind(&extra)
     .bind(&model_sync)
     .bind(&model_exclude)
+    .bind(&oauth_enc)
     .bind(id)
     .execute(&state.db)
     .await?;
@@ -402,7 +459,7 @@ async fn update_upstream(
     .await?;
 
     let row = fetch_upstream(&state, id).await?;
-    Ok(Json(serde_json::json!(to_out(row))))
+    Ok(Json(serde_json::json!(to_out(row, &state.crypto))))
 }
 
 /// DELETE /{id}：删除上游。
@@ -616,6 +673,49 @@ fn encrypt_create_api_key(
     }
 }
 
+/// 解析 auth.json 并加密为 oauth_enc；未配置 NEXTAPI_SECRET_KEY → 400。
+fn encrypt_auth_json(state: &AppState, raw: &str) -> Result<String, ApiError> {
+    if !state.crypto.is_available() {
+        return Err(ApiError::bad_request(
+            "未设置 NEXTAPI_SECRET_KEY，无法保存 OAuth 凭证",
+        ));
+    }
+    let oauth = crate::upstream::codex::parse_auth_json(raw).map_err(ApiError::bad_request)?;
+    state
+        .crypto
+        .encrypt(&serde_json::to_string(&oauth).map_err(ApiError::internal)?)
+        .map_err(|e| ApiError::bad_request(e.to_string()))
+}
+
+/// POST /{id}/oauth/refresh：手动刷新 Codex access_token（调试/轮换冲突恢复用）。
+async fn refresh_oauth(
+    State(state): State<Arc<AppState>>,
+    admin: AdminUsername,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let snap = state.cache.snapshot();
+    let up = snap.upstreams.get(&id).cloned().ok_or(ApiError::NotFound)?;
+    drop(snap);
+    let oauth = up
+        .oauth_plain
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("该渠道未配置 OAuth 凭证"))?;
+    let (_tok, account) = crate::upstream::codex::refresh_token(&state, &up, &oauth)
+        .await
+        .map_err(ApiError::bad_gateway)?;
+    auth::audit(
+        &state,
+        &admin.0,
+        "upstream.oauth.refresh",
+        "upstream",
+        Some(&id.to_string()),
+        serde_json::json!({ "name": up.name, "account_id": account }),
+        None,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "account_id": account })))
+}
+
 /// api_key 更新语义：未传或掩码 → Keep；空串 → Clear；其他 → Set(新明文)。
 #[derive(Debug, PartialEq)]
 enum ApiKeySemantics {
@@ -639,7 +739,7 @@ async fn fetch_upstream(state: &AppState, id: Uuid) -> ApiResult<UpstreamDbRow> 
         "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
          breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
          use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
-         created_at, updated_at FROM upstreams WHERE id=$1",
+         oauth_enc, created_at, updated_at FROM upstreams WHERE id=$1",
     )
     .bind(id)
     .fetch_optional(&state.db)

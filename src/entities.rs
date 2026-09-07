@@ -67,6 +67,9 @@ pub struct UpstreamRow {
     /// 内存快照中持有的解密后 api_key（不落库、不出 API；由 cache 加载时解密填充）
     #[serde(skip)]
     pub api_key_plain: Option<String>,
+    /// Codex 渠道的 OAuth 凭证（仅 kind='codex'；同 api_key_plain 的内存语义）
+    #[serde(skip)]
+    pub oauth_plain: Option<crate::upstream::codex::CodexOAuth>,
     pub protocols: Vec<String>,
     pub enabled: bool,
     pub timeout_ms: i32,
@@ -472,6 +475,7 @@ mod base_url_tests {
             kind: "deepseek".into(),
             base_url: "https://api.deepseek.com/v1".into(),
             api_key_plain: None,
+            oauth_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,
             timeout_ms: 300_000,
