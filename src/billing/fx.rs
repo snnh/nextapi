@@ -105,8 +105,13 @@ pub(crate) fn build_fx_set(
     FxSet { map }
 }
 
+/// 内置兜底汇率：1 USD = 6.73 CNY（2026-09 近一月 ECB/frankfurter 均值 6.7298 取整）。
+/// 仅在既无 manual 又无新鲜 auto 汇率时生效，优先级最低——用户配置（manual）
+/// 与自动拉取（auto 未过期）永远覆盖它。
+pub const DEFAULT_USD_CNY: &str = "6.73";
+
 impl FxSet {
-    /// from==to → Some((amount, None))；无可用汇率 → None。
+    /// from==to → Some((amount, None))；无可用汇率 → USD↔CNY 用内置兜底，其余 None。
     pub fn convert(
         &self,
         from: &str,
@@ -117,8 +122,25 @@ impl FxSet {
             return Some((amount, None));
         }
         let key = (from.to_string(), to.to_string());
-        let rate = self.map.get(&key)?;
-        Some((amount * rate.rate, Some(rate.clone())))
+        if let Some(rate) = self.map.get(&key) {
+            return Some((amount * rate.rate, Some(rate.clone())));
+        }
+        // 内置兜底（source=builtin 入账 fx_snapshot，可观测可审计）
+        let default = Decimal::from_str_exact(DEFAULT_USD_CNY).ok()?;
+        let (rate, inverse) = match (from, to) {
+            ("USD", "CNY") => (default, false),
+            ("CNY", "USD") => (Decimal::ONE / default, true),
+            _ => return None,
+        };
+        Some((
+            amount * rate,
+            Some(FxRate {
+                rate,
+                source: "builtin".into(),
+                at: None,
+                inverse,
+            }),
+        ))
     }
 }
 
@@ -355,7 +377,34 @@ mod tests {
         }
     }
 
+    /// 内置兜底：无任何汇率行时 USD↔CNY 用 6.73 / 1/6.73；有 manual/auto 时被覆盖。
     #[test]
+    fn builtin_default_fallback_and_priority() {
+        // 空集合 → 兜底生效
+        let fx = build_fx_set(&[], Utc::now(), 1440);
+        let (v, r) = fx.convert("USD", "CNY", Decimal::from(10)).unwrap();
+        assert_eq!(v, Decimal::from_str("67.30").unwrap());
+        let r = r.unwrap();
+        assert_eq!(r.source, "builtin");
+        assert!(!r.inverse);
+        let (v2, r2) = fx
+            .convert("CNY", "USD", Decimal::from_str("67.30").unwrap())
+            .unwrap();
+        assert!(r2.unwrap().inverse);
+        // 67.30/6.73 = 10
+        assert_eq!(v2.round_dp(4), Decimal::from_str("10.0000").unwrap());
+        // 其它币种无兜底
+        assert!(fx.convert("EUR", "CNY", Decimal::from(1)).is_none());
+
+        // manual/auto 存在时覆盖兜底
+        let dt = Utc::now();
+        let rows = vec![row("USD", "CNY", "7.0000", "manual", Some(dt))];
+        let fx2 = build_fx_set(&rows, Utc::now(), 1440);
+        let (v3, r3) = fx2.convert("USD", "CNY", Decimal::from(10)).unwrap();
+        assert_eq!(v3, Decimal::from_str("70.0000").unwrap());
+        assert_eq!(r3.unwrap().source, "manual");
+    }
+
     fn manual_overrides_auto() {
         let dt = Utc.timestamp_opt(1_750_000_000, 0).unwrap();
         let rows = vec![
@@ -372,11 +421,14 @@ mod tests {
 
     #[test]
     fn auto_stale_is_dropped() {
-        // 拉取于很久以前 → 超过 stale_max_minutes，auto 不可用。
+        // 拉取于很久以前 → 超过 stale_max_minutes，auto 被剔除；
+        // USD↔CNY 回落内置兜底 6.73（source=builtin 证明未用 stale 值）。
         let stale = Utc::now() - chrono::Duration::hours(48);
         let rows = vec![row("USD", "CNY", "7.2", "auto", Some(stale))];
         let set = build_fx_set(&rows, Utc::now(), 60);
-        assert!(set.convert("USD", "CNY", Decimal::from(1)).is_none());
+        let (v, r) = set.convert("USD", "CNY", Decimal::from(1)).unwrap();
+        assert_eq!(v, Decimal::from_str("6.73").unwrap());
+        assert_eq!(r.unwrap().source, "builtin");
     }
 
     #[test]

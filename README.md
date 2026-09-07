@@ -118,7 +118,7 @@ curl http://localhost:8080/v1beta/models/gemini-1.5-pro:generateContent \
 
 ### 计价
 
-`cost = matched_price × quantity`，分段（时间窗/星期/上下文长度）有序第一命中、无命中回落 `base_price`；CNY/USD 双币种快照（`price_used` / `fx_snapshot` 入账）；汇率支持手动维护与自动拉取（Frankfurter / ECB / 自定义）；价格表支持 XML/JSON 导入导出。**只统计、不扣费**——不设余额/扣减语义，成本配额仅用于用量上限告警与阻断。
+`cost = matched_price × quantity`，分段（时间窗/星期/上下文长度）有序第一命中、无命中回落 `base_price`；CNY/USD 双币种快照（`price_used` / `fx_snapshot` 入账）；汇率支持手动维护与自动拉取（Frankfurter / ECB / 自定义），USD↔CNY 内置兜底 6.73（source=builtin，manual/新鲜 auto 恒覆盖）；价格表支持 XML/JSON 导入导出。**只统计、不扣费**——不设余额/扣减语义，成本配额仅用于用量上限告警与阻断。
 
 ## 管理后台 API（前缀 `/api`）
 

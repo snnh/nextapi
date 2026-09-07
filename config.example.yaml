@@ -140,8 +140,10 @@ admin:
 #     priority: 10
 
 # seed 类：手动汇率（source=manual，优先级最高；仅首次初始化写入 DB）
+# 不配时 USD↔CNY 有内置兜底 6.73（2026-09 近一月 ECB 均值取整，fx_snapshot 记
+# source=builtin）；建议按实际修改或交给下方 fx_auto_fetch 自动拉取。
 fx_rates:
-  - { from: USD, to: CNY, rate: 7.2, source: manual }
+  - { from: USD, to: CNY, rate: 6.73, source: manual }
 
 # -----------------------------------------------------------------------------
 # hot 类：联网拉取汇率（source=auto，与 manual 分行共存）

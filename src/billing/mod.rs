@@ -1042,7 +1042,9 @@ mod tests {
     }
 
     #[test]
-    fn fx_unavailable_gives_none() {
+    /// 新语义（默认汇率 6.73 兜底）：无 manual/auto 汇率时 CNY↔USD 走内置兜底，
+    /// fx_snapshot 记 source=builtin 保证可审计。
+    fn fx_unavailable_uses_builtin_default() {
         let cny = base_rule("token_in", "CNY", "3.0");
         let rules = vec![cny];
         let fxs = fx_set(&[]);
@@ -1059,13 +1061,16 @@ mod tests {
             "Asia/Shanghai",
         );
         assert!(res.cost_cny.is_some());
-        assert!(res.cost_usd.is_none());
-        assert_eq!(res.fx_snapshot.as_array().unwrap().len(), 0);
+        // USD 由内置 6.73 兜底换算
+        assert!(res.cost_usd.is_some());
+        let snap = res.fx_snapshot.as_array().unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0]["source"], "builtin");
         assert!(res.priced);
     }
 
     #[test]
-    fn only_usd_no_fx_both_none() {
+    fn only_usd_no_fx_uses_builtin_default() {
         let usd = base_rule("token_in", "USD", "1.0");
         let rules = vec![usd];
         let fxs = fx_set(&[]);
@@ -1082,7 +1087,10 @@ mod tests {
             "Asia/Shanghai",
         );
         assert!(res.cost_usd.is_some());
-        assert!(res.cost_cny.is_none());
+        // CNY 由内置 6.73 兜底换算
+        assert!(res.cost_cny.is_some());
+        let snap = res.fx_snapshot.as_array().unwrap();
+        assert_eq!(snap[0]["source"], "builtin");
     }
 
     #[test]
