@@ -48,11 +48,11 @@ gateway:
   display_currency: "CNY"           # 混合统计默认展示币种（CNY|USD）
   display_precision: 6              # 金额展示舍入小数位（DB 仍 NUMERIC(20,10)）
   fx_stale_max_minutes: 1440        # 最近成功汇率超过该分钟数视为过期不可用
-  log_async: true                   # 异步写库；false=同步（调试用）
-  log_queue_capacity: 10000         # 有界队列容量；溢出先写 WAL 再丢弃内存条目
+  log_async: true                   # 异步写库；false=同步（调试用）。⚠️ 仅启动时生效（改动需重启）
+  log_queue_capacity: 10000         # 有界队列容量；溢出先写 WAL 再丢弃内存条目。⚠️ 仅启动时生效
   log_wal_dir: "/data/wal"          # WAL 落盘目录
   log_wal_file_max_mb: 128          # WAL 单文件上限
-  log_wal_archive_tail_mb: 64       # 尾部 N MB 全部写入并重放完成即归档
+  log_wal_archive_tail_mb: 64       # （保留字段，当前未实现尾部语义；WAL 重放成功即整体归档）
   log_partition_days: 30            # usage_logs 每分区覆盖天数；首次建分区时固化到 app_meta，
                                     # 此后以固化值为准（改此项仅对未固化过的空库生效）
   log_detail_retention_days: 0      # 明细不自动清理；仅作手动清理默认 before（0=永久）
@@ -63,6 +63,8 @@ gateway:
   batch_insert_interval_ms: 500     # 批量写库批次间隔
   quota_check_cache_secs: 3         # 用量上限聚合结果缓存秒数
   quota_exceed_action: "block"      # block=429 硬阻断 | warn=仅日志告警
+  sticky_routing: false             # Key 粘性路由：同 Key 同模型固定落到最近成功上游
+                                    #（便于利用上游缓存；pinned 不可用自动回落加权随机）
 
 # -----------------------------------------------------------------------------
 # seed 类：管理员账号（仅首次初始化写入 DB）

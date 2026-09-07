@@ -66,10 +66,18 @@ impl IntoResponse for ApiError {
             Self::TotpInvalid => Some("totp_invalid"),
             _ => None,
         };
+        // 500 不对外泄露内部细节（sqlx/reqwest 原文含约束名/URL 等实现信息，
+        // 发布审阅 L1）：响应固定通用文案 + request_id，明细进 tracing 日志关联排查。
+        let message = if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::warn!(%request_id, "内部错误: {}", self);
+            format!("内部错误（request_id: {request_id}）")
+        } else {
+            self.to_string()
+        };
         let mut response = (
             status,
             Json(serde_json::json!({
-                "error": { "message": self.to_string(), "type": "nextapi_error", "code": code }
+                "error": { "message": message, "type": "nextapi_error", "code": code }
             })),
         )
             .into_response();

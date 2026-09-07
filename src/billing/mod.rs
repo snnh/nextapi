@@ -421,6 +421,15 @@ pub fn price_with_rules(
         }
     }
 
+    // 汇率缺失致单边成本不可得：对侧成本配额不累计（fail-open 面）。
+    // 显式告警保证可观测（发布审阅数据批 #5）；配额 fail-closed 需汇率恢复后
+    // 由重放/后续事件自然收敛，不在请求路径阻断。
+    if (has_cny || has_usd) && (!cny_obtained || !usd_obtained) {
+        tracing::warn!(
+            "汇率缺失：双币种成本仅单边可得（cny={cny_obtained} usd={usd_obtained}），             对侧成本配额本事件不累计"
+        );
+    }
+
     PricingResult {
         lines,
         cost_cny: if cny_obtained {

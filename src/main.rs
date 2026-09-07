@@ -302,6 +302,13 @@ async fn main() -> anyhow::Result<()> {
             let state2 = state.clone();
             tokio::spawn(async move {
                 while rx.recv().await.is_some() {
+                    // 文件被删/短暂不可读（编辑器原子替换、ConfigMap 抖动）时保持
+                    // last-good——load_file 对 NotFound 回落默认值，若直接采用会把
+                    // 全部文件级 hot 参数静默重置（发布审阅运维 P2-3）。
+                    if !std::path::Path::new(&path2).exists() {
+                        error!("配置文件不存在，保持当前配置（last-good）: {path2}");
+                        continue;
+                    }
                     match config::load_file(&path2) {
                         Ok(new_cfg) => {
                             if let Err(e) = engine2.on_file_reload(&new_cfg).await {
@@ -324,7 +331,15 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
-        .route("/metrics", get(metrics::handle))
+        // /metrics 纳入管理员鉴权（发布审阅运维 P1-4：公开暴露上游名/Key 前缀
+        // 用量属租户级信息泄露）。Prometheus 抓取配置 bearer_token 即可。
+        .route(
+            "/metrics",
+            get(metrics::handle).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_admin,
+            )),
+        )
         .nest("/api/auth", auth::router())
         .nest(
             "/api",

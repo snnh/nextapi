@@ -62,11 +62,11 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
   },
   'gateway.log_async': {
     label: '异步写库',
-    help: '异步写库；false=同步（调试用）。默认 true',
+    help: '异步写库；false=同步（调试用）。默认 true。仅启动时生效，改动需重启。',
   },
   'gateway.log_queue_capacity': {
     label: '日志队列容量',
-    help: '有界队列容量；溢出先写 WAL 再丢弃内存条目。默认 10000',
+    help: '有界队列容量；溢出先写 WAL 再丢弃内存条目。默认 10000。仅启动时生效，改动需重启。',
   },
   'gateway.log_wal_dir': {
     label: 'WAL 目录',

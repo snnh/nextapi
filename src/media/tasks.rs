@@ -71,7 +71,8 @@ pub async fn get_image_task(
 }
 
 /// 后台轮询：pending/processing → fetch_task_status → 完成态单事务 UPDATE + 计价 + sink.log。
-/// 每次循环从 `state.hot.load().media_poller` 重读 interval_secs（=0 退出）。
+/// 每次循环从 `state.hot.load().media_poller` 重读 interval_secs；
+/// =0 时空转（不退出），重新置 >0 自动恢复（发布审阅运维 P2-1：此前置 0 永久退出）。
 pub async fn run_media_poller(state: Arc<AppState>) {
     loop {
         // 每次从热配置重读：interval_secs=0 → 退出；并取计费时区/汇率陈旧阈值。
@@ -85,8 +86,9 @@ pub async fn run_media_poller(state: Arc<AppState>) {
             )
         };
         if interval_secs == 0 {
-            tracing::info!("media_poller.interval_secs=0，媒体轮询退出");
-            return;
+            // 暂停而非退出：30s 后重读配置，改回 >0 即恢复（进程无需重启）
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            continue;
         }
         // 单轮轮询（失败只 warn，不中断循环）。
         if let Err(e) = poll_once(&state, max_age_hours, &billing_tz, fx_stale).await {
