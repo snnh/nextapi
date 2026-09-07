@@ -156,7 +156,11 @@
             type="textarea"
             :rows="3"
             :disabled="form.modelsClear"
-            placeholder="每行一个模型，支持 * 通配；留空 = 全部模型"
+            :placeholder="
+              isEdit
+                ? '每行一个模型，支持 * 通配；留空 = 保持现有白名单；勾选下方复选框 = 清除'
+                : '每行一个模型，支持 * 通配；留空 = 全部模型'
+            "
           />
           <el-checkbox v-if="isEdit" v-model="form.modelsClear">清除模型白名单（恢复全部模型）</el-checkbox>
         </el-form-item>

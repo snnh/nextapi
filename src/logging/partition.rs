@@ -57,6 +57,52 @@ fn name_to_index(name: &str) -> Option<i64> {
     name.strip_prefix("usage_logs_p")?.parse().ok()
 }
 
+/// 解析 pg_get_expr(relpartbound) 文本中的 FROM/TO 时间戳：
+/// 形如 `FOR VALUES FROM ('2026-08-15 00:00:00+00') TO ('2026-09-14 00:00:00+00')`。
+fn parse_partition_bound(expr: &str) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    fn ts(s: &str) -> Option<DateTime<Utc>> {
+        // Postgres 时区输出为 "+00"（无冒号）→ %#z；秒可带小数
+        DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%#z")
+            .ok()
+            .map(|d| d.with_timezone(&Utc))
+    }
+    let from_marker = "FROM ('";
+    let to_marker = "') TO ('";
+    let i = expr.find(from_marker)? + from_marker.len();
+    let j = expr.find(to_marker)?;
+    let from = &expr[i..j];
+    let rest = &expr[j + to_marker.len()..];
+    let k = rest.find("')")?;
+    let to = &rest[..k];
+    Some((ts(from)?, ts(to)?))
+}
+
+/// 读取各分区的真实边界（名称 → (from,to)）；解析失败的分区不收录（调用方回退推算）。
+async fn real_partition_bounds(
+    ex: &mut sqlx::PgConnection,
+) -> ApiResult<std::collections::HashMap<String, (DateTime<Utc>, DateTime<Utc>)>> {
+    let rows = sqlx::query(
+        "SELECT c.relname AS name, pg_get_expr(c.relpartbound, c.oid) AS bound \
+         FROM pg_class c \
+         JOIN pg_inherits i ON i.inhrelid = c.oid \
+         JOIN pg_class p ON p.oid = i.inhparent \
+         WHERE p.relname = 'usage_logs' AND c.relkind = 'r'",
+    )
+    .fetch_all(&mut *ex)
+    .await?;
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let name: Option<String> = row.get("name");
+        let bound: Option<String> = row.get("bound");
+        if let (Some(n), Some(b)) = (name, bound) {
+            if let Some(range) = parse_partition_bound(&b) {
+                map.insert(n, range);
+            }
+        }
+    }
+    Ok(map)
+}
+
 /// app_meta 固化键：分区天数。首次建分区时写入，此后一律以固化值为准。
 ///
 /// 背景（全局 review P4）：分区名序号与边界都按「epoch 对齐 + days 跨度」计算，若 days 随
@@ -80,7 +126,19 @@ async fn resolve_or_init_days(ex: &mut sqlx::PgConnection, cfg_days: u32) -> Api
     if let Some(days) = read_days(ex).await? {
         return Ok(days);
     }
-    let days = effective_days(cfg_days);
+    // 尚未固化但已有分区（迁移 0003 预建或手工建）：按真实分区跨度推导 days 再固化——
+    // 否则首启配置非 30 时名称反推的边界与既有分区错位，清理会误删/漏删
+    // （发布审阅数据 #6）。
+    let bounds = real_partition_bounds(ex).await?;
+    let derived = bounds.values().next().and_then(|(from, to)| {
+        let d = (*to - *from).num_days();
+        if d > 0 && d < 10_000 {
+            Some(d as u32)
+        } else {
+            None
+        }
+    });
+    let days = derived.unwrap_or_else(|| effective_days(cfg_days));
     sqlx::query(
         "INSERT INTO app_meta (key, value, updated_at) VALUES ($1, $2, now()) \
          ON CONFLICT (key) DO NOTHING",
@@ -166,6 +224,9 @@ pub async fn ensure_partitions(
 pub async fn list_partitions(pool: &sqlx::PgPool, cfg_days: u32) -> ApiResult<Vec<PartitionInfo>> {
     let mut conn = pool.acquire().await?;
     let days = resolve_or_init_days(&mut conn, cfg_days).await?;
+    // 真实边界（pg_get_expr）优先；解析失败才回退按固化 days 由 idx 推算
+    // （发布审阅数据 #6：推算边界在 days 变更/预建错位场景不可靠）。
+    let real_bounds = real_partition_bounds(&mut conn).await?;
     let rows = sqlx::query(
         "SELECT c.relname AS name, \
                 pg_total_relation_size(c.oid) AS size_bytes, \
@@ -184,10 +245,15 @@ pub async fn list_partitions(pool: &sqlx::PgPool, cfg_days: u32) -> ApiResult<Ve
         let name: String = row.get("name");
         let size_bytes: i64 = row.get("size_bytes");
         let row_estimate: i64 = row.get("row_estimate");
-        let Some(idx) = name_to_index(&name) else {
-            continue;
+        let (from_ts, to_ts) = match real_bounds.get(&name) {
+            Some(range) => *range,
+            None => {
+                let Some(idx) = name_to_index(&name) else {
+                    continue;
+                };
+                partition_range(idx, days)
+            }
         };
-        let (from_ts, to_ts) = partition_range(idx, days);
         out.push(PartitionInfo {
             name,
             from_ts,
@@ -226,6 +292,35 @@ pub async fn drop_covered(
         }
     }
     Ok(candidates)
+}
+
+#[cfg(test)]
+mod bound_parse_tests {
+    use super::parse_partition_bound;
+
+    #[test]
+    fn parses_pg_partition_bound_expr() {
+        let expr = "FOR VALUES FROM ('2026-08-15 00:00:00+00') TO ('2026-09-14 00:00:00+00')";
+        let (from, to) = parse_partition_bound(expr).unwrap();
+        assert_eq!(from.to_rfc3339(), "2026-08-15T00:00:00+00:00");
+        assert_eq!(to.to_rfc3339(), "2026-09-14T00:00:00+00:00");
+        assert_eq!((to - from).num_days(), 30);
+    }
+
+    #[test]
+    fn parses_with_fractional_seconds_and_offset() {
+        let expr = "FOR VALUES FROM ('2026-08-15 00:00:00.5+08') TO ('2026-08-16 00:00:00+08')";
+        let (from, to) = parse_partition_bound(expr).unwrap();
+        assert_eq!(from.to_rfc3339(), "2026-08-14T16:00:00.500+00:00");
+        // 跨度 = 24h - 0.5s（from 带 0.5s 小数）
+        assert_eq!((to - from).num_milliseconds(), 86_400_000 - 500);
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert!(parse_partition_bound("DEFAULT").is_none());
+        assert!(parse_partition_bound("FOR VALUES IN (1)").is_none());
+    }
 }
 
 #[cfg(test)]

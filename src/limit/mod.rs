@@ -152,6 +152,42 @@ pub async fn check_quota(
 
     let period_start = window_start(window, billing_timezone, Utc::now());
 
+    // 成本类配额 fail-closed（发布审阅数据 #5 根治）：窗口内存在「已计价但该币种
+    // 成本缺失」（汇率不可换算）的事件时，quota_usage 计数被低估——block 模式按
+    // 超限阻断；warn 模式仅告警。USD↔CNY 已有内置兜底 6.73，此分支仅在其它币种对
+    // 缺汇率时触发。
+    if matches!(unit.as_str(), "cost_cny" | "cost_usd") {
+        let cost_col = unit.as_str(); // 列名与 unit 值同名（白名单枚举，无注入面）
+        let na_sql = format!(
+            "SELECT count(*) FROM usage_logs \
+             WHERE key_id = $1 AND ts >= $2 AND pricing_source IS NOT NULL AND {cost_col} IS NULL"
+        );
+        match sqlx::query_scalar::<_, i64>(&na_sql)
+            .bind(key.id)
+            .bind(period_start)
+            .fetch_one(pool)
+            .await
+        {
+            Ok(na) if na > 0 => {
+                tracing::warn!(
+                    "成本配额 fail-closed: key={} unit={} 窗口内有 {na} 条已计价但成本缺失事件",
+                    key.id,
+                    unit
+                );
+                if action != "warn" {
+                    return Err(ApiError::RateLimited);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("成本缺失核查失败: key={} err={e}", key.id);
+                if action != "warn" {
+                    return Err(ApiError::Internal("无法确认用量上限状态".to_string()));
+                }
+            }
+        }
+    }
+
     // 查询该窗口的累计用量；无行 = 0
     let usage: Option<Decimal> = match sqlx::query_scalar::<_, Decimal>(
         "SELECT value FROM quota_usage WHERE key_id = $1 AND unit = $2 AND window = $3 AND period_start = $4",

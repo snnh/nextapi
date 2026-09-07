@@ -688,6 +688,20 @@ pub fn sse_convert_stream(
                     for ev in st.parser.finish() {
                         process_convert_frame(&mut st, &ev);
                     }
+                    // 先补协议内失败终止帧再断流（发布审阅 L11：此前客户端只见截断，
+                    // 与 Anthropic/Responses 带内错误帧语义不一致）。
+                    let mut ctx = ConvCtx::new();
+                    match crate::protocol::stream_fail_end(st.to, &mut st.to_state, &mut ctx) {
+                        Ok(events) => {
+                            for ev in events {
+                                st.queue.push_back(Ok(Bytes::from(
+                                    encode_typed_event(&ev).into_bytes(),
+                                )));
+                            }
+                        }
+                        Err(fe) => tracing::warn!("失败终止帧生成失败: {fe}"),
+                    }
+                    log_degraded(&ctx);
                     st.queue
                         .push_back(Err(std::io::Error::other(e.to_string())));
                 }

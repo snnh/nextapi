@@ -182,6 +182,27 @@ pub fn chunk_from_ir(
     }
 }
 
+/// 流传输中断（上游连接错误等）：尽力补发协议内「失败终止帧」（发布审阅 L11）——
+/// Responses → response.failed；Anthropic → message_delta(null stop_reason)+message_stop；
+/// Chat/Gemini → 常规终止（[DONE] / 工具冲刷）。客户端据此区分「失败」与「截断」。
+pub fn stream_fail_end(
+    p: Protocol,
+    st: &mut AnyStreamState,
+    ctx: &mut ConvCtx,
+) -> Result<Vec<String>, ConvertError> {
+    match (p, &mut *st) {
+        (Protocol::OpenaiResponses, AnyStreamState::OpenaiResponses(s)) => {
+            s.mark_failed();
+            responses::stream_end(s, ctx)
+        }
+        (Protocol::Anthropic, AnyStreamState::Anthropic(s)) => {
+            s.mark_failed();
+            anthropic::stream_end(s, ctx)
+        }
+        _ => stream_end(p, st, ctx),
+    }
+}
+
 /// 流结束：产出协议终止事件（OpenAI 为 ["[DONE]"]；Anthropic 为 message_stop 等；Gemini 无）。
 pub fn stream_end(
     p: Protocol,

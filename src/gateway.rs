@@ -104,6 +104,9 @@ struct Outbound {
     /// 实际请求协议（透传 = 入口协议；转换 = 目标协议）。
     protocol: Protocol,
     mode: Mode,
+    /// 请求侧降级头（URL 图片下载失败丢弃等；发布审阅 L9：随 Outbound 传出，
+    /// 合入 X-NextAPI-Degraded 与日志 degraded 字段）。
+    req_degraded: Option<String>,
 }
 
 /// 执行结果。
@@ -599,6 +602,7 @@ async fn build_outbound_any(
             body: out,
             protocol: Protocol::Gemini,
             mode,
+            req_degraded: ctx.degraded_header(),
         });
     }
     build_outbound(entry, mode, body, stream, upstream_model, upstream)
@@ -623,6 +627,7 @@ fn build_outbound(
                 body: b,
                 protocol: entry,
                 mode,
+                req_degraded: None,
             })
         }
         Mode::Convert(target) => {
@@ -641,6 +646,7 @@ fn build_outbound(
                 body: out,
                 protocol: target,
                 mode,
+                req_degraded: ctx.degraded_header(),
             })
         }
     }
@@ -708,8 +714,18 @@ fn error_resp(entry: Protocol, request_id: &str, status: u16, message: &str) -> 
     json_rsp(code, request_id, None, error_from_ir(entry, &ir))
 }
 
-/// 构造 SSE 流式响应。
-fn stream_rsp(request_id: &str, body: Body) -> Response {
+/// 合并请求侧与响应侧降级头（分号连接）。
+fn merge_degraded(a: Option<&str>, b: Option<&str>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(format!("{a};{b}")),
+        (Some(a), None) => Some(a.to_string()),
+        (None, Some(b)) => Some(b.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// 构造 SSE 流式响应（degraded 可选：请求侧降级头，发布审阅 L9）。
+fn stream_rsp(request_id: &str, body: Body, degraded: Option<&str>) -> Response {
     let mut h = HeaderMap::new();
     h.insert(
         header::CONTENT_TYPE,
@@ -725,6 +741,11 @@ fn stream_rsp(request_id: &str, body: Body) -> Response {
         HDR_VERSION,
         header::HeaderValue::from_static(GATEWAY_VERSION),
     );
+    if let Some(d) = degraded {
+        if let Ok(v) = d.parse::<header::HeaderValue>() {
+            h.insert(HDR_DEGRADED, v);
+        }
+    }
     (StatusCode::OK, h, body).into_response()
 }
 
@@ -845,6 +866,7 @@ fn nonstream_success(
     json: serde_json::Value,
     gateway_model: &str,
     request_id: &str,
+    req_degraded: Option<&str>,
 ) -> NonstreamOutcome {
     match mode {
         Mode::Convert(t) => {
@@ -863,15 +885,17 @@ fn nonstream_success(
                             );
                         }
                     }
+                    // 响应头合并请求侧 + 响应侧降级（发布审阅 L9）
+                    let merged = merge_degraded(req_degraded, ctx.degraded_header().as_deref());
                     NonstreamOutcome {
                         response: json_rsp(
                             StatusCode::OK,
                             request_id,
-                            ctx.degraded_header().as_deref(),
+                            merged.as_deref(),
                             out.clone(),
                         ),
                         status: 200,
-                        degraded: !ctx.degraded.is_empty(),
+                        degraded: merged.is_some(),
                         error: None,
                         final_json: Some(out),
                     }
@@ -1442,8 +1466,14 @@ async fn run_gateway(
                     // 用上游原始 JSON 提取 usage（§12.2）；转换前后 usage 语义等价，取原始值最准。
                     let usage =
                         crate::upstream::usage::extract_json_usage(outbound.protocol, &json);
-                    let outcome =
-                        nonstream_success(entry_protocol, outbound.mode, json, &model, &request_id);
+                    let outcome = nonstream_success(
+                        entry_protocol,
+                        outbound.mode,
+                        json,
+                        &model,
+                        &request_id,
+                        outbound.req_degraded.as_deref(),
+                    );
                     let retry_count = (idx + failed_candidates) as i32;
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
@@ -1541,7 +1571,9 @@ async fn run_gateway(
                     ev.upstream_id = Some(upstream.id);
                     ev.protocol_out = outbound.protocol.as_str().to_string();
                     ev.convert_mode = mode_str(outbound.mode).to_string();
-                    ev.degraded = false; // 流式转换的降级项在流内部处理，无法在此捕获，记为 false
+                    // 请求侧降级已知（L9 修复后随 Outbound 传出）；流内帧级降级
+                    // 仍无法在此捕获，但请求侧已能正确记账与透传响应头。
+                    ev.degraded = outbound.req_degraded.is_some();
                     let collect = Arc::new(Mutex::new(StreamCollect {
                         text: String::new(),
                         ttfb_ms: None,
@@ -1559,7 +1591,7 @@ async fn run_gateway(
                         debug_req.clone(),
                         retry_count,
                     );
-                    let mut resp = stream_rsp(&request_id, teed);
+                    let mut resp = stream_rsp(&request_id, teed, outbound.req_degraded.as_deref());
                     add_ratelimit_headers(&mut resp, rl_status);
                     return record(&state.metrics, &lbl, start, false, resp);
                 }
@@ -2770,6 +2802,15 @@ mod tests {
         // 缺失 → 400
         assert!(extract_model(Entry::Anthropic, &json!({}), None).is_err());
         assert!(extract_model(Entry::Gemini, &body, None).is_err());
+    }
+
+    #[test]
+    #[test]
+    fn merge_degraded_combines() {
+        assert_eq!(merge_degraded(Some("a"), Some("b")).as_deref(), Some("a;b"));
+        assert_eq!(merge_degraded(Some("a"), None).as_deref(), Some("a"));
+        assert_eq!(merge_degraded(None, Some("b")).as_deref(), Some("b"));
+        assert_eq!(merge_degraded(None, None), None);
     }
 
     #[test]

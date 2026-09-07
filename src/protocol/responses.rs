@@ -1693,6 +1693,16 @@ pub fn chunk_from_ir(
 
 /// 流终止：若未发过终止帧则补发 completed（无 usage）；否则返回空。
 /// 注意：本函数仅在「上游流正常 EOF 但无 finish 帧」时触发（上游连接错误走
+impl StreamState {
+    /// 流传输中断（上游连接错误）：标记 failed，使 stream_end 发 response.failed
+    /// 而非 completed（发布审阅 L11）。
+    pub fn mark_failed(&mut self) {
+        if !self.completed {
+            self.pending_finish = Some("failed".into());
+        }
+    }
+}
+
 /// 流错误通道，不会到这里）；补发 completed 是对截断流的务实兜底。
 pub fn stream_end(st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
     if st.completed {
@@ -2289,6 +2299,35 @@ mod tests {
             completed["response"]["output"][0]["id"].as_str().unwrap(),
             added_id
         );
+    }
+
+    /// 发布审阅 L11：流传输中断 mark_failed → stream_end 发 response.failed（非 completed）。
+    #[test]
+    fn stream_fail_end_emits_failed() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let ch = IrChunk {
+            id: "r".into(),
+            model: "m".into(),
+            created: 1,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: Some("hi".into()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            ..Default::default()
+        };
+        chunk_from_ir(&ch, &mut st, &mut c).unwrap();
+        st.mark_failed();
+        let end = stream_end(&mut st, &mut c).unwrap();
+        let v: Value = serde_json::from_str(&end[0]).unwrap();
+        assert_eq!(v["type"], "response.failed");
+        assert_eq!(v["response"]["status"], "failed");
+        // 重复调用不再发
+        assert!(stream_end(&mut st, &mut c).unwrap().is_empty());
     }
 
     /// 发布审阅 H1 回归：OpenAI include_usage 模式——finish 帧 usage=null（入口已滤除），

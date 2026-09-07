@@ -1438,6 +1438,15 @@ pub fn chunk_from_ir(
     Ok(events)
 }
 
+impl StreamState {
+    /// 流传输中断（上游连接错误）：标记 failed（发布审阅 L11）。
+    pub fn mark_failed(&mut self) {
+        if !self.message_delta_emitted {
+            self.pending_finish = Some("failed".into());
+        }
+    }
+}
+
 /// 流终止：补全终止序列（review P5：此前只发 message_stop，流截断时打开的块与
 /// message_delta 缺失，事件序列不完整、下游解析器可能挂起）。
 pub fn stream_end(st: &mut StreamState, _ctx: &mut ConvCtx) -> Result<Vec<String>, ConvertError> {
@@ -1446,10 +1455,11 @@ pub fn stream_end(st: &mut StreamState, _ctx: &mut ConvCtx) -> Result<Vec<String
         events.push(event_str(ev)?);
     }
     if st.message_start_emitted && !st.message_delta_emitted {
-        if let Some(fr) = st.pending_finish.take() {
-            events.push(event_str(message_delta_event(&fr, st))?);
-        } else {
-            events.push(event_str(message_delta_end_event(st))?);
+        match st.pending_finish.take() {
+            // failed 无合法 stop_reason → null（与 chunk 路径 failed 分支一致）
+            Some(fr) if fr == "failed" => events.push(event_str(message_delta_end_event(st))?),
+            Some(fr) => events.push(event_str(message_delta_event(&fr, st))?),
+            None => events.push(event_str(message_delta_end_event(st))?),
         }
         st.message_delta_emitted = true;
     }
@@ -1512,6 +1522,47 @@ mod stream_usage_tests {
         assert_eq!(delta["usage"]["input_tokens"], 11);
         assert_eq!(delta["usage"]["output_tokens"], 7);
         assert_eq!(delta["delta"]["stop_reason"], "end_turn");
+    }
+
+    /// 发布审阅 L11：流传输中断 mark_failed → message_delta(stop_reason=null) + message_stop。
+    #[test]
+    fn stream_fail_end_emits_null_stop_delta() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let ch = IrChunk {
+            id: "msg".into(),
+            model: "claude".into(),
+            created: 1,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: Some("hi".into()),
+                    ..Default::default()
+                },
+                finish_reason: None,
+            }],
+            ..Default::default()
+        };
+        chunk_from_ir(&ch, &mut st, &mut c).unwrap();
+        st.mark_failed();
+        let end = stream_end(&mut st, &mut c).unwrap();
+        let types: Vec<String> = end
+            .iter()
+            .map(|e| {
+                serde_json::from_str::<serde_json::Value>(e).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(types.iter().any(|t| t == "message_delta"));
+        assert!(types.iter().any(|t| t == "message_stop"));
+        let delta = end
+            .iter()
+            .map(|e| serde_json::from_str::<serde_json::Value>(e).unwrap())
+            .find(|v| v["type"] == "message_delta")
+            .unwrap();
+        assert!(delta["delta"]["stop_reason"].is_null());
     }
 
     /// 无 usage 尾帧（未开 include_usage）：stream_end 兜底发 message_delta。
