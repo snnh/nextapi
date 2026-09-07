@@ -346,11 +346,32 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("监听地址非法 {listen}: {e}"))?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(%addr, "NextAPI 已启动");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    // 优雅关闭：close 后 await writer 退出（超时 10s，容忍后台排空）。
+    // 优雅关闭（发布审阅运维 P1-2）：HTTP drain 无上限会等所有活动连接
+    // （含最长 600s 的上游 SSE），超过编排宽限被 SIGKILL 时日志全丢。
+    // 信号到达即先 close 日志队列（此后新事件按「队列关闭」语义处理），
+    // drain 设 25s 上限（与 docker/K8s 默认 10-30s 宽限对齐），超时放弃残留连接。
+    let drain_notify = Arc::new(tokio::sync::Notify::new());
+    // WithGracefulShutdown 实现的是 IntoFuture，需显式转换
+    let serve =
+        std::future::IntoFuture::into_future(axum::serve(listener, app).with_graceful_shutdown({
+            let n = drain_notify.clone();
+            async move { n.notified().await }
+        }));
+    tokio::pin!(serve);
+    tokio::select! {
+        res = &mut serve => { res?; }
+        _ = shutdown_signal() => {
+            info!("收到关闭信号：关闭日志队列并开始连接 drain（上限 25s）");
+            log_sink_for_close.close();
+            drain_notify.notify_one();
+            if tokio::time::timeout(Duration::from_secs(25), &mut serve).await.is_err() {
+                warn!("连接 drain 超过 25s，放弃残留连接（活动 SSE 被中断）");
+            }
+        }
+    }
+    // 等待游离写入任务（溢出 WAL/直写）落地，再排空 writer。
     log_sink_for_close.close();
+    log_sink_for_close.wait_pending().await;
     if let Some(handle) = writer_handle {
         let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
     }

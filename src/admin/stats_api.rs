@@ -65,7 +65,14 @@ async fn summary(
     let tz = state.hot.load().gateway.billing_timezone.clone();
     let f = build_stats_filter(&q, &tz)?;
     let currency = resolve_currency(&q, &state)?;
-    let s = with_timeout(stats::summary(&state.db, &f, &currency)).await?;
+    let mut tx = state.db.begin().await?;
+    // 服务端 statement_timeout（事务内 SET LOCAL，结束自动复位）——客户端 30s
+    // 超时只断应用侧，服务端慢查询会继续占用连接（发布审阅数据批 #7）。
+    sqlx::query("SET LOCAL statement_timeout = '31s'")
+        .execute(&mut *tx)
+        .await?;
+    let s = with_timeout(stats::summary(&mut tx, &f, &currency)).await?;
+    let _ = tx.rollback().await;
     // 展示层舍入：仅对 cost_* 字段做 round_dp（DB 原样存）。
     let precision = state.hot.load().gateway.display_precision;
     let mut v = serde_json::json!(s);
@@ -84,14 +91,19 @@ async fn series(
     let granularity = resolve_granularity(&q, &f)?;
     let dimension = validate_dimension(q.dimension.as_deref())?;
     let currency = resolve_currency(&q, &state)?;
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '31s'")
+        .execute(&mut *tx)
+        .await?;
     let points = with_timeout(stats::series(
-        &state.db,
+        &mut tx,
         &f,
         &granularity,
         dimension,
         &currency,
     ))
     .await?;
+    let _ = tx.rollback().await;
     // 展示层舍入：仅对成本数值字段做 round_dp（DB 原样存）。
     let precision = state.hot.load().gateway.display_precision;
     let mut v = serde_json::json!({ "currency": currency, "points": points });

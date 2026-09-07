@@ -11,7 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -147,7 +147,11 @@ fn cost_col(display_currency: &str) -> &'static str {
 }
 
 /// 汇总：恒用明细源（usage_logs），需全维度过滤 + percentile_cont。
-pub async fn summary(pool: &PgPool, f: &StatsFilter, display_currency: &str) -> ApiResult<Summary> {
+pub async fn summary(
+    conn: &mut sqlx::PgConnection,
+    f: &StatsFilter,
+    display_currency: &str,
+) -> ApiResult<Summary> {
     let cc = cost_col(display_currency);
     // cost_display = 指定币种成本合计；cost_na_count = 有成本另一侧但指定币种列为 NULL 的行数。
     let mut qb = QueryBuilder::<Postgres>::new(format!(
@@ -168,7 +172,7 @@ pub async fn summary(pool: &PgPool, f: &StatsFilter, display_currency: &str) -> 
     ));
     push_stats_where(&mut qb, f);
 
-    let row: SummaryRow = qb.build_query_as().fetch_one(pool).await?;
+    let row: SummaryRow = qb.build_query_as().fetch_one(&mut *conn).await?;
     let requests = row.requests;
     let errors = row.errors;
     // 无请求时视为 100% 成功（无失败即成功）。
@@ -200,7 +204,7 @@ pub async fn summary(pool: &PgPool, f: &StatsFilter, display_currency: &str) -> 
 /// 序列：granularity 为 "hour"|"day"，dimension 为 None|"model"|"key"|"upstream"|"protocol"。
 /// 数据源由 `pick_source` 决定，但 usage_hourly 无法表达 key/upstream/protocol 过滤，故强制回退明细源。
 pub async fn series(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     f: &StatsFilter,
     granularity: &str,
     dimension: Option<&str>,
@@ -222,9 +226,16 @@ pub async fn series(
     }
 
     if src == "hourly" {
-        series_hourly(pool, f, g, display_currency).await
+        series_hourly(
+            &mut *conn,
+            f,
+            g,
+            display_currency,
+            matches!(dimension, Some("model")),
+        )
+        .await
     } else {
-        series_detail(pool, f, g, dimension, display_currency).await
+        series_detail(&mut *conn, f, g, dimension, display_currency).await
     }
 }
 
@@ -234,15 +245,28 @@ fn non_empty(s: Option<&str>) -> bool {
 
 /// 汇总源序列：usage_hourly 聚合，bucket = date_trunc(granularity, hour)，dimension 恒 model。
 async fn series_hourly(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     f: &StatsFilter,
     g: &str,
     display_currency: &str,
+    dimension_model: bool,
 ) -> ApiResult<Vec<SeriesPoint>> {
     let cc = cost_col(display_currency);
+    // dimension=None（总量趋势）：只按时间桶聚合，输出恒 'all'——
+    // 此前恒按 model 分组，总量趋势被拆成多行（发布审阅数据批 #2）。
+    let dim_sql = if dimension_model {
+        "model AS dimension,"
+    } else {
+        "'all' AS dimension,"
+    };
+    let group_sql = if dimension_model {
+        format!(" GROUP BY date_trunc('{g}', hour), model ORDER BY 1, 2")
+    } else {
+        format!(" GROUP BY date_trunc('{g}', hour) ORDER BY 1")
+    };
     let mut qb = QueryBuilder::<Postgres>::new(format!(
         "SELECT date_trunc('{g}', hour) AS hour, \
-         model AS dimension, \
+         {dim_sql} \
          sum(requests)::bigint AS requests, \
          sum(errors)::bigint AS errors, \
          sum(prompt_tokens)::bigint AS prompt_tokens, \
@@ -259,11 +283,9 @@ async fn series_hourly(
         qb.push(" AND model = ").push_bind(m.clone());
     }
     // GROUP BY 用实际表达式避免 `hour` 别名与输入列名歧义；ORDER BY 用序号引用输出列。
-    qb.push(format!(
-        " GROUP BY date_trunc('{g}', hour), model ORDER BY 1, 2"
-    ));
+    qb.push(group_sql);
 
-    let rows: Vec<SeriesRow> = qb.build_query_as().fetch_all(pool).await?;
+    let rows: Vec<SeriesRow> = qb.build_query_as().fetch_all(&mut *conn).await?;
     Ok(rows.into_iter().map(SeriesPoint::from).collect())
 }
 
@@ -271,7 +293,7 @@ async fn series_hourly(
 /// （tz 参数化传 billing_tz；回转为 timestamptz 以映射 DateTime<Utc>）。
 /// 维度从白名单取列名/表达式：key→key_id::text，upstream→upstream_id::text，protocol→protocol_in。
 async fn series_detail(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     f: &StatsFilter,
     g: &str,
     dimension: Option<&str>,
@@ -320,7 +342,7 @@ async fn series_detail(
     }
     qb.push(" ORDER BY bucket, dimension");
 
-    let rows: Vec<SeriesRow> = qb.build_query_as().fetch_all(pool).await?;
+    let rows: Vec<SeriesRow> = qb.build_query_as().fetch_all(&mut *conn).await?;
     Ok(rows.into_iter().map(SeriesPoint::from).collect())
 }
 

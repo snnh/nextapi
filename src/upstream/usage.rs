@@ -429,7 +429,9 @@ mod tests {
         assert_eq!(meta["max_tokens"], json!(100));
         // 顶层写法不识别（此前误读）
         let v2 = json!({ "model": "gemini-pro", "maxOutputTokens": 100 });
-        assert!(request_params_meta(Protocol::Gemini, &v2).get("max_tokens").is_none());
+        assert!(request_params_meta(Protocol::Gemini, &v2)
+            .get("max_tokens")
+            .is_none());
     }
 
     #[test]

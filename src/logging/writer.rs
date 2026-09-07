@@ -121,10 +121,22 @@ pub async fn run_writer(
     }
 
     // rx 关闭：排空剩余批做最后 flush 再退出（PLAN 关闭流程）。
-    if !batch.is_empty() {
+    // flush 双失败（DB+WAL 均不可写）时批次保留在内存——此处重试 3 轮
+    // （退避由 flush 内部负责，1+2+4≈7s，落在主流程 10s 等待窗口内），
+    // 仍失败才报错丢弃（发布审阅数据批 #4b：此前单轮即静默丢批）。
+    let mut drain_attempts = 0;
+    while !batch.is_empty() && drain_attempts < 3 {
+        drain_attempts += 1;
         flush(&pool, &mut batch, &hot, &wal, &mut backoff).await;
-        depth.set(rx.len() as i64);
     }
+    if !batch.is_empty() {
+        tracing::error!(
+            "优雅关闭排空失败，丢弃 {} 条日志（DB 与 WAL 均不可写）",
+            batch.len()
+        );
+        batch.clear();
+    }
+    depth.set(rx.len() as i64);
 }
 
 #[cfg(test)]

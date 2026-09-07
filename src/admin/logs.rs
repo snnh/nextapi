@@ -118,10 +118,17 @@ async fn list_logs(
     let f = build_log_filter(&q, &tz)?;
     let offset = ((page as i64) - 1) * (page_size as i64);
 
+    // 事务 + SET LOCAL：服务端 statement_timeout 与客户端 30s 超时对齐，
+    // 超时后服务端查询被取消而非继续占用连接（发布审阅数据批 #7）。
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '31s'")
+        .execute(&mut *tx)
+        .await?;
+
     // 总数（与列表共用同一过滤条件；M11.2：30s 查询超时治理）
     let mut count_qb = QueryBuilder::<Postgres>::new("SELECT count(*) FROM usage_logs WHERE");
     push_log_where(&mut count_qb, &f);
-    let total: i64 = with_log_timeout(count_qb.build_query_scalar().fetch_one(&state.db)).await??;
+    let total: i64 = with_log_timeout(count_qb.build_query_scalar().fetch_one(&mut *tx)).await??;
 
     // 数据页
     let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {LOG_COLS} FROM usage_logs WHERE"));
@@ -130,7 +137,8 @@ async fn list_logs(
         .push_bind(page_size as i64);
     qb.push(" OFFSET ").push_bind(offset);
     let rows: Vec<UsageLogRow> =
-        with_log_timeout(qb.build_query_as().fetch_all(&state.db)).await??;
+        with_log_timeout(qb.build_query_as().fetch_all(&mut *tx)).await??;
+    let _ = tx.rollback().await;
 
     let snap = state.cache.snapshot();
     let items: Vec<LogItem> = rows
@@ -157,13 +165,18 @@ async fn export_csv(
     let tz = state.hot.load().gateway.billing_timezone.clone();
     let f = build_log_filter(&q, &tz)?;
 
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '31s'")
+        .execute(&mut *tx)
+        .await?;
     // 多查一行以判断是否截断
     let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {LOG_COLS} FROM usage_logs WHERE"));
     push_log_where(&mut qb, &f);
     qb.push(" ORDER BY ts DESC, id DESC LIMIT ")
         .push_bind(LIMIT as i64 + 1);
     let rows: Vec<UsageLogRow> =
-        with_log_timeout(qb.build_query_as().fetch_all(&state.db)).await??;
+        with_log_timeout(qb.build_query_as().fetch_all(&mut *tx)).await??;
+    let _ = tx.rollback().await;
 
     let truncated = rows.len() > LIMIT;
     let slice = if truncated { &rows[..LIMIT] } else { &rows[..] };
@@ -222,6 +235,21 @@ async fn cleanup_logs(
     let days = state.hot.load().gateway.log_partition_days;
     let dropped = partition::drop_covered(&state.db, before, days, req.dry_run).await?;
 
+    // 同步清理滚动聚合表：usage_hourly 无分区，不随 DROP 删除——否则清理后
+    // summary（明细源）与 series（hourly 源）口径背离（发布审阅数据批 #3）。
+    let hourly_deleted: u64 = if req.dry_run {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM usage_hourly WHERE hour < $1")
+            .bind(before)
+            .fetch_one(&state.db)
+            .await? as u64
+    } else {
+        sqlx::query("DELETE FROM usage_hourly WHERE hour < $1")
+            .bind(before)
+            .execute(&state.db)
+            .await?
+            .rows_affected()
+    };
+
     // 非 dry_run 且有删除时写审计
     if !req.dry_run && !dropped.is_empty() {
         let summaries: Vec<serde_json::Value> = dropped
@@ -245,9 +273,12 @@ async fn cleanup_logs(
         .await?;
     }
 
-    Ok(Json(
-        serde_json::json!({ "dry_run": req.dry_run, "dropped": dropped }),
-    ))
+    Ok(Json(serde_json::json!({
+        "dry_run": req.dry_run,
+        "dropped": dropped,
+        // dry_run 时为待删行数预估；实际执行时为已删行数
+        "hourly_rows": hourly_deleted,
+    })))
 }
 
 /// 解析查询参数为过滤条件（from_ts/to_ts 缺省 = billing_timezone 当天 00:00 → 现在）。

@@ -148,6 +148,9 @@ fn write_all(path: &Path, data: &[u8]) -> ApiResult<()> {
         .map_err(ApiError::internal)?;
     f.write_all(data).map_err(ApiError::internal)?;
     f.flush().map_err(ApiError::internal)?;
+    // fsync：flush 只到 page cache，主机掉电会丢尾字节——WAL 的定位就是
+    // 崩溃兜底，必须落盘（发布审阅数据批 #4c；该路径低频，开销可接受）。
+    f.sync_all().map_err(ApiError::internal)?;
     Ok(())
 }
 

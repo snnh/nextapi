@@ -87,6 +87,9 @@ pub const DEBUG_MAX_BYTES: usize = 64 * 1024;
 #[derive(Clone)]
 pub struct LogSink {
     queue: Arc<Mutex<Option<mpsc::Sender<LogEvent>>>>,
+    /// 游离写入任务（队列满→WAL / log_async=false 直写）句柄，优雅关闭时 join，
+    /// 防止 close 后任务随 runtime 丢弃导致溢出事件未落 WAL（发布审阅数据批 #4a）。
+    pending: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     pool: PgPool,
     wal: wal::WalWriter,
     overflows: prometheus_client::metrics::counter::Counter,
@@ -108,6 +111,7 @@ impl LogSink {
     ) -> Self {
         Self {
             queue: Arc::new(Mutex::new(queue)),
+            pending: Arc::new(Mutex::new(Vec::new())),
             pool,
             wal,
             overflows,
@@ -131,12 +135,16 @@ impl LogSink {
                     // 队列满：先写 WAL 兜底，内存条目丢弃（绝不阻塞主链路）。
                     self.overflows.inc();
                     let wal = self.wal.clone();
-                    tokio::spawn(async move {
+                    let h = tokio::spawn(async move {
                         let batch = [ev];
                         if let Err(e) = wal.append(&batch).await {
                             tracing::warn!("日志溢出写 WAL 失败，数据丢弃: {e}");
                         }
                     });
+                    self.pending
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .push(h);
                 }
                 Err(mpsc::error::TrySendError::Closed(ev)) => {
                     let _ = ev;
@@ -149,7 +157,7 @@ impl LogSink {
                 let wal = self.wal.clone();
                 let billing_tz = self.billing_tz.clone();
                 let fx_stale_max_minutes = self.fx_stale_max_minutes;
-                tokio::spawn(async move {
+                let h = tokio::spawn(async move {
                     let batch = [ev];
                     if let Err(e) =
                         insert_batch(&pool, &batch, &billing_tz, fx_stale_max_minutes).await
@@ -160,6 +168,10 @@ impl LogSink {
                         }
                     }
                 });
+                self.pending
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(h);
             }
         }
     }
@@ -169,6 +181,15 @@ impl LogSink {
         let mut queue = self.queue.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(tx) = queue.take() {
             drop(tx);
+        }
+    }
+
+    /// 等待全部游离写入任务完成（close 之后、进程退出之前调用）。
+    pub async fn wait_pending(&self) {
+        let handles: Vec<_> =
+            std::mem::take(&mut *self.pending.lock().unwrap_or_else(|p| p.into_inner()));
+        for h in handles {
+            let _ = h.await;
         }
     }
 
