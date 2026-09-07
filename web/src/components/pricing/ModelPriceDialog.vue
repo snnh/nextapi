@@ -2,10 +2,11 @@
   <el-dialog
     v-model="visible"
     title="按模型定价"
-    width="920px"
+    class="dlg-wide long-form"
     :close-on-click-modal="false"
     destroy-on-close
     top="4vh"
+    :before-close="dirtyGuard.confirmClose"
   >
     <el-form label-width="110px" @submit.prevent>
       <div class="head-grid">
@@ -15,7 +16,11 @@
           </el-select>
         </el-form-item>
         <el-form-item label="模型 ID" required>
-          <el-input v-model="modelId" placeholder="如 gpt-4o / gemini-2.0-flash" clearable @blur="onPairChange" />
+          <el-input v-model="modelId" placeholder="如 gpt-4o / gemini-2.0-flash" clearable @blur="onPairChange">
+            <template #suffix>
+              <el-icon v-if="existingLoading" class="spin-icon"><Loading /></el-icon>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="币种">
           <el-radio-group v-model="currency">
@@ -86,7 +91,7 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="onCancel">取消</el-button>
       <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
     </template>
   </el-dialog>
@@ -94,9 +99,11 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading } from '@element-plus/icons-vue'
 import { pricingApi } from '@/api'
 import { errMsg } from '@/api/http'
+import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import { CURRENCIES, UNIT_LABEL } from '@/utils/consts'
 import { fmtMoney } from '@/utils/format'
 import type { PriceRuleIn, PriceUnit, StatsCurrency, SuggestGroup, UpstreamOut } from '@/api/types'
@@ -130,8 +137,32 @@ function blankUnits(): UnitState[] {
 }
 const units = reactive<UnitState[]>(blankUnits())
 
+// 模型 ID 失焦加载已有规则时的局部 loading
+const existingLoading = ref(false)
+
+// —— 脏表单守卫（#13）：X/遮罩/Esc（before-close）与取消按钮都需要二次确认 ——
+const dirtyGuard = useDirtyGuard(dialogSnapshot)
+
+/** 快照当前编辑态：打开回填后、加载已有规则后作为基线 */
+function dialogSnapshot() {
+  return {
+    upstreamId: upstreamId.value,
+    modelId: modelId.value,
+    currency: currency.value,
+    contextBasis: contextBasis.value,
+    units: units.map((u) => ({
+      unit: u.unit,
+      enabled: u.enabled,
+      base_price: u.base_price,
+      segments: u.segments,
+      existingId: u.existingId,
+    })),
+  }
+}
+
 async function loadExisting() {
   if (!upstreamId.value || !modelId.value.trim()) return
+  existingLoading.value = true
   try {
     const rules = await pricingApi.list(upstreamId.value, modelId.value.trim())
     for (const u of units) {
@@ -149,6 +180,8 @@ async function loadExisting() {
     }
   } catch (e) {
     ElMessage.error(errMsg(e))
+  } finally {
+    existingLoading.value = false
   }
 }
 
@@ -163,14 +196,17 @@ async function loadSuggest() {
   }
 }
 
-function onPairChange() {
-  loadExisting()
+// 上游/模型变化（失焦时）：先回填已有规则，再取参考，最后重打脏基线
+async function onPairChange() {
+  await loadExisting()
   loadSuggest()
+  dirtyGuard.snapshot()
 }
 
 function adoptGroup(g: SuggestGroup, unit: string) {
   const targets = unit === '__all__' ? g.rules : g.rules.filter((r) => r.unit === unit)
-  let n = 0
+  const curBefore = currency.value
+  const adopted: string[] = []
   for (const r of targets) {
     const u = units.find((x) => x.unit === r.unit)
     if (!u) continue
@@ -178,12 +214,21 @@ function adoptGroup(g: SuggestGroup, unit: string) {
     u.base_price = Number(r.base_price)
     u.segments = (r.segments ?? []).map(priceToSegForm)
     currency.value = r.currency
-    n++
+    // #12：记录被覆盖的单位及字段，便于提示
+    const segCount = (r.segments ?? []).length
+    const segNote = segCount ? `分段 ${segCount} 段` : '分段清空'
+    adopted.push(`${UNIT_LABEL(u.unit)}：基准价 ${fmtMoney(r.base_price)} ${r.currency}、${segNote}`)
   }
-  if (n) ElMessage.info(`已填充 ${n} 个单位的价格，请核对后保存`)
+  if (!adopted.length) return
+  // #12：成功后 ElMessage 列出被覆盖的字段（币种/单位/基准价/分段）
+  const notes = [`已采用「${g.upstream_name}」：${adopted.join('；')}`]
+  if (currency.value !== curBefore) notes.push(`币种 ${curBefore} → ${currency.value}`)
+  notes.push('请核对后保存')
+  ElMessage.info(notes.join('；'))
 }
 
 function open(prefill?: { upstream_id?: string; model_id?: string }) {
+  dirtyGuard.disarm()
   upstreamId.value = prefill?.upstream_id ?? ''
   modelId.value = prefill?.model_id ?? ''
   currency.value = 'CNY'
@@ -191,7 +236,19 @@ function open(prefill?: { upstream_id?: string; model_id?: string }) {
   suggestGroups.value = []
   units.splice(0, units.length, ...blankUnits())
   visible.value = true
-  if (upstreamId.value && modelId.value) onPairChange()
+  if (upstreamId.value && modelId.value) {
+    onPairChange()
+  } else {
+    // 无预填：直接以空表单为基线
+    dirtyGuard.snapshot()
+  }
+}
+
+// 取消按钮：脏则先确认，避免误关丢修改
+function onCancel() {
+  dirtyGuard.confirmThen(() => {
+    visible.value = false
+  })
 }
 
 async function submit() {
@@ -203,6 +260,29 @@ async function submit() {
       return ElMessage.warning(`「${UNIT_LABEL(u.unit)}」已启用，请填写大于 0 的单价`)
     }
   }
+
+  // #11：本次保存不会产生任何创建/更新/删除 → 提示而非静默成功
+  const pendingCreated = units.filter((u) => u.enabled && !u.existingId).length
+  const pendingUpdated = units.filter((u) => u.enabled && !!u.existingId).length
+  const pendingRemoved = units.filter((u) => !u.enabled && !!u.existingId).length
+  if (!pendingCreated && !pendingUpdated && !pendingRemoved) {
+    ElMessage.info('未做任何修改')
+    return
+  }
+
+  // #8：取消勾选 = 删除已有规则，需二次确认
+  if (pendingRemoved) {
+    try {
+      await ElMessageBox.confirm(`将删除 ${pendingRemoved} 个单位的已有价格规则，确认？`, '删除已有规则', {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+      })
+    } catch {
+      return
+    }
+  }
+
   saving.value = true
   let created = 0
   let updated = 0
@@ -233,6 +313,7 @@ async function submit() {
       }
     }
     ElMessage.success(`已保存：新建 ${created} / 更新 ${updated} / 删除 ${removed}`)
+    dirtyGuard.disarm()
     visible.value = false
     emit('saved')
   } catch (e) {
@@ -308,6 +389,18 @@ defineExpose({ open })
 .unit-off {
   padding: 10px 0 4px;
   text-align: center;
+}
+/* 模型 ID 输入框 suffix 局部加载旋转图标 */
+.spin-icon {
+  animation: mpd-spin 1.1s linear infinite;
+}
+@keyframes mpd-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 @media (max-width: 768px) {
   .head-grid,

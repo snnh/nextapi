@@ -2,11 +2,12 @@
   <el-dialog
     v-model="visible"
     :title="isEdit ? '编辑价格规则' : '新建价格规则'"
-    width="820px"
+    class="dlg-wide long-form"
     :close-on-click-modal="false"
+    :before-close="handleBeforeClose"
     destroy-on-close
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" @submit.prevent>
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" @submit.prevent @keyup.enter="onFormKeyEnter">
       <el-form-item label="上游" prop="upstream_id">
         <el-select v-model="form.upstream_id" filterable placeholder="请选择上游" style="width: 100%">
           <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
@@ -55,16 +56,19 @@
             <div v-for="(d, di) in form.dimensions" :key="di" class="dim-row">
               <el-input v-model="d.key" placeholder="维度键" class="dim-key" clearable />
               <el-input v-model="d.value" placeholder="维度值" class="dim-value" clearable />
-              <el-button size="small" :icon="Delete" @click="removeDim(di)" />
+              <el-button size="small" :icon="Delete" aria-label="删除维度" @click="removeDim(di)" />
             </div>
-            <el-button size="small" :icon="Plus" @click="addDim">新增维度</el-button>
+            <div class="dim-actions">
+              <el-button size="small" :icon="Plus" @click="addDim">新增维度</el-button>
+              <span class="hint">纯数字维度值会按数值匹配（如 1024 → 1024）；需按字符串匹配时请避免纯数字输入。</span>
+            </div>
           </div>
         </el-form-item>
       </template>
 
       <el-form-item label="分段" prop="segments">
         <div style="width: 100%">
-          <SegmentsEditor v-model="form.segments" :unit="form.unit" />
+          <SegmentsEditor ref="segEditorRef" v-model="form.segments" :unit="form.unit" />
         </div>
       </el-form-item>
 
@@ -104,7 +108,7 @@
       </el-form-item>
 
       <el-divider content-position="left">猜你想用</el-divider>
-      <div style="margin-left: 120px; margin-bottom: 16px">
+      <div class="form-indent" style="margin-bottom: 16px">
         <SuggestCard
           :upstream="form.upstream_id"
           :model="form.model_id"
@@ -114,7 +118,7 @@
       </div>
 
       <el-divider content-position="left">倍率试算</el-divider>
-      <el-collapse v-model="calcOpen" style="margin-left: 120px">
+      <el-collapse v-model="calcOpen" class="form-indent">
         <el-collapse-item name="calc">
           <template #title>倍率试算器</template>
           <MultiplierCalc @fill="fillBasePrice" />
@@ -123,7 +127,7 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="onCancel">取消</el-button>
       <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
     </template>
   </el-dialog>
@@ -137,6 +141,7 @@ import dayjs from 'dayjs'
 import { pricingApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { CURRENCIES, DIMENSION_KEY_HINTS, UNIT_OPTIONS } from '@/utils/consts'
+import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import type { PriceRuleIn, PriceRuleRow, UpstreamOut } from '@/api/types'
 import SegmentsEditor from './SegmentsEditor.vue'
 import SuggestCard from './SuggestCard.vue'
@@ -159,6 +164,10 @@ const isEdit = ref(false)
 const editingId = ref('')
 const calcOpen = ref<string[]>([])
 const formRef = ref<FormInstance>()
+const segEditorRef = ref<InstanceType<typeof SegmentsEditor>>()
+
+// 脏表单防丢守卫：Esc/X/遮罩走 confirmClose，取消按钮走 confirmThen，保存成功后 disarm
+const { snapshot, disarm, confirmClose, confirmThen } = useDirtyGuard(() => form)
 
 function defaultForm(): RuleFormState {
   return {
@@ -191,7 +200,7 @@ function validateEffective(_r: unknown, _v: unknown, cb: (e?: Error) => void) {
 
 const rules: FormRules = {
   upstream_id: [{ required: true, message: '请选择上游', trigger: 'change' }],
-  model_id: [{ required: true, message: '请输入 model_id', trigger: 'blur' }],
+  model_id: [{ required: true, message: '请输入模型 ID', trigger: 'blur' }],
   base_price: [
     {
       validator: (_r, v: number | null, cb) => {
@@ -232,6 +241,7 @@ function open(rule?: PriceRuleRow, prefill?: { upstream_id?: string; model_id?: 
   }
   Object.assign(form, base)
   visible.value = true
+  snapshot()
 }
 
 function addDim() {
@@ -254,6 +264,73 @@ function adoptRule(rule: PriceRuleRow) {
 
 function fillBasePrice(v: number) {
   form.base_price = v
+}
+
+/** 分段校验发现的问题：idx 为分段下标（0 起），msg 为带具体分段序号的中文提示 */
+interface SegIssue {
+  idx: number
+  msg: string
+}
+
+/** 提交前统一校验各分段：空价 / 死段 / 不完整时间窗口。返回所有问题，空数组即通过 */
+function findSegmentIssues(): SegIssue[] {
+  const issues: SegIssue[] = []
+  form.segments.forEach((seg, i) => {
+    const n = i + 1
+    const name = seg.name?.trim()
+    const loc = name ? `第 ${n} 段「${name}」` : `第 ${n} 段`
+    // 空价不允许：这里拦截，避免 buildBody → segToPrice 把空价静默转 "0" 落库
+    const p = seg.price
+    if (p === null || p === undefined || Number.isNaN(Number(p)) || String(p).trim() === '') {
+      issues.push({ idx: i, msg: `${loc}：单价必填` })
+    }
+    // 死段：min_prompt_tokens > max_prompt_tokens，区间为空永远不命中
+    if (
+      seg.min_prompt_tokens !== null &&
+      seg.min_prompt_tokens !== undefined &&
+      seg.max_prompt_tokens !== null &&
+      seg.max_prompt_tokens !== undefined &&
+      seg.min_prompt_tokens > seg.max_prompt_tokens
+    ) {
+      issues.push({
+        idx: i,
+        msg: `${loc}：上下文下限 ${seg.min_prompt_tokens} > 上限 ${seg.max_prompt_tokens}，为永不命中的死段`,
+      })
+    }
+    // 不完整时间窗口：start/end 只填了一边
+    seg.windows.forEach((w, wi) => {
+      const s = (w.start ?? '').trim()
+      const e = (w.end ?? '').trim()
+      if ((s && !e) || (!s && e)) {
+        issues.push({
+          idx: i,
+          msg: `${loc}：第 ${wi + 1} 个时间窗口只填写了「${s ? '开始' : '结束'}」，开始与结束需成对填写`,
+        })
+      }
+    })
+  })
+  return issues
+}
+
+/** 弹窗关闭（X / Esc / 遮罩）经脏表单守卫放行 */
+function handleBeforeClose(done: () => void) {
+  confirmClose(done)
+}
+
+/** 取消按钮：脏则二次确认后关闭 */
+function onCancel() {
+  confirmThen(() => {
+    visible.value = false
+  })
+}
+
+/** 表单内按 Enter 触发保存；排除 el-select 展开选择与 textarea 换行等输入场景 */
+function onFormKeyEnter(e: KeyboardEvent) {
+  const target = e.target as HTMLElement | null
+  if (!target) return
+  if (target.closest('.el-select')) return
+  if (target.tagName === 'TEXTAREA') return
+  submit()
 }
 
 function buildBody(): PriceRuleIn {
@@ -292,6 +369,13 @@ async function submit() {
   } catch {
     return
   }
+  // 分段一致性校验（空价 / 死段 / 不完整时间窗口）统一在提交前执行，失败不落库并滚动定位
+  const segIssues = findSegmentIssues()
+  if (segIssues.length) {
+    ElMessage.error(segIssues.map((s) => s.msg).join('；'))
+    segEditorRef.value?.scrollToSeg(segIssues[0].idx)
+    return
+  }
   saving.value = true
   try {
     const body = buildBody()
@@ -302,6 +386,7 @@ async function submit() {
       await pricingApi.create(body)
       ElMessage.success('规则已创建')
     }
+    disarm()
     visible.value = false
     emit('saved')
   } catch (e) {
@@ -332,5 +417,20 @@ defineExpose({ open })
 }
 .dim-khint {
   margin: 0 4px;
+}
+.dim-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* 与 label-width=120px 对齐的内容区缩进；窄屏移除，避免横向溢出 */
+.form-indent {
+  margin-left: 120px;
+}
+@media (max-width: 768px) {
+  .form-indent {
+    margin-left: 0;
+  }
 }
 </style>

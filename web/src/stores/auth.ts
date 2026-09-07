@@ -2,9 +2,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { authApi } from '@/api'
-import { clearToken, getToken, setToken } from '@/api/http'
-
-export const USER_KEY = 'nextapi_user'
+import { clearToken, getToken, setToken, USER_KEY } from '@/api/http'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(getToken())

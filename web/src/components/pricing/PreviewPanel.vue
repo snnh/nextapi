@@ -13,16 +13,24 @@
       <el-table-column label="计价单位" min-width="180">
         <template #default="{ row }">{{ UNIT_LABEL(row.unit) }}</template>
       </el-table-column>
-      <el-table-column prop="quantity" label="数量" min-width="100" align="right" />
+      <el-table-column label="数量" min-width="110" align="right">
+        <template #default="{ row }">{{ fmtInt(Number(row.quantity)) }}</template>
+      </el-table-column>
       <el-table-column label="单价" min-width="140" align="right">
         <template #default="{ row }">{{ fmtMoney(row.price) }} {{ priceDenom(row.unit) }}</template>
       </el-table-column>
       <el-table-column label="成本" min-width="120" align="right">
         <template #default="{ row }">{{ fmtMoney(row.cost) }}</template>
       </el-table-column>
-      <el-table-column label="命中分段" min-width="140">
+      <el-table-column label="命中分段" min-width="160">
         <template #default="{ row }">
-          <span v-if="row.matched_segment">{{ row.matched_segment }}</span>
+          <el-tooltip v-if="segDetailLines(row)" placement="top">
+            <template #content>
+              <div v-for="(l, i) in segDetailLines(row)" :key="i" class="seg-tip">{{ l }}</div>
+            </template>
+            <span>{{ row.matched_segment }}</span>
+          </el-tooltip>
+          <span v-else-if="row.matched_segment">{{ row.matched_segment }}</span>
           <span v-else class="hint">无（base_price）</span>
         </template>
       </el-table-column>
@@ -48,14 +56,21 @@
       </el-collapse-item>
     </el-collapse>
   </div>
+  <!-- 无结果时引导空态 -->
+  <el-empty
+    v-else
+    class="preview-empty"
+    description="填写左侧用量后点击试算"
+    :image-size="80"
+  />
 </template>
 
 <script setup lang="ts">
 import { UNIT_LABEL } from '@/utils/consts'
-import { fmtMoney } from '@/utils/format'
-import type { PreviewResp, PriceUnit } from '@/api/types'
+import { fmtInt, fmtMoney } from '@/utils/format'
+import type { PreviewLine, PreviewResp, PriceUnit } from '@/api/types'
 
-defineProps<{ resp: PreviewResp | null }>()
+const props = defineProps<{ resp: PreviewResp | null }>()
 
 function priceDenom(unit: PriceUnit): string {
   switch (unit) {
@@ -73,6 +88,32 @@ function priceDenom(unit: PriceUnit): string {
   }
 }
 
+/**
+ * 命中分段的条件摘要（数据可得时）：后端不返回 weekday/时间窗等条件原文，
+ * 只能从 price_used 中按 rule_id 匹配到命中行的 base_price/price 等字段做摘要。
+ */
+function segDetailLines(row: PreviewLine): string[] | null {
+  if (!row.matched_segment) return null
+  const used = props.resp?.price_used ?? []
+  const hit = used.find((v) => {
+    if (!v || typeof v !== 'object') return false
+    const o = v as Record<string, unknown>
+    return o.rule_id === row.rule_id && o.matched_segment === row.matched_segment
+  })
+  if (!hit || typeof hit !== 'object') return null
+  const o = hit as Record<string, unknown>
+  const lines: string[] = []
+  lines.push(`命中分段：${row.matched_segment}`)
+  if (o.price !== undefined && o.price !== null) {
+    lines.push(`分段单价：${fmtMoney(String(o.price))} ${row.currency}`)
+  }
+  if (o.base_price !== undefined && o.base_price !== null) {
+    lines.push(`基础单价：${fmtMoney(String(o.base_price))} ${row.currency}`)
+  }
+  if (typeof o.rule_id === 'string') lines.push(`规则 ID：${o.rule_id}`)
+  return lines.length > 1 ? lines : null
+}
+
 function jsonOf(v: unknown): string {
   try {
     return JSON.stringify(v, null, 2)
@@ -83,6 +124,14 @@ function jsonOf(v: unknown): string {
 </script>
 
 <style scoped>
+.preview-empty {
+  padding: 12px 0 4px;
+}
+.seg-tip {
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
 .total-card {
   display: flex;
   gap: 24px;

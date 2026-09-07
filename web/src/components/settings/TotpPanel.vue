@@ -53,7 +53,14 @@
           </div>
           <el-form inline @submit.prevent>
             <el-form-item label="验证码">
-              <el-input v-model="enableCode" placeholder="认证器 6 位数字" maxlength="6" style="width: 180px" />
+              <el-input
+                v-model="enableCode"
+                inputmode="numeric"
+                placeholder="认证器 6 位数字"
+                maxlength="6"
+                style="width: 180px"
+                @input="onEnableCodeInput"
+              />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="busy" :disabled="enableCode.length !== 6" @click="doEnable">
@@ -73,7 +80,14 @@
             <el-input v-model="disableForm.password" type="password" show-password style="width: 180px" />
           </el-form-item>
           <el-form-item label="验证码">
-            <el-input v-model="disableForm.code" placeholder="6 位数字" maxlength="6" style="width: 140px" />
+            <el-input
+              v-model="disableForm.code"
+              inputmode="numeric"
+              placeholder="6 位数字"
+              maxlength="6"
+              style="width: 140px"
+              @input="onDisableCodeInput"
+            />
           </el-form-item>
           <el-form-item>
             <el-button
@@ -95,10 +109,15 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 import QRCode from 'qrcode'
 import { authApi } from '@/api'
 import { errMsg } from '@/api/http'
+import { useAuthStore } from '@/stores/auth'
 import type { TotpSetupResp, TotpStatusResp } from '@/api/types'
+
+const router = useRouter()
+const auth = useAuthStore()
 
 const loading = ref(false)
 const busy = ref(false)
@@ -164,10 +183,26 @@ async function doDisable() {
   }
 }
 
-/** enable/disable 成功后服务端已吊销全部会话：清 token 回登录页 */
+/**
+ * enable/disable 成功后服务端已吊销全部会话：走 auth store 清登录态后回登录页。
+ * （统一由 logout 清理 token/localStorage，避免直接操作 localStorage）
+ */
 function relogin() {
-  localStorage.removeItem('nextapi_token')
-  window.location.href = '/login'
+  auth.logout()
+  router.push('/login')
+}
+
+/** 6 位验证码输入：仅保留数字 */
+function digitsOnly(v: string): string {
+  return v.replace(/\D/g, '')
+}
+
+function onEnableCodeInput(v: string) {
+  enableCode.value = digitsOnly(v)
+}
+
+function onDisableCodeInput(v: string) {
+  disableForm.code = digitsOnly(v)
 }
 
 function cancelSetup() {

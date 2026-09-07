@@ -110,12 +110,18 @@ function fmtVal(v: SettingItem['value']): string {
 
 async function check() {
   checking.value = true
+  // 新一轮检查前清空上次结果与提示：避免失败时残留旧版本对比
+  resp.value = null
   needRepoHint.value = false
   try {
     resp.value = await systemApi.checkUpdate()
   } catch (e) {
     const status = (e as AxiosError).response?.status
-    if (status === 400) needRepoHint.value = true
+    if (status === 400) {
+      // 仓库未配置：顶部警告条已说明，不再重复弹错误 toast
+      needRepoHint.value = true
+      return
+    }
     ElMessage.error(errMsg(e))
   } finally {
     checking.value = false

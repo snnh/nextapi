@@ -7,7 +7,8 @@ export function downloadBlob(blob: Blob, filename: string) {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  // 延迟回收：个别浏览器立即 revoke 会导致下载被中断
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export function downloadText(text: string, filename: string, mime = 'text/plain;charset=utf-8') {

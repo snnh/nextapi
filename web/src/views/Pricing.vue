@@ -17,21 +17,21 @@
           </el-select>
           <el-input
             v-model="filterModel"
-            placeholder="按模型筛选"
+            placeholder="按模型名过滤（本地搜索）"
             clearable
             style="width: 240px"
-            @keyup.enter="loadRules"
-            @clear="loadRules"
           />
           <el-button type="primary" :icon="Search" @click="loadRules">查询</el-button>
           <el-button :icon="Refresh" @click="resetFilter">重置</el-button>
           <div class="spacer" />
           <el-button type="primary" :icon="Plus" @click="openModelPrice()">按模型定价</el-button>
-          <el-button :icon="Setting" @click="openCreate" title="单条规则（图片/视频维度、有效期等高级项）">高级规则</el-button>
+          <el-tooltip content="单条规则（图片/视频维度、有效期等高级项）" placement="top">
+            <el-button :icon="Setting" @click="openCreate">高级规则</el-button>
+          </el-tooltip>
         </div>
 
         <el-card shadow="never">
-          <el-table :data="modelGroups" empty-text="暂无价格规则" v-loading="rulesLoading" row-key="key">
+          <el-table :data="pageGroups" :empty-text="rulesEmptyText" v-loading="rulesLoading" row-key="key">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="rule-expand">
@@ -90,17 +90,40 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column prop="model_id" label="模型" min-width="180" show-overflow-tooltip />
+            <el-table-column label="模型" min-width="220">
+              <template #default="{ row }">
+                <CopyText :text="row.model_id" :truncate="28" />
+              </template>
+            </el-table-column>
             <el-table-column label="上游" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
             </el-table-column>
-            <el-table-column v-for="u in TOKEN_UNITS" :key="u" :label="UNIT_SHORT[u]" min-width="110" align="right">
+            <el-table-column v-for="u in TOKEN_UNITS" :key="u" min-width="120" align="right">
+              <template #header>
+                <el-tooltip :content="UNIT_LABEL(u)" placement="top">
+                  <span>{{ UNIT_SHORT[u] }} /1M</span>
+                </el-tooltip>
+              </template>
               <template #default="{ row }">
                 <template v-if="row.unitMap[u]">
                   <span class="mono">{{ fmtMoney(row.unitMap[u].base_price) }}</span>
                   <span class="hint"> {{ row.unitMap[u].currency }}</span>
-                  <el-tag v-if="row.unitMap[u].segments?.length" size="small" effect="plain" style="margin-left: 4px">
+                  <el-tag
+                    v-if="row.unitMap[u].segments?.length"
+                    size="small"
+                    effect="plain"
+                    style="margin-left: 4px"
+                  >
                     {{ row.unitMap[u].segments.length }}段
+                  </el-tag>
+                  <el-tag
+                    v-if="!row.unitMap[u].enabled"
+                    size="small"
+                    type="info"
+                    effect="plain"
+                    style="margin-left: 4px"
+                  >
+                    已停用
                   </el-tag>
                 </template>
                 <span v-else class="hint">—</span>
@@ -118,6 +141,17 @@
               </template>
             </el-table-column>
           </el-table>
+          <div class="table-foot">
+            <el-pagination
+              v-model:current-page="page"
+              v-model:page-size="pageSize"
+              :page-sizes="[10, 20, 50]"
+              :total="filteredGroups.length"
+              layout="total, sizes, prev, pager, next, jumper"
+              background
+              small
+            />
+          </div>
         </el-card>
       </el-tab-pane>
 
@@ -136,11 +170,12 @@
               <template #default="{ row }">{{ row.upstream_name }}</template>
             </el-table-column>
             <el-table-column prop="model_id" label="模型" min-width="200" show-overflow-tooltip />
-            <el-table-column label="操作" width="140">
+            <el-table-column label="操作" min-width="300">
               <template #default="{ row }">
                 <el-button size="small" type="primary" :icon="PriceTag" @click="priceUpstream(row)">
                   为此定价
                 </el-button>
+                <el-button size="small" :icon="View" @click="viewModelRules(row)">查看该模型已有规则</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -150,13 +185,20 @@
       <!-- ===== Tab3 价格试算 ===== -->
       <el-tab-pane label="价格试算" name="preview" lazy>
         <el-card shadow="never" class="preview-form-card">
-          <el-form label-width="150px" @submit.prevent>
-            <el-form-item label="上游" required>
+          <el-form
+            ref="previewFormRef"
+            :model="previewForm"
+            :rules="previewRules"
+            label-width="150px"
+            @submit.prevent
+            @keyup.enter="onPreviewEnter"
+          >
+            <el-form-item label="上游" prop="upstream_id">
               <el-select v-model="previewForm.upstream_id" filterable placeholder="请选择上游" style="width: 300px">
                 <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
               </el-select>
             </el-form-item>
-            <el-form-item label="模型 ID" required>
+            <el-form-item label="模型 ID" prop="model_id">
               <el-input v-model="previewForm.model_id" placeholder="如 gpt-4o" clearable style="width: 300px" />
             </el-form-item>
             <el-form-item label="计费时间 (at)">
@@ -214,6 +256,15 @@
           <template #header>
             <div class="card-head"><span>试算结果</span></div>
           </template>
+          <el-alert
+            v-if="previewStale"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="参数已变更，结果未刷新"
+            description="下方展示的是上一次试算结果，请修改参数后重新试算。"
+            style="margin-bottom: 14px"
+          />
           <PreviewPanel :resp="previewResp" />
         </el-card>
       </el-tab-pane>
@@ -257,15 +308,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting, View } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { pricingApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { UNIT_LABEL, UNIT_SHORT } from '@/utils/consts'
-import { fmtDate, fmtMoney } from '@/utils/format'
+import { fmtMoney } from '@/utils/format'
 import { downloadText } from '@/utils/download'
+import CopyText from '@/components/common/CopyText.vue'
 import type {
   PreviewReq,
   PreviewResp,
@@ -302,7 +354,11 @@ async function loadUpstreams() {
 const rules = ref<RuleItem[]>([])
 const rulesLoading = ref(false)
 const filterUpstream = ref('')
+// 模型名过滤词：客户端过滤（见 filteredGroups），并驱动「未定价 → 查看已有规则」跳转。
 const filterModel = ref('')
+// 客户端分页状态
+const page = ref(1)
+const pageSize = ref(20)
 const togglingSet = reactive(new Set<string>())
 
 // 请求序号：防筛选并发时旧响应覆盖（发布审阅前端 M2）
@@ -312,10 +368,8 @@ async function loadRules() {
   const seq = ++rulesSeq
   rulesLoading.value = true
   try {
-    const resp = await pricingApi.list(
-      filterUpstream.value || undefined,
-      filterModel.value.trim() || undefined,
-    )
+    // 上游走服务端过滤；模型名搜索在本地完成，避免每次击键打后端。
+    const resp = await pricingApi.list(filterUpstream.value || undefined)
     if (seq !== rulesSeq) return
     rules.value = resp
   } catch (e) {
@@ -329,6 +383,7 @@ async function loadRules() {
 function resetFilter() {
   filterUpstream.value = ''
   filterModel.value = ''
+  page.value = 1
   loadRules()
 }
 
@@ -337,10 +392,15 @@ function segTitle(s: PriceSegment): string {
   return `${name}: ${s.price}`
 }
 
+// 展示精确到分钟：同日多个时间段的有效期规则可区分
+function fmtMinute(iso?: string | null): string {
+  if (!iso) return '-'
+  const d = dayjs(iso)
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '-'
+}
+
 function effectiveRange(row: RuleItem): string {
-  const from = fmtDate(row.effective_from)
-  const to = fmtDate(row.effective_to)
-  return `${from} ~ ${to}`
+  return `${fmtMinute(row.effective_from)} ~ ${fmtMinute(row.effective_to)}`
 }
 
 // —— 按模型分组（默认视图）：同供应商+同模型的多条单位规则聚合为一行 ——
@@ -383,6 +443,40 @@ const modelGroups = computed<ModelGroup[]>(() => {
   }
   return [...map.values()].sort((a, b) => a.model_id.localeCompare(b.model_id))
 })
+
+// 客户端搜索：按模型名关键词过滤聚合行（大小写不敏感）
+const filteredGroups = computed<ModelGroup[]>(() => {
+  const kw = filterModel.value.trim().toLowerCase()
+  if (!kw) return modelGroups.value
+  return modelGroups.value.filter((g) => g.model_id.toLowerCase().includes(kw))
+})
+
+// 搜索无匹配时的空态文案
+const rulesEmptyText = computed(() => {
+  const kw = filterModel.value.trim()
+  if (modelGroups.value.length && kw && !filteredGroups.value.length) {
+    return `未找到匹配「${kw}」的价格规则`
+  }
+  return '暂无价格规则'
+})
+
+// 客户端分页（10/20/50，默认 20）；页码越界时自动收敛
+const pageGroups = computed<ModelGroup[]>(() => {
+  const total = filteredGroups.value.length
+  const maxPage = Math.max(1, Math.ceil(total / pageSize.value))
+  if (page.value > maxPage) page.value = maxPage
+  if (page.value < 1) page.value = 1
+  const start = (page.value - 1) * pageSize.value
+  return filteredGroups.value.slice(start, start + pageSize.value)
+})
+
+// 数据量变化时回到首页，避免停留在空页
+watch(
+  () => [filterUpstream.value, filterModel.value, pageSize.value] as const,
+  () => {
+    page.value = 1
+  },
+)
 
 function openModelPrice(row?: ModelGroup) {
   modelDialogRef.value?.open(row ? { upstream_id: row.upstream_id, model_id: row.model_id } : undefined)
@@ -454,6 +548,15 @@ function priceUpstream(row: UnpricedItem) {
   modelDialogRef.value?.open({ upstream_id: row.upstream_id, model_id: row.model_id })
 }
 
+// 「查看该模型已有规则」：切到规则 Tab，清掉上游过滤并把搜索词设为该模型，让跨上游的既有规则可见
+function viewModelRules(row: UnpricedItem) {
+  filterUpstream.value = ''
+  filterModel.value = row.model_id
+  page.value = 1
+  activeTab.value = 'rules'
+  loadRules()
+}
+
 // —— Tab3 价格试算 ——
 const previewForm = reactive({
   upstream_id: '',
@@ -469,8 +572,21 @@ const previewForm = reactive({
   video_resolution: '',
   video_task_type: '',
 })
+const previewFormRef = ref<FormInstance>()
+const previewRules: FormRules = {
+  upstream_id: [{ required: true, message: '请选择上游', trigger: 'change' }],
+  model_id: [{ required: true, message: '请输入模型 ID', trigger: 'blur' }],
+}
 const previewing = ref(false)
 const previewResp = ref<PreviewResp | null>(null)
+// 上次试算后参数又变更过 → 旧结果已过期，置 stale 提示
+const previewStale = ref(false)
+let previewRunKey = ''
+
+// 参数快照（顺序固定），用于判定「参数已变更」
+function previewParamKey(): string {
+  return JSON.stringify(previewForm)
+}
 
 function buildPreviewReq(): PreviewReq {
   const body: PreviewReq = {
@@ -496,23 +612,49 @@ function buildPreviewReq(): PreviewReq {
 }
 
 async function runPreview() {
-  if (!previewForm.upstream_id) {
-    ElMessage.warning('请选择上游')
+  if (!previewFormRef.value) return
+  try {
+    await previewFormRef.value.validate()
+  } catch {
     return
   }
-  if (!previewForm.model_id.trim()) {
-    ElMessage.warning('请输入模型 ID')
-    return
-  }
+  const runKey = previewParamKey()
   previewing.value = true
   try {
-    previewResp.value = await pricingApi.preview(buildPreviewReq())
+    const resp = await pricingApi.preview(buildPreviewReq())
+    previewResp.value = resp
+    previewRunKey = runKey
+    // 请求期间参数又被改动 → 结果视为过期，提示重新试算
+    previewStale.value = previewParamKey() !== runKey
   } catch (e) {
     ElMessage.error(errMsg(e))
   } finally {
     previewing.value = false
   }
 }
+
+// Enter 触发试算；排除 el-select/textarea 及日期/下拉等弹层控件（回车用于选中/确认时误触发）
+function onPreviewEnter(e: KeyboardEvent) {
+  const t = e.target as HTMLElement | null
+  if (!t || typeof t.tagName !== 'string') return
+  const tag = t.tagName.toLowerCase()
+  if (tag === 'textarea') return
+  if (
+    t.closest(
+      '.el-select, .el-select-dropdown, .el-date-editor, .el-picker-panel, .el-cascader, .el-cascader-panel',
+    )
+  ) {
+    return
+  }
+  runPreview()
+}
+
+// 已有试算结果后任何参数变更 → 旧结果置为 stale
+watch(previewParamKey, () => {
+  if (previewResp.value && previewRunKey && previewParamKey() !== previewRunKey) {
+    previewStale.value = true
+  }
+})
 
 function resetPreview() {
   previewForm.upstream_id = ''
@@ -527,6 +669,9 @@ function resetPreview() {
   previewForm.video_seconds = null
   previewForm.video_resolution = ''
   previewForm.video_task_type = ''
+  previewFormRef.value?.clearValidate()
+  previewRunKey = ''
+  previewStale.value = false
   previewResp.value = null
 }
 
@@ -571,6 +716,12 @@ onMounted(() => {
 <style scoped>
 .preview-form-card {
   max-width: 900px;
+}
+.table-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding-top: 12px;
 }
 .export-row {
   display: flex;

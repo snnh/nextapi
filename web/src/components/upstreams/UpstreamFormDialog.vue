@@ -2,11 +2,22 @@
   <el-dialog
     v-model="visible"
     :title="isEdit ? '编辑上游' : '新建上游'"
-    width="860px"
+    class="dlg-wide long-form"
     :close-on-click-modal="false"
+    :before-close="onBeforeClose"
     destroy-on-close
+    @closed="onClosed"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" @submit.prevent>
+    <el-form
+      ref="formRef"
+      :model="form"
+      :rules="rules"
+      :label-position="labelPosition"
+      :label-width="labelPosition === 'right' ? '120px' : undefined"
+      scroll-to-error
+      @submit.prevent
+      @keyup.enter="onFormEnter"
+    >
       <el-divider content-position="left">基础</el-divider>
 
       <el-form-item label="名称" prop="name">
@@ -22,7 +33,12 @@
           placeholder="选择或输入类型"
           style="width: 100%"
         >
-          <el-option v-for="k in UPSTREAM_KINDS" :key="k" :value="k" :label="k" />
+          <el-option v-for="k in UPSTREAM_KINDS" :key="k" :value="k" :label="k">
+            <div class="kind-option">
+              <span>{{ k }}</span>
+              <span v-if="KIND_HINTS[k]" class="kind-hint">{{ KIND_HINTS[k] }}</span>
+            </div>
+          </el-option>
         </el-select>
       </el-form-item>
 
@@ -68,6 +84,14 @@
                   : '粘贴 codex CLI 的 ~/.codex/auth.json 全文（含 tokens.access_token / refresh_token）'
               "
             />
+            <el-alert
+              v-if="authJsonInvalid"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="auth-json-warn"
+              title="auth.json 格式异常：无法解析为 JSON 或缺少 tokens 字段，请确认粘贴的是完整文件"
+            />
             <div class="hint" style="margin-top: 4px">
               获取方式：本机安装 codex CLI 执行 <span class="mono">codex login</span>
               后复制 ~/.codex/auth.json。凭证加密存储，到期自动刷新；内置授权流程（免 CLI）后续版本提供。
@@ -77,18 +101,21 @@
       </template>
       <el-form-item v-else label="API Key" prop="api_key">
         <div v-if="isEdit" class="api-key-block">
-          <div class="api-key-state">
-            <el-tag v-if="form.hasApiKey" type="success" size="small">已设置</el-tag>
-            <el-tag v-else type="info" size="small">未设置</el-tag>
+          <div class="api-key-row">
+            <el-tag v-if="form.hasApiKey" type="success" size="small" class="api-key-tag">已设置</el-tag>
+            <el-tag v-else type="info" size="small" class="api-key-tag">未设置</el-tag>
+            <el-input
+              v-model="form.api_key"
+              type="password"
+              show-password
+              class="api-key-input"
+              :placeholder="form.hasApiKey ? '留空保持不变' : '输入新的 Key'"
+              clearable
+            />
+            <el-tooltip content="勾选后保存将移除已存储的 Key" placement="top">
+              <el-checkbox v-model="form.clearKey">清除</el-checkbox>
+            </el-tooltip>
           </div>
-          <el-input
-            v-model="form.api_key"
-            type="password"
-            show-password
-            :placeholder="form.hasApiKey ? '留空保持不变' : '输入新的 Key'"
-            clearable
-          />
-          <el-checkbox v-model="form.clearKey">清除 Key（提交空串）</el-checkbox>
         </div>
         <el-input
           v-else
@@ -156,28 +183,61 @@
           <div class="models-block">
             <div class="models-toolbar">
               <el-button size="small" :loading="modelsLoading" @click="fetchModels">拉取模型列表</el-button>
-              <span v-if="modelsFetchedAt && !usingCache" class="hint">最近拉取：{{ fmtTime(modelsFetchedAt) }}</span>
-              <span v-if="usingCache" class="hint">以下为缓存列表（{{ modelItems.length }} 个），点击「拉取」获取最新</span>
+              <el-input
+                v-if="modelItems.length"
+                v-model="modelSearch"
+                size="small"
+                placeholder="搜索模型名"
+                clearable
+                class="model-search"
+                :prefix-icon="Search"
+                @keyup.enter.stop
+              />
+              <el-select
+                v-if="modelItems.length && !usingCache"
+                v-model="modelStatusFilter"
+                size="small"
+                class="model-filter"
+              >
+                <el-option label="全部状态" value="all" />
+                <el-option label="仅未路由" value="new" />
+                <el-option label="已路由（本渠道）" value="routed" />
+                <el-option label="占用 / 排除" value="other" />
+              </el-select>
+              <span v-if="modelItems.length" class="hint">{{ modelStatsText }}</span>
             </div>
-            <el-alert v-if="modelsError" type="warning" :closable="false" :title="modelsError" style="margin-bottom: 8px" />
-            <el-checkbox-group v-if="modelItems.length && !usingCache" v-model="selectedModels">
-              <div v-for="it in modelItems" :key="it.name" class="model-row">
-                <el-checkbox
-                  :value="it.name"
-                  :disabled="form.model_sync === 'auto' || it.status !== 'new'"
-                  class="model-check"
+            <div class="models-meta">
+              <span v-if="modelsFetchedAt && !usingCache" class="hint">最近拉取：{{ fmtTime(modelsFetchedAt) }}</span>
+              <span v-if="usingCache" class="hint">以下为缓存列表，点击「拉取模型列表」获取最新状态</span>
+            </div>
+            <el-alert v-if="modelsError" type="error" :closable="false" :title="modelsError" style="margin-bottom: 8px" />
+            <el-checkbox-group v-if="filteredItems.length && !usingCache" v-model="selectedModels">
+              <div v-for="it in filteredItems" :key="it.name" class="model-row">
+                <el-tooltip :disabled="!rowDisabled(it)" :content="rowDisabledReason(it)" placement="top">
+                  <el-checkbox :value="it.name" :disabled="rowDisabled(it)" class="model-check">
+                    <span class="model-name">{{ it.name }}</span>
+                  </el-checkbox>
+                </el-tooltip>
+                <el-icon
+                  class="model-copy"
+                  role="button"
+                  aria-label="复制模型名"
+                  @click.stop="copyText(it.name, '已复制模型名')"
                 >
-                  <span class="model-name">{{ it.name }}</span>
-                </el-checkbox>
+                  <CopyDocument />
+                </el-icon>
                 <el-tag size="small" :type="MODEL_TAG[it.status]" effect="plain">{{ MODEL_STATUS[it.status] }}</el-tag>
               </div>
             </el-checkbox-group>
-            <div v-else-if="modelItems.length && usingCache" class="cache-list">
-              <el-tag v-for="m in modelItems" :key="m.name" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+            <div v-else-if="filteredItems.length && usingCache" class="cache-list">
+              <el-tag v-for="m in filteredItems" :key="m.name" size="small" effect="plain" style="margin: 2px 4px 2px 0">
                 {{ m.name }}
               </el-tag>
             </div>
-            <div v-else class="hint">尚未拉取；点击「拉取模型列表」查看该渠道可用模型。</div>
+            <div v-else-if="modelItems.length" class="hint">无匹配「{{ modelSearch }}」的模型。</div>
+            <div v-else class="hint">
+              尚未拉取；点击「拉取模型列表」查看该渠道可用模型，或在下方手动输入模型 ID。
+            </div>
             <div v-if="modelItems.length && !usingCache" class="models-actions">
               <template v-if="form.model_sync === 'auto'">
                 <el-button size="small" type="primary" :loading="syncing" @click="syncNow">立即同步（全量对账）</el-button>
@@ -197,6 +257,9 @@
                 </el-button>
               </template>
             </div>
+            <div v-if="modelItems.length && !usingCache" class="hint models-instant-hint">
+              「生成路由 / 立即同步」立即写入服务端，与底部「保存」无关；「保存」仅提交上方表单配置。
+            </div>
             <el-alert
               v-if="syncReport"
               type="success"
@@ -204,6 +267,38 @@
               style="margin-top: 8px"
               :title="syncReportText"
             />
+            <!-- 手动输入模型 ID：无 /models 能力或拉取失败的渠道的兜底入口 -->
+            <div class="manual-add">
+              <div class="manual-add-head">
+                <span class="manual-add-title">手动输入模型 ID</span>
+                <span class="hint">拉取失败或上游无模型列表接口时可直接输入；支持逗号 / 空格 / 换行批量粘贴</span>
+              </div>
+              <div class="manual-add-row">
+                <el-input
+                  v-model="manualInput"
+                  size="small"
+                  placeholder="如 gpt-5.2, claude-opus-4-6（回车添加）"
+                  clearable
+                  @keyup.enter.stop="addManualModels"
+                />
+                <el-button size="small" :disabled="!manualInput.trim()" @click="addManualModels">添加</el-button>
+              </div>
+              <div v-if="manualPending.length" class="manual-pending">
+                <el-tag
+                  v-for="m in manualPending"
+                  :key="m"
+                  size="small"
+                  closable
+                  class="manual-tag"
+                  @close="removeManual(m)"
+                >
+                  {{ m }}
+                </el-tag>
+                <el-button size="small" type="primary" :loading="syncing" @click="submitManual">
+                  为以上模型生成路由（{{ manualPending.length }}）
+                </el-button>
+              </div>
+            </div>
           </div>
         </el-form-item>
       </template>
@@ -213,40 +308,52 @@
 
       <el-divider content-position="left">运行</el-divider>
 
-      <el-form-item label="超时（ms）" prop="timeout_ms">
-        <el-input-number v-model="form.timeout_ms" :min="0" :step="1000" style="width: 200px" />
-      </el-form-item>
-
-      <el-form-item label="熔断阈值" prop="breaker_threshold">
-        <el-input-number v-model="form.breaker_threshold" :min="0" :step="1" style="width: 200px" />
-      </el-form-item>
-
-      <el-form-item label="探测模型" prop="probe_model">
-        <el-input v-model="form.probe_model" placeholder="（可选）连通性测试使用的模型名" clearable />
-      </el-form-item>
-
-      <el-form-item label="启用" prop="enabled">
-        <el-switch v-model="form.enabled" />
-      </el-form-item>
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="超时（ms）" prop="timeout_ms">
+            <el-input-number v-model="form.timeout_ms" :min="0" :step="1000" style="width: 200px" />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="熔断阈值" prop="breaker_threshold">
+            <el-input-number v-model="form.breaker_threshold" :min="0" :step="1" style="width: 200px" />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="探测模型" prop="probe_model">
+            <el-input v-model="form.probe_model" placeholder="（可选）连通性测试使用的模型名" clearable />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="启用" prop="enabled">
+            <el-switch v-model="form.enabled" />
+          </el-form-item>
+        </el-col>
+      </el-row>
 
       <el-divider content-position="left">代理</el-divider>
 
-      <el-form-item label="使用代理" prop="use_proxy">
-        <el-switch v-model="form.use_proxy" />
-      </el-form-item>
-
-      <el-form-item label="代理" prop="proxy_id">
-        <el-select
-          v-model="form.proxy_id"
-          clearable
-          :disabled="!form.use_proxy"
-          placeholder="（跟随系统默认代理）"
-          style="width: 100%"
-        >
-          <el-option label="（跟随系统默认代理）" value="" />
-          <el-option v-for="p in proxies" :key="p.id" :value="p.id" :label="p.name" />
-        </el-select>
-      </el-form-item>
+      <el-row :gutter="16">
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="使用代理" prop="use_proxy">
+            <el-switch v-model="form.use_proxy" />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="代理" prop="proxy_id">
+            <el-select
+              v-model="form.proxy_id"
+              clearable
+              :disabled="!form.use_proxy"
+              placeholder="（跟随系统默认代理）"
+              style="width: 100%"
+            >
+              <el-option label="（跟随系统默认代理）" value="" />
+              <el-option v-for="p in proxies" :key="p.id" :value="p.id" :label="p.name" />
+            </el-select>
+          </el-form-item>
+        </el-col>
+      </el-row>
 
       <el-divider content-position="left">高级</el-divider>
 
@@ -301,16 +408,19 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="onCancel">取消</el-button>
       <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { fmtTime } from '@/utils/format'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { CopyDocument, Search } from '@element-plus/icons-vue'
+import { copyText } from '@/utils/clipboard'
+import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import {
   DEFAULT_PRIORITY,
   PROTOCOL_LABELS,
@@ -361,6 +471,13 @@ const MODEL_TAG: Record<UpstreamModelItem['status'], 'success' | 'info' | 'warni
   routed_auto: 'primary',
   routed_other: 'warning',
   excluded: 'danger',
+}
+
+/** kind 下拉选项的补充说明（仅常见项，未列出的不显示） */
+const KIND_HINTS: Record<string, string> = {
+  openai_compatible: 'OpenAI 兼容接口（多数国产 / 聚合渠道）',
+  codex: 'ChatGPT Codex OAuth 渠道（粘贴 auth.json）',
+  custom: '自定义类型标识',
 }
 
 interface FormState {
@@ -429,6 +546,33 @@ function defaultForm(): FormState {
 
 const isCodex = computed(() => form.kind === 'codex')
 const oauthRefreshing = ref(false)
+/** codex 预填提示每次弹窗只提示一次 */
+const codexTipShown = ref(false)
+
+/** auth.json 简单预检：非空但无法解析为含 tokens 的 JSON 时提示（不阻断提交） */
+const authJsonInvalid = computed(() => {
+  const t = form.auth_json.trim()
+  if (!t) return false
+  try {
+    const obj = JSON.parse(t)
+    return !obj || typeof obj !== 'object' || !('tokens' in obj)
+  } catch {
+    return true
+  }
+})
+
+// ---- 移动端：label 顶部对齐，弹窗可读性更好 ----
+const MOBILE_MQ = '(max-width: 768px)'
+const isMobile = ref(false)
+let mq: MediaQueryList | null = null
+const onMq = (e: MediaQueryListEvent) => (isMobile.value = e.matches)
+onMounted(() => {
+  mq = window.matchMedia(MOBILE_MQ)
+  isMobile.value = mq.matches
+  mq.addEventListener('change', onMq)
+})
+onBeforeUnmount(() => mq?.removeEventListener('change', onMq))
+const labelPosition = computed<'right' | 'top'>(() => (isMobile.value ? 'top' : 'right'))
 
 // ---- 模型与路由（编辑态） ----
 const modelsLoading = ref(false)
@@ -439,6 +583,114 @@ const modelsFetchedAt = ref('')
 const modelsError = ref('')
 const usingCache = ref(false)
 const syncReport = ref<ModelSyncReport | null>(null)
+/** 模型名搜索 / 状态筛选 */
+const modelSearch = ref('')
+const modelStatusFilter = ref<'all' | 'new' | 'routed' | 'other'>('all')
+/** 手动输入模型 ID：输入框与待生成路由的暂存列表 */
+const manualInput = ref('')
+const manualPending = ref<string[]>([])
+
+/** 搜索 + 状态筛选后的展示列表 */
+const filteredItems = computed(() => {
+  let list = modelItems.value
+  const q = modelSearch.value.trim().toLowerCase()
+  if (q) list = list.filter((m) => m.name.toLowerCase().includes(q))
+  if (!usingCache.value && modelStatusFilter.value !== 'all') {
+    list = list.filter((m) => {
+      if (modelStatusFilter.value === 'new') return m.status === 'new'
+      if (modelStatusFilter.value === 'routed') return m.status === 'routed_manual' || m.status === 'routed_auto'
+      return m.status === 'routed_other' || m.status === 'excluded'
+    })
+  }
+  return list
+})
+
+const modelStatsText = computed(() => {
+  const total = modelItems.value.length
+  if (!total) return ''
+  if (usingCache.value) return `共 ${total} 个（缓存）`
+  const n = modelItems.value.filter((m) => m.status === 'new').length
+  return `共 ${total} · 未路由 ${n}`
+})
+
+/** 勾选禁用判定与原因（auto 模式全禁，由同步策略管理） */
+function rowDisabled(it: UpstreamModelItem): boolean {
+  return form.model_sync === 'auto' || it.status !== 'new'
+}
+function rowDisabledReason(it: UpstreamModelItem): string {
+  if (form.model_sync === 'auto') return '自动模式下由同步策略管理，无需勾选'
+  const map: Record<UpstreamModelItem['status'], string> = {
+    new: '',
+    routed_manual: '已有本渠道手动路由',
+    routed_auto: '已有本渠道自动托管路由',
+    routed_other: '已被其他渠道路由占用',
+    excluded: '在排除名单内（同步时跳过）',
+  }
+  return map[it.status]
+}
+
+/** 手动输入解析：逗号/空格/换行/中英文分号分隔；去空白去重，已在列表中的直接勾选或跳过 */
+function addManualModels() {
+  const parts = manualInput.value
+    .split(/[\s,，;；]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (!parts.length) return
+  let added = 0
+  let selected = 0
+  let existed = 0
+  for (const name of parts) {
+    if (manualPending.value.includes(name)) {
+      existed++
+      continue
+    }
+    const item = modelItems.value.find((m) => m.name === name)
+    if (item && item.status === 'new' && form.model_sync !== 'auto') {
+      if (!selectedModels.value.includes(name)) {
+        selectedModels.value.push(name)
+        selected++
+      } else {
+        existed++
+      }
+      continue
+    }
+    if (item) {
+      existed++
+      continue
+    }
+    manualPending.value.push(name)
+    added++
+  }
+  manualInput.value = ''
+  const msgs: string[] = []
+  if (added) msgs.push(`已添加 ${added} 个待生成`)
+  if (selected) msgs.push(`已在列表中勾选 ${selected} 个`)
+  if (existed) msgs.push(`${existed} 个已存在或重复，已跳过`)
+  if (msgs.length) {
+    ElMessage({ type: added || selected ? 'success' : 'info', message: msgs.join('；') })
+  }
+}
+
+function removeManual(name: string) {
+  manualPending.value = manualPending.value.filter((m) => m !== name)
+}
+
+/** 手动输入的模型直接生成路由（立即写入服务端） */
+async function submitManual() {
+  if (!manualPending.value.length || syncing.value) return
+  syncing.value = true
+  modelsError.value = ''
+  try {
+    syncReport.value = await upstreamApi.addModelRoutes(editingId.value, [...manualPending.value])
+    manualPending.value = []
+    await fetchModels()
+    emit('saved')
+  } catch (e) {
+    modelsError.value = errMsg(e)
+  } finally {
+    syncing.value = false
+  }
+}
 
 const newModelNames = computed(() =>
   modelItems.value.filter((m) => m.status === 'new').map((m) => m.name),
@@ -447,14 +699,13 @@ const newModelNames = computed(() =>
 const syncReportText = computed(() => {
   const r = syncReport.value
   if (!r) return ''
-  const parts = [
-    `新增 ${r.added.length}`,
-    `移除 ${r.removed.length}`,
-    `保留 ${r.kept}`,
-  ]
+  const parts: string[] = []
+  if (r.added.length) parts.push(`新增 ${r.added.length}`)
+  if (r.removed.length) parts.push(`移除 ${r.removed.length}`)
+  parts.push(`保留 ${r.kept}`)
   if (r.excluded) parts.push(`排除 ${r.excluded}`)
   if (r.skipped.length) parts.push(`跳过（已有路由）${r.skipped.length}`)
-  return `同步完成：${parts.join(' · ')}`
+  return `操作完成：${parts.join(' · ')}`
 })
 
 function resetModels(upstream?: UpstreamOut) {
@@ -489,6 +740,19 @@ async function fetchModels() {
 }
 
 async function syncNow() {
+  if (syncing.value) return
+  // 立即同步会先把当前表单的同步策略/排除名单等落库，脏表单时提前明示
+  if (dirty.isDirty()) {
+    try {
+      await ElMessageBox.confirm(
+        '立即同步将先保存当前的名称 / Base URL / 同步策略 / 排除名单，再执行全量对账。继续？',
+        '立即同步',
+        { type: 'info', confirmButtonText: '继续同步', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
   syncing.value = true
   modelsError.value = ''
   try {
@@ -528,6 +792,34 @@ const form = reactive<FormState>(defaultForm())
 /** 编辑时的原始 extra 快照：buildExtra 在其上合并表单管辖区字段，其余键（如
  *  protocol_base_urls）原样保留，避免保存即丢键 */
 const extraSnapshot = ref<UpstreamExtra>({})
+
+/** 脏表单防丢：Esc/X/取消关闭前二次确认（模型区勾选与手动输入也计入未保存意图） */
+const dirty = useDirtyGuard(() => ({ form, sel: selectedModels.value, pend: manualPending.value }))
+
+function onBeforeClose(done: () => void) {
+  dirty.confirmClose(done)
+}
+
+function onCancel() {
+  dirty.confirmThen(() => {
+    visible.value = false
+  })
+}
+
+/** 关闭后兜底清理敏感字段（取消路径不经 submit 清理） */
+function onClosed() {
+  form.api_key = ''
+  form.auth_json = ''
+}
+
+/** Enter 提交：排除 textarea / 下拉 / 数字步进器内的回车 */
+function onFormEnter(e: KeyboardEvent) {
+  const t = e.target as HTMLElement | null
+  if (!t) return
+  if (t.tagName === 'TEXTAREA') return
+  if (t.closest('.el-select') || t.closest('.el-input-number')) return
+  submit()
+}
 
 const standardSelected = computed<ProtocolName[]>(() =>
   STANDARD_PROTOCOLS.filter((p) => form.protocols.includes(p)),
@@ -570,10 +862,19 @@ watch(
   () => form.kind,
   (k) => {
     if (k === 'codex') {
+      let prefilled = false
       if (!form.base_url.trim() || form.base_url === CODEX_DEFAULT_BASE_URL) {
+        if (form.base_url !== CODEX_DEFAULT_BASE_URL) prefilled = true
         form.base_url = CODEX_DEFAULT_BASE_URL
       }
-      if (!form.protocols.length) form.protocols = ['openai_responses']
+      if (!form.protocols.length) {
+        form.protocols = ['openai_responses']
+        prefilled = true
+      }
+      if (prefilled && !codexTipShown.value) {
+        codexTipShown.value = true
+        ElMessage.info('已预填 Codex 官方后端地址与 Responses 协议，可按需修改')
+      }
     }
   },
 )
@@ -646,7 +947,15 @@ function open(upstream?: UpstreamOut) {
     ? JSON.parse(JSON.stringify(upstream.extra))
     : {}
   resetModels(upstream)
+  // 模型区交互态与提示复位
+  modelSearch.value = ''
+  modelStatusFilter.value = 'all'
+  manualInput.value = ''
+  manualPending.value = []
+  codexTipShown.value = false
   visible.value = true
+  // 回填完成后记录脏检查基线
+  dirty.snapshot()
 }
 
 function buildExtra(): UpstreamExtra {
@@ -730,6 +1039,7 @@ async function submit() {
       await upstreamApi.create(body)
       ElMessage.success('上游已创建')
     }
+    dirty.disarm()
     visible.value = false
     form.api_key = '' // 敏感字段用完即清（发布审阅前端 M3）
     form.auth_json = ''
@@ -750,8 +1060,31 @@ defineExpose({ open })
 .api-key-block {
   width: 100%;
 }
-.api-key-state {
-  margin-bottom: 6px;
+.api-key-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.api-key-tag {
+  flex-shrink: 0;
+}
+.api-key-input {
+  flex: 1;
+  min-width: 0;
+}
+.auth-json-warn {
+  margin-top: 6px;
+}
+.kind-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kind-hint {
+  font-size: 12px;
+  color: #9ca3af;
 }
 .oauth-state {
   display: flex;
@@ -793,7 +1126,66 @@ defineExpose({ open })
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.model-search {
+  width: 200px;
+}
+.model-filter {
+  width: 150px;
+}
+.models-meta {
   margin-bottom: 8px;
+  min-height: 18px;
+}
+.models-instant-hint {
+  margin-top: 6px;
+}
+.model-copy {
+  flex-shrink: 0;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 13px;
+  margin-left: auto;
+  margin-right: 6px;
+  padding: 2px;
+  border-radius: 4px;
+}
+.model-copy:hover {
+  color: #1f2329;
+  background: #f3f4f6;
+}
+.manual-add {
+  margin-top: 14px;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 10px;
+}
+.manual-add-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.manual-add-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.manual-add-row {
+  display: flex;
+  gap: 8px;
+}
+.manual-pending {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.manual-tag {
+  margin-right: 2px;
 }
 .model-row {
   display: flex;
