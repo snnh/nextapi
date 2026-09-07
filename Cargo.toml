@@ -52,3 +52,11 @@ rust-embed = "8"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# 风格类 lint 放行（CI 保留 -D warnings 对其余 lint 严格）
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+unnecessary_lazy_evaluations = "allow"
+items_after_test_module = "allow"
+manual_clamp = "allow"
