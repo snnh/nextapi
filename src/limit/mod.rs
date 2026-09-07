@@ -236,7 +236,7 @@ impl QuotaCache {
 
     /// 缓存未过期（< ttl）返回 Some(超限判定)；过期或未命中返回 None。
     pub fn get(&self, key_id: Uuid, ttl_secs: u64) -> Option<bool> {
-        let map = self.inner.lock().expect("QuotaCache 锁中毒");
+        let map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         match map.get(&key_id) {
             Some(&(exceeded, at)) if at.elapsed() < Duration::from_secs(ttl_secs) => Some(exceeded),
             _ => None,
@@ -246,7 +246,7 @@ impl QuotaCache {
     pub fn put(&self, key_id: Uuid, exceeded: bool) {
         self.inner
             .lock()
-            .expect("QuotaCache 锁中毒")
+            .unwrap_or_else(|p| p.into_inner())
             .insert(key_id, (exceeded, Instant::now()));
     }
 
@@ -254,7 +254,7 @@ impl QuotaCache {
     pub fn remove(&self, key_id: Uuid) {
         self.inner
             .lock()
-            .expect("QuotaCache 锁中毒")
+            .unwrap_or_else(|p| p.into_inner())
             .remove(&key_id);
     }
 }

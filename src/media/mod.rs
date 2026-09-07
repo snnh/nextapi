@@ -247,7 +247,9 @@ pub fn build_image_request(
                 "contents": [{"parts": [{"text": req.prompt}]}],
                 "generationConfig": serde_json::Value::Object(generation_config),
             });
-            (format!("/v1beta/models/{up_model}:generateContent"), body)
+            // 模型名作路径段需 URL 编码（与 upstream::endpoint_path 一致，防 ?/&/# 污染）
+            let enc = crate::upstream::encode_path_segment_pub(up_model);
+            (format!("/v1beta/models/{enc}:generateContent"), body)
         }
         ImageApi::DashscopeSync | ImageApi::DashscopeAsync => {
             // 阿里系 parameters 共用：size 用宽*高（星号）

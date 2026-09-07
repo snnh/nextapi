@@ -82,7 +82,6 @@ impl Entry {
 enum Mode {
     Passthrough,
     Convert(Protocol),
-    PassthroughFallback,
 }
 
 /// 候选 = 路由 × 上游。
@@ -450,10 +449,22 @@ fn extract_model(
 }
 
 /// 提取 max_tokens / max_completion_tokens（用于 TPM 预检）。
-fn extract_max_tokens(body: &serde_json::Value) -> Option<u64> {
-    body.get("max_tokens")
-        .or_else(|| body.get("max_completion_tokens"))
-        .and_then(|v| v.as_u64())
+/// TPM 预检的 max_tokens 提取：按入口协议分派字段名（发布审阅 M4）——
+/// Chat: max_tokens/max_completion_tokens；Responses: max_output_tokens；
+/// Anthropic: max_tokens；Gemini: generationConfig.maxOutputTokens。
+fn extract_max_tokens(protocol: Protocol, body: &serde_json::Value) -> Option<u64> {
+    match protocol {
+        Protocol::OpenaiChat => body
+            .get("max_tokens")
+            .or_else(|| body.get("max_completion_tokens"))
+            .and_then(|v| v.as_u64()),
+        Protocol::OpenaiResponses => body.get("max_output_tokens").and_then(|v| v.as_u64()),
+        Protocol::Anthropic => body.get("max_tokens").and_then(|v| v.as_u64()),
+        Protocol::Gemini => body
+            .get("generationConfig")
+            .and_then(|g| g.get("maxOutputTokens"))
+            .and_then(|v| v.as_u64()),
+    }
 }
 
 /// 别名解析（M10.1）：入口模型命中**启用**的别名 → 返回 (实际模型, Some(入口模型))；
@@ -582,7 +593,8 @@ async fn build_outbound_any(
         ir.model = upstream_model.to_string();
         ir.stream = stream;
         crate::media::resolve::resolve_url_images(state, &mut ir, img_cache, &mut ctx).await;
-        let out = protocol::request_from_ir(Protocol::Gemini, &ir, &mut ctx)?;
+        let mut out = protocol::request_from_ir(Protocol::Gemini, &ir, &mut ctx)?;
+        upstream::rewrite_body(&mut out, None, upstream.overrides().as_ref());
         return Ok(Outbound {
             body: out,
             protocol: Protocol::Gemini,
@@ -602,7 +614,7 @@ fn build_outbound(
     upstream: &UpstreamRow,
 ) -> Result<Outbound, ConvertError> {
     match mode {
-        Mode::Passthrough | Mode::PassthroughFallback => {
+        Mode::Passthrough => {
             let mut b = body.clone();
             upstream::rewrite_body(&mut b, Some(upstream_model), upstream.overrides().as_ref());
             // PLAN §4.4：OpenAI 系透传流式注入 stream_options.include_usage 用于 usage 采集兜底
@@ -622,7 +634,9 @@ fn build_outbound(
             if stream && matches!(target, Protocol::OpenaiChat | Protocol::OpenaiResponses) {
                 ir.stream_include_usage = true;
             }
-            let out = protocol::request_from_ir(target, &ir, &mut ctx)?;
+            let mut out = protocol::request_from_ir(target, &ir, &mut ctx)?;
+            // 转换路径同样应用用户配置的 body 覆盖（发布审阅 L8：此前仅透传生效）
+            upstream::rewrite_body(&mut out, None, upstream.overrides().as_ref());
             Ok(Outbound {
                 body: out,
                 protocol: target,
@@ -747,7 +761,6 @@ fn mode_str(mode: Mode) -> &'static str {
     match mode {
         Mode::Passthrough => "passthrough",
         Mode::Convert(_) => "convert",
-        Mode::PassthroughFallback => "passthrough_fallback",
     }
 }
 
@@ -1077,7 +1090,7 @@ async fn run_gateway(
     tmpl.model = model.clone();
     tmpl.stream = is_stream(&body_value, gemini_stream);
     let stream = tmpl.stream;
-    let max_tokens = extract_max_tokens(&body_value);
+    let max_tokens = extract_max_tokens(entry_protocol, &body_value);
     let params_meta: serde_json::Value =
         crate::upstream::usage::request_params_meta(entry_protocol, &body_value);
     tmpl.usage_raw = Some(serde_json::json!({ "params": params_meta.clone() }));
@@ -1124,20 +1137,34 @@ async fn run_gateway(
             .get(key.id, gateway_cfg.quota_check_cache_secs)
         {
             Some(v) => v,
-            None => {
-                let v = matches!(
-                    limit::check_quota(
-                        &state.db,
-                        &key,
-                        &gateway_cfg.billing_timezone,
-                        &gateway_cfg.quota_exceed_action
-                    )
-                    .await,
-                    Err(ApiError::RateLimited)
-                );
-                state.quota_cache.put(key.id, v);
-                v
-            }
+            None => match limit::check_quota(
+                &state.db,
+                &key,
+                &gateway_cfg.billing_timezone,
+                &gateway_cfg.quota_exceed_action,
+            )
+            .await
+            {
+                Ok(()) => {
+                    state.quota_cache.put(key.id, false);
+                    false
+                }
+                Err(ApiError::RateLimited) => {
+                    state.quota_cache.put(key.id, true);
+                    true
+                }
+                // 查询失败（DB 抖动等）：block 模式要求 fail-closed（发布审阅 M5），
+                // 不缓存否定结果，直接 503。
+                Err(e) => {
+                    log_fail(&state, &tmpl, start, 503, &format!("配额检查失败: {e}"), 0);
+                    return error_resp(
+                        entry_protocol,
+                        &request_id,
+                        503,
+                        "配额检查失败，请稍后重试",
+                    );
+                }
+            },
         };
         if exceeded {
             log_fail(&state, &tmpl, start, 429, "请求过于频繁，请稍后再试", 0);
@@ -1313,26 +1340,14 @@ async fn run_gateway(
         {
             Ok(o) => o,
             Err(cvt) => {
-                // 转换失败且入口协议受支持 → PassthroughFallback（PLAN §3.2）
-                if matches!(mode, Mode::Convert(_))
-                    && upstream.protocol_list().contains(&entry_protocol)
-                {
-                    let mut b = body_value.clone();
-                    upstream::rewrite_body(&mut b, Some(&up_model), overrides.as_ref());
-                    inject_stream_usage_option(&mut b, entry_protocol, stream);
-                    Outbound {
-                        body: b,
-                        protocol: entry_protocol,
-                        mode: Mode::PassthroughFallback,
-                    }
-                } else {
-                    // 该候选无法承接（转换失败且入口不受支持），转移到下一候选
-                    last_upstream = Some(upstream.name.clone());
-                    last_err = Some(Fail::Convert(cvt));
-                    failed_candidates += 1;
-                    last_idx = 0;
-                    continue 'outer;
-                }
+                // 注：PLAN §3.2 的 PassthroughFallback 不可达已移除（发布审阅 M3）——
+                // Mode::Convert 蕴含入口协议不在该上游支持列表，「转换失败回退透传」
+                // 的前提不成立；转换失败只能转移到下一候选。
+                last_upstream = Some(upstream.name.clone());
+                last_err = Some(Fail::Convert(cvt));
+                failed_candidates += 1;
+                last_idx = 0;
+                continue 'outer;
             }
         };
         // 已决策出上游协议：记账时回填 protocol_out / convert_mode。
@@ -1517,6 +1532,7 @@ async fn run_gateway(
                             resp,
                             outbound.protocol,
                             entry_protocol,
+                            model.clone(),
                         ))
                     } else {
                         Body::from_stream(upstream::sse_passthrough_stream(resp, model.clone()))
@@ -1552,6 +1568,9 @@ async fn run_gateway(
                     if retryable {
                         state.breaker.on_failure(&state.db, upstream).await;
                     }
+                    // 客户端成因的 4xx（400/404/422 等）：同一 body 换候选必然同样失败
+                    // 且每个候选都可能计费——不故障转移，直接返回当前错误（发布审阅 L12）。
+                    let no_failover = e.client_causal();
                     last_upstream = Some(upstream.name.clone());
                     last_err = Some(Fail::Upstream(e));
                     let can_retry = retryable && !lock && idx < retry_limit;
@@ -1563,7 +1582,7 @@ async fn run_gateway(
                     }
                     failed_candidates += 1;
                     last_idx = idx;
-                    if lock {
+                    if lock || no_failover {
                         break 'outer;
                     }
                     break; // 转移到下一候选
@@ -1799,20 +1818,34 @@ async fn images_generations(
             .get(key.id, gateway_cfg.quota_check_cache_secs)
         {
             Some(v) => v,
-            None => {
-                let v = matches!(
-                    limit::check_quota(
-                        &state.db,
-                        &key,
-                        &gateway_cfg.billing_timezone,
-                        &gateway_cfg.quota_exceed_action
-                    )
-                    .await,
-                    Err(ApiError::RateLimited)
-                );
-                state.quota_cache.put(key.id, v);
-                v
-            }
+            None => match limit::check_quota(
+                &state.db,
+                &key,
+                &gateway_cfg.billing_timezone,
+                &gateway_cfg.quota_exceed_action,
+            )
+            .await
+            {
+                Ok(()) => {
+                    state.quota_cache.put(key.id, false);
+                    false
+                }
+                Err(ApiError::RateLimited) => {
+                    state.quota_cache.put(key.id, true);
+                    true
+                }
+                // 查询失败（DB 抖动等）：block 模式要求 fail-closed（发布审阅 M5），
+                // 不缓存否定结果，直接 503。
+                Err(e) => {
+                    log_fail(&state, &tmpl, start, 503, &format!("配额检查失败: {e}"), 0);
+                    return error_resp(
+                        Protocol::OpenaiChat,
+                        &request_id,
+                        503,
+                        "配额检查失败，请稍后重试",
+                    );
+                }
+            },
         };
         if exceeded {
             log_fail(&state, &tmpl, start, 429, "请求过于频繁，请稍后再试", 0);
@@ -2209,6 +2242,7 @@ async fn images_generations(
                     if retryable {
                         state.breaker.on_failure(&state.db, upstream).await;
                     }
+                    let no_failover = e.client_causal();
                     last_upstream = Some(upstream.name.clone());
                     last_err = Some(e);
                     let can_retry = retryable && !lock && idx < retry_limit;
@@ -2219,7 +2253,7 @@ async fn images_generations(
                     }
                     failed_candidates += 1;
                     last_idx = idx;
-                    if lock {
+                    if lock || no_failover {
                         break 'outer;
                     }
                     break;
@@ -2740,18 +2774,51 @@ mod tests {
 
     #[test]
     fn extract_max_tokens_forms() {
-        assert_eq!(extract_max_tokens(&json!({ "max_tokens": 100 })), Some(100));
+        let chat = Protocol::OpenaiChat;
         assert_eq!(
-            extract_max_tokens(&json!({ "max_completion_tokens": 200 })),
+            extract_max_tokens(chat, &json!({ "max_tokens": 100 })),
+            Some(100)
+        );
+        assert_eq!(
+            extract_max_tokens(chat, &json!({ "max_completion_tokens": 200 })),
             Some(200)
         );
         // max_tokens 优先
         assert_eq!(
-            extract_max_tokens(&json!({ "max_tokens": 1, "max_completion_tokens": 2 })),
+            extract_max_tokens(
+                chat,
+                &json!({ "max_tokens": 1, "max_completion_tokens": 2 })
+            ),
             Some(1)
         );
-        assert_eq!(extract_max_tokens(&json!({ "max_tokens": "x" })), None);
-        assert_eq!(extract_max_tokens(&json!({})), None);
+        assert_eq!(
+            extract_max_tokens(chat, &json!({ "max_tokens": "x" })),
+            None
+        );
+        assert_eq!(extract_max_tokens(chat, &json!({})), None);
+        // 各协议字段分派
+        assert_eq!(
+            extract_max_tokens(
+                Protocol::OpenaiResponses,
+                &json!({ "max_output_tokens": 300 })
+            ),
+            Some(300)
+        );
+        assert_eq!(
+            extract_max_tokens(Protocol::Anthropic, &json!({ "max_tokens": 400 })),
+            Some(400)
+        );
+        assert_eq!(
+            extract_max_tokens(
+                Protocol::Gemini,
+                &json!({ "generationConfig": { "maxOutputTokens": 500 } })
+            ),
+            Some(500)
+        );
+        assert_eq!(
+            extract_max_tokens(Protocol::Gemini, &json!({ "max_tokens": 1 })),
+            None
+        );
     }
 
     #[test]

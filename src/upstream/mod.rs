@@ -43,6 +43,16 @@ impl UpstreamError {
             UpstreamError::BodyRead(_) => false,
         }
     }
+
+    /// 客户端成因的 4xx（参数/资源错误）：换上游重打同样的 body 只会得到同样的
+    /// 错误，还会在每个候选上产生计费（发布审阅 L12）——此类错误不故障转移。
+    /// 注意 401/403 可能是候选级 Key 问题，仍可转移。
+    pub fn client_causal(&self) -> bool {
+        matches!(
+            self,
+            UpstreamError::Status(s, _) if matches!(s, 400 | 404 | 405 | 413 | 422)
+        )
+    }
 }
 
 /// reqwest 连接池：按「代理/直连」组合分池（避免不同代理连接串用，PLAN §5.9）。
@@ -79,7 +89,7 @@ impl ClientPools {
             "direct".to_string()
         };
 
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(c) = inner.get(&key) {
             return c.clone();
         }
@@ -136,7 +146,7 @@ impl Default for ClientPools {
 impl ClientPools {
     /// 直连池客户端（no_proxy 命中时使用）。
     pub fn direct_client(&self) -> reqwest::Client {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         // 与 client_for("direct") 同配置（pool_max_idle_per_host/keepalive），避免池参数分裂（review P3）
         g.entry("direct".to_string())
             .or_insert_with(|| Self::build_client(None))
@@ -243,6 +253,11 @@ pub fn endpoint_path(p: Protocol, model: &str, stream: bool) -> String {
             }
         }
     }
+}
+
+/// URL 路径段百分号编码（media 图片端点复用）。
+pub fn encode_path_segment_pub(s: &str) -> String {
+    encode_path_segment(s)
 }
 
 /// URL 路径段百分号编码：保留 unreserved 与安全字符，其余 %XX。
@@ -569,6 +584,18 @@ pub fn rewrite_sse_payload(data: &str, model: &str) -> String {
                         serde_json::Value::String(model.to_string()),
                     );
                 }
+                // 嵌套改写（发布审阅 M6）：Anthropic 事件 model 在 message 内、
+                // Responses 在 response 内——顶层够不到会泄漏上游模型名。
+                for key in ["message", "response"] {
+                    if let Some(inner) = obj.get_mut(key).and_then(|m| m.as_object_mut()) {
+                        if inner.contains_key("model") {
+                            inner.insert(
+                                "model".to_string(),
+                                serde_json::Value::String(model.to_string()),
+                            );
+                        }
+                    }
+                }
             }
             encode_typed_event(&v.to_string())
         }
@@ -635,6 +662,7 @@ pub fn sse_convert_stream(
     resp: reqwest::Response,
     from: Protocol,
     to: Protocol,
+    gateway_model: String,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
     let state = ConvertState {
         stream: Box::pin(resp.bytes_stream()),
@@ -643,6 +671,7 @@ pub fn sse_convert_stream(
         done: false,
         from,
         to,
+        gateway_model,
         from_state: AnyStreamState::new(from),
         to_state: AnyStreamState::new(to),
     };
@@ -694,6 +723,7 @@ struct ConvertState {
     done: bool,
     from: Protocol,
     to: Protocol,
+    gateway_model: String,
     from_state: AnyStreamState,
     to_state: AnyStreamState,
 }
@@ -701,15 +731,19 @@ struct ConvertState {
 fn process_convert_frame(st: &mut ConvertState, data: &str) {
     let mut ctx = ConvCtx::new();
     match chunk_to_ir(st.from, data, &mut st.from_state, &mut ctx) {
-        Ok(Some(chunk)) => match chunk_from_ir(st.to, &chunk, &mut st.to_state, &mut ctx) {
-            Ok(events) => {
-                for ev in events {
-                    st.queue
-                        .push_back(Ok(Bytes::from(encode_typed_event(&ev).into_bytes())));
+        Ok(Some(mut chunk)) => {
+            // 回写网关模型名（发布审阅 M6：上游模型名泄漏 / Gemini 源空 model）
+            chunk.model = st.gateway_model.clone();
+            match chunk_from_ir(st.to, &chunk, &mut st.to_state, &mut ctx) {
+                Ok(events) => {
+                    for ev in events {
+                        st.queue
+                            .push_back(Ok(Bytes::from(encode_typed_event(&ev).into_bytes())));
+                    }
                 }
+                Err(e) => tracing::warn!("转换帧写 IR→输出失败: {e}"),
             }
-            Err(e) => tracing::warn!("转换帧写 IR→输出失败: {e}"),
-        },
+        }
         Ok(None) => {}
         Err(e) => tracing::warn!("转换帧解析失败: {e}"),
     }

@@ -293,7 +293,7 @@ impl Breaker {
                 let stuck = self
                     .halfopen_since
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .get(&id)
                     .cloned()
                     .map(|since| (now - since).num_seconds() >= HALFOPEN_TIMEOUT_SECS)

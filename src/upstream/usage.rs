@@ -221,7 +221,10 @@ fn max_tokens_field(p: Protocol, v: &serde_json::Value) -> Option<u64> {
             .and_then(|x| x.as_u64()),
         Protocol::OpenaiResponses => v.get("max_output_tokens").and_then(|x| x.as_u64()),
         Protocol::Anthropic => v.get("max_tokens").and_then(|x| x.as_u64()),
-        Protocol::Gemini => v.get("maxOutputTokens").and_then(|x| x.as_u64()),
+        Protocol::Gemini => v
+            .get("generationConfig")
+            .and_then(|g| g.get("maxOutputTokens"))
+            .and_then(|x| x.as_u64()),
     }
 }
 
