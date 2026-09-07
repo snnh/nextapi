@@ -53,6 +53,8 @@ import type {
   UnpricedItem,
   UpstreamIn,
   UpstreamOut,
+  UpstreamRevealReq,
+  UpstreamRevealResp,
   SystemStatusResp,
   VersionResp,
   UpstreamModelsResp,
@@ -98,6 +100,9 @@ export const upstreamApi = {
     http.put<UpstreamOut>(`/api/upstreams/${id}`, body).then((r) => r.data),
   remove: (id: string) => http.delete<OkResp>(`/api/upstreams/${id}`).then((r) => r.data),
   test: (id: string) => http.post<TestResp>(`/api/upstreams/${id}/test`).then((r) => r.data),
+  /** 安全验证（管理员密码 + 可选 TOTP）通过后查看明文 API Key；仅本次展示 */
+  revealKey: (id: string, body: UpstreamRevealReq) =>
+    http.post<UpstreamRevealResp>(`/api/upstreams/${id}/reveal-key`, body).then((r) => r.data),
   /** 实时拉取上游模型列表（含路由状态标注） */
   fetchModels: (id: string) =>
     http.get<UpstreamModelsResp>(`/api/upstreams/${id}/models`).then((r) => r.data),
