@@ -21,10 +21,13 @@ const el = ref<HTMLDivElement>()
 let chart: echarts.ECharts | null = null
 let observer: ResizeObserver | null = null
 
+// 全局色板：对齐石墨主题（OWC 配色），规避 ECharts 默认色板中的蓝/紫
+const PALETTE = ['#3d444c', '#0f7b6c', '#c27a16', '#b42332', '#67777f', '#7a9e8f', '#8a6d3b', '#9aa7ae']
+
 onMounted(() => {
   if (!el.value) return
   chart = echarts.init(el.value)
-  chart.setOption(props.option, { notMerge: true })
+  chart.setOption({ color: PALETTE, ...props.option }, { notMerge: true })
   observer = new ResizeObserver(() => chart?.resize())
   observer.observe(el.value)
 })
@@ -32,7 +35,7 @@ onMounted(() => {
 watch(
   () => props.option,
   (opt) => {
-    if (chart) chart.setOption(opt, { notMerge: true })
+    if (chart) chart.setOption({ color: PALETTE, ...opt }, { notMerge: true })
   },
   { deep: true },
 )

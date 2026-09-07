@@ -1,34 +1,71 @@
+/* 默认配色参考 OpenWebCode（graphite 灰阶强调色，无蓝紫）：
+   accent #3d444c / 页面底 #f1f4f5 / 文本 #17202a / 状态色 teal·amber·brick */
 :root {
-  --el-color-primary: #4f46e5;
-  --el-color-primary-light-3: #7a73ec;
-  --el-color-primary-light-5: #a09cf2;
-  --el-color-primary-light-7: #c6c3f8;
-  --el-color-primary-light-9: #efedfc;
-  --el-color-primary-dark-2: #4338ca;
+  --el-color-primary: #3d444c;
+  --el-color-primary-light-3: #777c82;
+  --el-color-primary-light-5: #9ea2a5;
+  --el-color-primary-light-7: #c5c7c9;
+  --el-color-primary-light-8: #d8dadb;
+  --el-color-primary-light-9: #e3e6e9;
+  --el-color-primary-dark-2: #2e343b;
+
+  --el-color-success: #0f7b6c;
+  --el-color-success-light-3: #57a398;
+  --el-color-success-light-5: #87bdb5;
+  --el-color-success-light-7: #b7d8d3;
+  --el-color-success-light-8: #cfe5e2;
+  --el-color-success-light-9: #e7f2f0;
+  --el-color-success-dark-2: #0c6256;
+
+  --el-color-warning: #c27a16;
+  --el-color-warning-light-3: #d19544;
+  --el-color-warning-light-5: #e0bc8a;
+  --el-color-warning-light-7: #ecd4ae;
+  --el-color-warning-light-8: #f3e0c2;
+  --el-color-warning-light-9: #f9f2e8;
+  --el-color-warning-dark-2: #9b6112;
+
+  --el-color-error: #b42332;
+  --el-color-error-light-3: #ca6570;
+  --el-color-error-light-5: #d99198;
+  --el-color-error-light-7: #e8bdc2;
+  --el-color-error-light-8: #f0d3d6;
+  --el-color-error-light-9: #f7e9ea;
+  --el-color-error-dark-2: #901c28;
+  --el-color-danger: #b42332;
+  --el-color-danger-light-3: #ca6570;
+  --el-color-danger-light-5: #d99198;
+  --el-color-danger-light-7: #e8bdc2;
+  --el-color-danger-light-8: #f0d3d6;
+  --el-color-danger-light-9: #f7e9ea;
+  --el-color-danger-dark-2: #901c28;
+
   --el-border-radius-base: 6px;
   --el-border-radius-small: 4px;
-  --el-bg-color-page: #f4f5f7;
-  --el-border-color: #e8eaee;
-  --el-border-color-light: #eceef1;
-  --el-border-color-lighter: #eef0f3;
-  --el-text-color-primary: #1f2329;
-  --el-text-color-regular: #4b5563;
+  --el-bg-color-page: #f1f4f5;
+  --el-border-color: #d9e1e4;
+  --el-border-color-light: #e2e8eb;
+  --el-border-color-lighter: #e9eef0;
+  --el-text-color-primary: #17202a;
+  --el-text-color-regular: #4c5f69;
 }
 
 .el-button--primary {
-  --el-button-bg-color: #4f46e5;
-  --el-button-border-color: #4f46e5;
-  --el-button-hover-bg-color: #4338ca;
-  --el-button-hover-border-color: #4338ca;
+  --el-button-bg-color: #3d444c;
+  --el-button-border-color: #3d444c;
+  --el-button-hover-bg-color: #2e343b;
+  --el-button-hover-border-color: #2e343b;
+  --el-button-active-bg-color: #23282e;
+  --el-button-active-border-color: #23282e;
 }
 
 .el-card {
-  --el-card-border-color: #e8eaee;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+  --el-card-border-color: #d9e1e4;
+  box-shadow: 0 1px 2px rgba(23, 32, 42, .06);
 }
-.el-table { --el-table-border-color: #eceef1; --el-table-header-bg-color: #fafbfc; }
-.el-table th.el-table__cell { font-weight: 600; color: #4b5563; }
+.el-table { --el-table-border-color: #e2e8eb; --el-table-header-bg-color: #fafbfc; }
+.el-table th.el-table__cell { font-weight: 600; color: #4c5f69; }
 .el-tabs__item { font-weight: 500; }
-.el-input__wrapper, .el-select__wrapper { box-shadow: 0 0 0 1px #dcdfe4 inset; }
-.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px #4f46e5 inset; }
-.el-radio-button__inner:hover { color: #4338ca; }
+.el-input__wrapper, .el-select__wrapper { box-shadow: 0 0 0 1px #d9e1e4 inset; }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px #3d444c inset; }
+.el-radio-button__inner:hover { color: #2e343b; }
