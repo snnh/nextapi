@@ -1,6 +1,6 @@
 [package]
 name = "nextapi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "NextAPI — 自托管 LLM 网关（协议转换 / 聚合路由 / 日志统计 / 计价）"
 license = "Apache-2.0"
