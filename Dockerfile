@@ -56,10 +56,10 @@ COPY --from=builder /app/target/release/nextapi /usr/local/bin/nextapi
 # 前端已经 rust-embed 编译进二进制；如改为外部 dist 挂载可在此添加 COPY。
 
 ENV NEXTAPI_CONFIG=/etc/nextapi/config.yaml
-EXPOSE 8080
+EXPOSE 3220
 VOLUME /data
 
 USER nextapi
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:3220/healthz || exit 1
 CMD ["nextapi"]

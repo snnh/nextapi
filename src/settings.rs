@@ -518,8 +518,8 @@ mod tests {
         );
         // 非敏感键不加密
         assert_eq!(
-            seal_secret_value(&c, "server.listen", "0.0.0.0:8080"),
-            "0.0.0.0:8080"
+            seal_secret_value(&c, "server.listen", "0.0.0.0:3220"),
+            "0.0.0.0:3220"
         );
         // 旧版明文行兼容直读
         assert_eq!(

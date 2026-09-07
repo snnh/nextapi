@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # 服务：
 #   postgres : PostgreSQL 16，数据持久化到命名卷 pgdata，带健康检查；
-#   nextapi  : 构建自当前目录，等待 postgres healthy 后启动，端口 8080。
+#   nextapi  : 构建自当前目录，等待 postgres healthy 后启动，端口 3220。
 #
 # 首次运行：
 #   cp config.example.yaml config.yaml
@@ -38,13 +38,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3220/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
     ports:
-      - "8080:8080"
+      - "3220:3220"
     environment:
       # 数据库连接（启动类参数，env 优先于 YAML 的 database.url）
       DATABASE_URL: postgres://nextapi:nextapi@postgres:5432/nextapi

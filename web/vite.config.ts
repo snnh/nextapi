@@ -2,9 +2,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
-// 开发代理：后端默认 8080（config.example.yaml server.listen）。可用环境变量覆盖：
-//   VITE_PROXY_TARGET=http://127.0.0.1:8080 npm run dev
-const target = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8080'
+// 开发代理：后端默认 3220（config.example.yaml server.listen）。可用环境变量覆盖：
+//   VITE_PROXY_TARGET=http://127.0.0.1:3220 npm run dev
+const target = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:3220'
 
 export default defineConfig({
   plugins: [vue()],

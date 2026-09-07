@@ -76,7 +76,7 @@ pub struct ServerCfg {
 impl Default for ServerCfg {
     fn default() -> Self {
         Self {
-            listen: "0.0.0.0:8080".into(),
+            listen: "0.0.0.0:3220".into(),
             admin_jwt_secret: String::new(),
             debug: false,
             trusted_proxies: Vec::new(),
@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn mask_sensitive_fields() {
         let mut v = serde_json::json!({
-            "server": { "listen": "0.0.0.0:8080", "admin_jwt_secret": "s3cret", "debug": false },
+            "server": { "listen": "0.0.0.0:3220", "admin_jwt_secret": "s3cret", "debug": false },
             "admin": { "username": "admin", "initial_password": "init123", "password_hash": "$argon2$..." },
             "upstreams": [{ "name": "u1", "api_key": "sk-aaa" }],
             "proxies": [
@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(v["upstreams"][0]["api_key"], "***");
         assert_eq!(v["proxies"][0]["password"], "***");
         assert_eq!(v["proxies"][1]["password"], ""); // 空字符串保持原样
-        assert_eq!(v["server"]["listen"], "0.0.0.0:8080"); // 非敏感字段不受影响
+        assert_eq!(v["server"]["listen"], "0.0.0.0:3220"); // 非敏感字段不受影响
     }
 
     #[tokio::test]

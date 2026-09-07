@@ -43,7 +43,7 @@
 - 构建：`cargo build`；检查：`cargo check`；运行：`cargo run`（需要 PostgreSQL：本机 PG 或 `docker-compose up postgres`）
 - **前端（web/ 已存在）**：`cd web && npm install && npm run build`（产物 `web/dist`，经 rust-embed 编译进二进制）。**注意：`cargo build/test` 编译期读取 `web/dist`，目录缺失会编译失败**——本地改完前端后先 `npm run build` 再 cargo；Docker 多阶段已自动保证顺序（rust-embed 内嵌，运行期无需 dist）。
 - 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试在 `tests/`，需 docker-compose 起 PG + mock 上游）
-- 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:8080，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
+- 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:3220，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
 - 部署：`docker-compose up -d`（`nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`）
 - 发布前加入 `cargo audit` / `cargo deny` 依赖审计
 
