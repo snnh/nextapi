@@ -83,14 +83,30 @@ async fn put_config(
     let new_cfg: ConfigFile = serde_json::from_value(value.clone())
         .map_err(|e| ApiError::bad_request(format!("配置解析失败: {e}")))?;
 
-    // 写回配置文件（YAML）：先写同目录临时文件再 rename，原子替换防半写损坏（review P2-10）
+    // 写回配置文件（YAML）：先写同目录临时文件再 rename，原子替换防半写损坏（review P2-10）。
+    // 只读挂载（docker-compose `config.yaml:ro`）下写入必失败——前置探测并给出
+    // 明确指引，而不是 EROFS 500（发布审阅运维 P2-4）。
     let yaml_str = serde_yaml::to_string(&new_cfg).map_err(ApiError::internal)?;
     let path = state.config_path.as_path();
     let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, yaml_str).map_err(|e| ApiError::internal(format!("配置写入失败: {e}")))?;
+    let readonly_hint =
+        "配置文件为只读挂载（docker-compose :ro）。请改用「系统设置」页（/api/settings）逐项修改，         或将挂载改为可写后用本端点";
+    std::fs::write(&tmp, yaml_str).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem || e.raw_os_error() == Some(30)
+        // EROFS
+        {
+            ApiError::bad_request(readonly_hint)
+        } else {
+            ApiError::internal(format!("配置写入失败: {e}"))
+        }
+    })?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        ApiError::internal(format!("配置替换失败: {e}"))
+        if e.raw_os_error() == Some(30) || e.kind() == std::io::ErrorKind::ReadOnlyFilesystem {
+            ApiError::bad_request(readonly_hint)
+        } else {
+            ApiError::internal(format!("配置替换失败: {e}"))
+        }
     })?;
 
     // 热载 hot 参数 + 更新内存中的 file_config + 审计

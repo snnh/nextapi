@@ -352,8 +352,11 @@ async fn main() -> anyhow::Result<()> {
         // M8：管理后台静态资源（web/dist 内嵌；SPA fallback）
         .fallback(embed::spa_fallback)
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        // 网关 JSON/图片请求统一限制 16 MiB，避免 Bytes 提取器被超大 body 消耗内存。
-        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
+        // 单请求体上限 100 MiB（发布审阅 M7：16MiB 会误拒多图 base64 请求）；
+        // map_response 把提取器产生的 413（纯文本、无 request_id）塑形为统一
+        // JSON 错误体 + x-request-id。
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+        .layer(middleware::map_response(shape_payload_too_large))
         .with_state(state);
 
     let addr: SocketAddr = listen
@@ -391,6 +394,31 @@ async fn main() -> anyhow::Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
     }
     Ok(())
+}
+
+/// 413 塑形（map_response）：提取器拒绝产生的纯文本 413 → 统一 JSON 错误体
+/// + x-request-id（发布审阅 M7）。其余状态原样放行。
+async fn shape_payload_too_large(resp: axum::response::Response) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if resp.status() != axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        return resp;
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut out = (
+        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+        axum::Json(serde_json::json!({
+            "error": {
+                "message": "请求体超过大小限制 100MiB",
+                "type": "nextapi_error",
+                "code": null
+            }
+        })),
+    )
+        .into_response();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&request_id) {
+        out.headers_mut().insert("x-request-id", v);
+    }
+    out
 }
 
 /// fx 拉取端点 URL（与 billing::fx::fetch_and_store 内部一致，用于 no_proxy 命中判定）。
