@@ -26,69 +26,95 @@
           <el-button type="primary" :icon="Search" @click="loadRules">查询</el-button>
           <el-button :icon="Refresh" @click="resetFilter">重置</el-button>
           <div class="spacer" />
-          <el-button type="primary" :icon="Plus" @click="openCreate">新建规则</el-button>
+          <el-button type="primary" :icon="Plus" @click="openModelPrice()">按模型定价</el-button>
+          <el-button :icon="Setting" @click="openCreate" title="单条规则（图片/视频维度、有效期等高级项）">高级规则</el-button>
         </div>
 
         <el-card shadow="never">
-          <el-table :data="rules" empty-text="暂无价格规则" v-loading="rulesLoading">
+          <el-table :data="modelGroups" empty-text="暂无价格规则" v-loading="rulesLoading" row-key="key">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="rule-expand">
+                  <el-table :data="row.rules" size="small">
+                    <el-table-column label="计价单位" min-width="150">
+                      <template #default="{ row: r }">{{ UNIT_LABEL(r.unit) }}</template>
+                    </el-table-column>
+                    <el-table-column label="币种" width="70" align="center">
+                      <template #default="{ row: r }">{{ r.currency }}</template>
+                    </el-table-column>
+                    <el-table-column label="基础单价" min-width="110" align="right">
+                      <template #default="{ row: r }"><span class="mono">{{ fmtMoney(r.base_price) }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="分段" width="90" align="center">
+                      <template #default="{ row: r }">
+                        <el-tooltip v-if="r.segments && r.segments.length" placement="top">
+                          <template #content>
+                            <div v-for="(s, i) in r.segments" :key="i" class="seg-tip">{{ segTitle(s) }}</div>
+                          </template>
+                          <el-tag size="small" type="primary" effect="plain">{{ r.segments.length }} 段</el-tag>
+                        </el-tooltip>
+                        <span v-else class="hint">—</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="维度" min-width="120">
+                      <template #default="{ row: r }">
+                        <el-tooltip v-if="r.dimensions && Object.keys(r.dimensions).length" placement="top">
+                          <template #content>
+                            <div v-for="(v, k) in r.dimensions" :key="k" class="seg-tip">{{ k }} = {{ fmtDimensionValue(v) }}</div>
+                          </template>
+                          <span class="mono">{{ r.dimension_key || '维度' }}</span>
+                        </el-tooltip>
+                        <span v-else class="hint">—</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="启用" width="70" align="center">
+                      <template #default="{ row: r }">
+                        <el-switch
+                          v-model="r.enabled"
+                          size="small"
+                          :loading="togglingSet.has(r.id)"
+                          @change="(val: boolean) => toggleEnabled(r, val)"
+                        />
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="有效期" min-width="200">
+                      <template #default="{ row: r }">{{ effectiveRange(r) }}</template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="150" fixed="right">
+                      <template #default="{ row: r }">
+                        <el-button size="small" @click="openEdit(r)">高级编辑</el-button>
+                        <el-button size="small" type="danger" @click="removeRule(r)">删除</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </template>
+            </el-table-column>
             <el-table-column prop="model_id" label="模型" min-width="180" show-overflow-tooltip />
-            <el-table-column label="上游" min-width="150" show-overflow-tooltip>
+            <el-table-column label="上游" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
             </el-table-column>
-            <el-table-column label="计价单位" min-width="170">
-              <template #default="{ row }">{{ UNIT_LABEL(row.unit) }}</template>
-            </el-table-column>
-            <el-table-column label="币种" width="80" align="center">
-              <template #default="{ row }">{{ row.currency }}</template>
-            </el-table-column>
-            <el-table-column label="基础单价" min-width="120" align="right">
+            <el-table-column v-for="u in TOKEN_UNITS" :key="u" :label="UNIT_SHORT[u]" min-width="110" align="right">
               <template #default="{ row }">
-                <span class="mono">{{ fmtMoney(row.base_price) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="分段" min-width="110" align="center">
-              <template #default="{ row }">
-                <el-tooltip v-if="row.segments && row.segments.length" placement="top">
-                  <template #content>
-                    <div v-for="(s, i) in row.segments" :key="i" class="seg-tip">{{ segTitle(s) }}</div>
-                  </template>
-                  <el-tag size="small" type="primary" effect="plain">{{ row.segments.length }} 段</el-tag>
-                </el-tooltip>
+                <template v-if="row.unitMap[u]">
+                  <span class="mono">{{ fmtMoney(row.unitMap[u].base_price) }}</span>
+                  <span class="hint"> {{ row.unitMap[u].currency }}</span>
+                  <el-tag v-if="row.unitMap[u].segments?.length" size="small" effect="plain" style="margin-left: 4px">
+                    {{ row.unitMap[u].segments.length }}段
+                  </el-tag>
+                </template>
                 <span v-else class="hint">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="维度" min-width="120">
+            <el-table-column label="其他" width="90" align="center">
               <template #default="{ row }">
-                <el-tooltip
-                  v-if="row.dimensions && Object.keys(row.dimensions).length"
-                  placement="top"
-                >
-                  <template #content>
-                    <div v-for="(v, k) in row.dimensions" :key="k" class="seg-tip">
-                      {{ k }} = {{ fmtDimensionValue(v) }}
-                    </div>
-                  </template>
-                  <span class="mono">{{ row.dimension_key || '维度' }}</span>
-                </el-tooltip>
+                <el-tag v-if="row.otherCount" size="small" type="info" effect="plain">{{ row.otherCount }} 条</el-tag>
                 <span v-else class="hint">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="启用" width="80" align="center">
+            <el-table-column label="操作" width="150" fixed="right">
               <template #default="{ row }">
-                <el-switch
-                  v-model="row.enabled"
-                  :loading="togglingSet.has(row.id)"
-                  @change="(val: boolean) => toggleEnabled(row, val)"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="有效期" min-width="220">
-              <template #default="{ row }">{{ effectiveRange(row) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="160" fixed="right">
-              <template #default="{ row }">
-                <el-button size="small" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" @click="removeRule(row)">删除</el-button>
+                <el-button size="small" type="primary" @click="openModelPrice(row)">编辑定价</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -225,17 +251,19 @@
 
     <!-- 规则新建/编辑弹窗 -->
     <RuleFormDialog ref="formDialogRef" :upstreams="upstreams" @saved="onRuleSaved" />
+    <!-- 按模型定价弹窗 -->
+    <ModelPriceDialog ref="modelDialogRef" :upstreams="upstreams" @saved="onRuleSaved" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search } from '@element-plus/icons-vue'
+import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { pricingApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
-import { UNIT_LABEL } from '@/utils/consts'
+import { UNIT_LABEL, UNIT_SHORT } from '@/utils/consts'
 import { fmtDate, fmtMoney } from '@/utils/format'
 import { downloadText } from '@/utils/download'
 import type {
@@ -243,12 +271,14 @@ import type {
   PreviewResp,
   PriceExportFormat,
   PriceSegment,
+  PriceUnit,
   RuleItem,
   UnpricedItem,
   UpstreamOut,
 } from '@/api/types'
 import { fmtDimensionValue } from '@/components/pricing/types'
 import RuleFormDialog from '@/components/pricing/RuleFormDialog.vue'
+import ModelPriceDialog from '@/components/pricing/ModelPriceDialog.vue'
 import PreviewPanel from '@/components/pricing/PreviewPanel.vue'
 import ImportPanel from '@/components/pricing/ImportPanel.vue'
 import FxPanel from '@/components/pricing/FxPanel.vue'
@@ -258,6 +288,7 @@ const pageLoading = ref(false)
 
 const activeTab = ref('rules')
 const formDialogRef = ref<InstanceType<typeof RuleFormDialog>>()
+const modelDialogRef = ref<InstanceType<typeof ModelPriceDialog>>()
 
 async function loadUpstreams() {
   try {
@@ -310,6 +341,51 @@ function effectiveRange(row: RuleItem): string {
   const from = fmtDate(row.effective_from)
   const to = fmtDate(row.effective_to)
   return `${from} ~ ${to}`
+}
+
+// —— 按模型分组（默认视图）：同供应商+同模型的多条单位规则聚合为一行 ——
+const TOKEN_UNITS: PriceUnit[] = ['token_in', 'token_out', 'token_cache_write', 'token_cache_read']
+
+interface ModelGroup {
+  key: string
+  upstream_id: string
+  model_id: string
+  upstream_name: string | null
+  unitMap: Partial<Record<PriceUnit, RuleItem>>
+  otherCount: number
+  rules: RuleItem[]
+}
+
+const modelGroups = computed<ModelGroup[]>(() => {
+  const map = new Map<string, ModelGroup>()
+  for (const r of rules.value) {
+    const key = `${r.upstream_id}|${r.model_id}`
+    let g = map.get(key)
+    if (!g) {
+      g = {
+        key,
+        upstream_id: r.upstream_id,
+        model_id: r.model_id,
+        upstream_name: r.upstream_name,
+        unitMap: {},
+        otherCount: 0,
+        rules: [],
+      }
+      map.set(key, g)
+    }
+    g.rules.push(r)
+    if (TOKEN_UNITS.includes(r.unit)) {
+      // 同单位多条（如不同有效期）：取启用的第一条
+      if (!g.unitMap[r.unit] || (r.enabled && !g.unitMap[r.unit]!.enabled)) g.unitMap[r.unit] = r
+    } else {
+      g.otherCount++
+    }
+  }
+  return [...map.values()].sort((a, b) => a.model_id.localeCompare(b.model_id))
+})
+
+function openModelPrice(row?: ModelGroup) {
+  modelDialogRef.value?.open(row ? { upstream_id: row.upstream_id, model_id: row.model_id } : undefined)
 }
 
 function openCreate() {
@@ -375,7 +451,7 @@ async function loadUnpriced() {
 }
 
 function priceUpstream(row: UnpricedItem) {
-  formDialogRef.value?.open(undefined, { upstream_id: row.upstream_id, model_id: row.model_id })
+  modelDialogRef.value?.open({ upstream_id: row.upstream_id, model_id: row.model_id })
 }
 
 // —— Tab3 价格试算 ——
@@ -514,5 +590,9 @@ onMounted(() => {
   font-size: 12px;
   line-height: 1.6;
   white-space: nowrap;
+}
+.rule-expand {
+  padding: 4px 16px 8px 48px;
+  background: #fafbfc;
 }
 </style>
