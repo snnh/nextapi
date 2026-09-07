@@ -157,6 +157,8 @@ cargo test                               # 单元测试（集成测试 tests/ �
 ```
 
 > **注意**：`cargo build`/`cargo test` 编译期读取 `web/dist`，目录缺失会编译失败——改完前端先 `npm run build` 再执行 cargo 命令；Docker 多阶段构建已自动保证顺序。
+>
+> **Node.js 仅在编译时需要**：它只用于构建前端 `web/dist`（经 rust-embed 内嵌进二进制）。运行期——无论是编译出的二进制还是 Docker 镜像——都不需要 Node.js；本地不开发前端时，也可用已有的 `web/dist` 或发布镜像直接运行。
 
 ## 文档
 
