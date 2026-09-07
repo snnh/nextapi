@@ -22,7 +22,7 @@ NextAPI 是一个自托管的 LLM 网关（Rust + axum + PostgreSQL）：客户�
 1. 服务端（二选一）：
   - Docker：Docker 20.10+ 与 Compose v2（推荐，镜像含全部依赖，自动迁移数据库）；
   - 源码运行：Linux / macOS，Rust stable、Node.js ≥ 20（构建前端）、PostgreSQL 15+。
-  - 资源：内存 ≥ 256 MiB 空闲，硬盘 ≥ 500 MiB 可用。
+  - 资源：内存 ≥ 512 MiB 空闲，硬盘 ≥ 500 MiB 可用。
 
 2. 客户端：
   - 管理后台：可运行 Chrome / Edge ≥ 111 或 Firefox ≥ 113 的设备（含手机和平板）；
@@ -32,12 +32,12 @@ NextAPI 是一个自托管的 LLM 网关（Rust + axum + PostgreSQL）：客户�
 
 - 协议互转：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互相转换，客户端与上游可任意组合；上游支持入口协议时透传优先（仅改写模型名与鉴权头）。
 - 聚合路由：模型通配匹配、优先级分组 + 加权随机、自动重试与故障转移、熔断（连续失败自动禁用 + 冷却 + 半开探活，冷却状态重启不丢）。
-- 渠道类型：标准 API Key 渠道 + Codex OAuth 渠道（粘贴 `~/.codex/auth.json`，临期自动刷新、轮换回写、失败联动熔断）；8 个内置供应商预设一键接入；渠道模型列表自动同步托管路由。
+- 渠道类型：标准 API Key 渠道 + Codex OAuth 渠道（粘贴 `~/.codex/auth.json`，临期自动刷新、轮换回写、失败联动熔断）；多个内置供应商预设一键接入；渠道模型列表自动同步托管路由。
 - 鉴权限流：网关 Key（SHA-256 哈希存储）+ 每 Key RPM/TPM 滑窗与 token/成本配额上限；管理员登录防爆破 + 可选 TOTP 二步验证。
-- 日志与成本：请求明细按 30 天声明式分区（不自动清理，手动整分区 DROP）+ 小时聚合；双币种（CNY/USD）分段计价，只统计不扣费；异步批量写库 + WAL 兜底，绝不阻塞主链路。
+- 日志与成本：请求明细按 30 天声明式分区（不自动清理，手动整分区 DROP）+ 小时聚合；双币种（CNY/USD）分段计价统计；异步批量写库 + WAL 兜底，绝不阻塞主链路。
 - 图片生成：统一 OpenAI 语义入口，适配 OpenAI / Gemini / Dashscope（同步与异步任务轮询计费闭环）四种上游形状。
 - 可观测：Prometheus `/metrics`（管理员 JWT 鉴权）、审计日志（含来源 IP）、日志 CSV 导出、脱敏存储。
-- 管理后台：登录 / 仪表盘 / 密钥 / 上游 / 路由 / 价格 / 日志 / 统计 / 系统设置 9 页，移动端抽屉侧栏适配。
+- 管理后台：登录 / 仪表盘 / 密钥 / 上游 / 路由 / 价格 / 日志 / 统计 / 系统设置，移动端抽屉侧栏适配。
 
 ## 快速开始
 
@@ -114,8 +114,6 @@ curl http://localhost:3220/v1beta/models/gemini-1.5-pro:generateContent \
   -H "Content-Type: application/json" \
   -d '{"contents":[{"parts":[{"text":"你好"}]}]}'
 ```
-
-**请求的是「网关模型名」而非上游模型名**：路由把网关模型映射到上游模型；透传模式下仅改写模型名与鉴权头，上游不支持入口协议时网关按内部 IR 自动转换。
 
 ## 配置
 
