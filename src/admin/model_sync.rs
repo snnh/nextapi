@@ -46,7 +46,7 @@ pub fn router() -> Router<Arc<AppState>> {
 /// 均由 base_url 携带版本前缀）；响应形状按协议适配：
 /// OpenAI/Anthropic `{data:[{id}]}`；Gemini `{models:[{name:"models/x"}]}`（去前缀）。
 pub async fn fetch_upstream_models(
-    state: &AppState,
+    state: &Arc<AppState>,
     up: &UpstreamRow,
 ) -> Result<Vec<String>, String> {
     let snap = state.cache.snapshot();
@@ -56,6 +56,7 @@ pub async fn fetch_upstream_models(
             .client_pools
             .client_for(up, &snap, &hot.proxy.default_proxy_id)
     };
+    let is_codex = up.kind == "codex";
     let proto = up
         .protocol_list()
         .first()
@@ -64,7 +65,17 @@ pub async fn fetch_upstream_models(
 
     let url = format!("{}/models", up.base_url.trim_end_matches('/'));
     let mut headers = reqwest::header::HeaderMap::new();
-    upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+    if is_codex {
+        // Codex 渠道：OAuth 凭证（临期自动刷新）+ 必需头；覆盖 SSE Accept 为 JSON
+        let (token, account) = upstream::codex::ensure_token(state, up).await?;
+        upstream::codex::apply_headers(&mut headers, &token, &account);
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+    } else {
+        upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+    }
 
     let resp = client
         .get(&url)
@@ -84,7 +95,38 @@ pub async fn fetch_upstream_models(
         .await
         .map_err(|e| format!("响应解析失败: {e}"))?;
 
+    if is_codex {
+        return Ok(parse_codex_models_response(&body));
+    }
     Ok(parse_models_response(proto, &body))
+}
+
+/// 解析 Codex 模型目录响应：`{models:[{slug, visibility, supported_in_api, ...}]}`。
+/// 仅保留可见（visibility 缺失或 == "list"）且支持 API（supported_in_api 缺失或 true）的模型 slug。
+fn parse_codex_models_response(body: &serde_json::Value) -> Vec<String> {
+    let mut models: Vec<String> = body
+        .get("models")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter(|m| {
+                    m.get("visibility")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v == "list")
+                        .unwrap_or(true)
+                        && m.get("supported_in_api")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true)
+                })
+                .filter_map(|m| m.get("slug").and_then(|s| s.as_str()))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    models.retain(|m| !m.is_empty());
+    models.sort();
+    models.dedup();
+    models
 }
 
 /// 解析各协议 /models 响应为模型 ID 列表（排序去重、去空串）。
@@ -455,6 +497,24 @@ async fn add_manual_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_codex_catalog_shape() {
+        let body = serde_json::json!({"models":[
+            {"slug":"gpt-5.1-codex","display_name":"GPT-5.1 Codex","visibility":"list","supported_in_api":true},
+            {"slug":"gpt-5.1-codex-mini","visibility":"list","supported_in_api":true},
+            {"slug":"gpt-5.1-codex-hidden","visibility":"hide","supported_in_api":true},
+            {"slug":"gpt-5.1-codex-legacy","visibility":"list","supported_in_api":false},
+            {"slug":"gpt-5.1-codex"},
+            {"display_name":"无 slug 项"}
+        ]});
+        assert_eq!(
+            parse_codex_models_response(&body),
+            vec!["gpt-5.1-codex", "gpt-5.1-codex-mini"]
+        );
+        // 非目录形状（无 models 键）→ 空
+        assert!(parse_codex_models_response(&serde_json::json!({"data":[]})).is_empty());
+    }
 
     #[test]
     fn parse_openai_shape() {
