@@ -593,6 +593,7 @@ async fn build_outbound_any(
     if let Mode::Convert(Protocol::Gemini) = mode {
         let mut ctx = ConvCtx::new();
         let mut ir = protocol::request_to_ir(entry, body, &mut ctx)?;
+        reject_empty_messages(&ir, &ctx)?;
         ir.model = upstream_model.to_string();
         ir.stream = stream;
         crate::media::resolve::resolve_url_images(state, &mut ir, img_cache, &mut ctx).await;
@@ -606,6 +607,22 @@ async fn build_outbound_any(
         });
     }
     build_outbound(entry, mode, body, stream, upstream_model, upstream)
+}
+
+/// fail-fast：转换后消息列表为空时拒绝发往上游（上游只会以 400 兜底报错，
+/// 如 ernie「messages cannot be empty」，客户端难以定位是哪一层的问题）。
+/// 错误信息附带转换降级线索（如 item 类型不识别被丢弃），便于定位客户端组装问题。
+fn reject_empty_messages(ir: &protocol::ir::IrRequest, ctx: &ConvCtx) -> Result<(), ConvertError> {
+    if !ir.messages.is_empty() {
+        return Ok(());
+    }
+    let mut msg = "请求不含任何有效消息（Responses 需 input、Chat/Anthropic 需 messages、\
+                   Gemini 需 contents）；若为 Responses 入口请检查 input item 是否带有正确的 type 字段"
+        .to_string();
+    if let Some(d) = ctx.degraded_header() {
+        msg.push_str(&format!("；转换降级项: {d}"));
+    }
+    Err(ConvertError::Parse(msg))
 }
 
 /// 构建待发送上游的请求体（透传改写 / 协议转换），并处理流式 usage 采集兜底。
@@ -633,6 +650,7 @@ fn build_outbound(
         Mode::Convert(target) => {
             let mut ctx = ConvCtx::new();
             let mut ir = protocol::request_to_ir(entry, body, &mut ctx)?;
+            reject_empty_messages(&ir, &ctx)?;
             ir.model = upstream_model.to_string();
             ir.stream = stream;
             // 流式且目标为 openai 系时注入 stream_options.include_usage（PLAN §4.4）
@@ -823,6 +841,31 @@ fn debug_payload(
     }))
 }
 
+/// 失败路径的 debug_payload：入口请求 +（可选）实际发往上游的转换后请求体 + 错误内容。
+/// 开启调试（req 为 Some）时才生成；upstream_request 让转换错误/上游拒绝可见可查。
+fn debug_fail_payload(
+    req: &Option<(serde_json::Value, bool)>,
+    outbound_body: Option<&serde_json::Value>,
+    response: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let (req, req_trunc) = req.as_ref()?;
+    let mut truncated = *req_trunc;
+    let mut obj = serde_json::json!({
+        "request": req.clone(),
+        "response": response,
+    });
+    if let Some(b) = outbound_body {
+        let (up, up_trunc) = crate::logging::redact::redact_and_truncate(
+            &serde_json::to_vec(b).unwrap_or_default(),
+            crate::logging::DEBUG_MAX_BYTES,
+        );
+        obj["upstream_request"] = up;
+        truncated = truncated || up_trunc;
+    }
+    obj["truncated"] = serde_json::Value::Bool(truncated);
+    Some(obj)
+}
+
 /// 鉴权后的失败统一记账（contract §12.5）。token 恒 None，protocol_out 未知 = protocol_in，
 /// convert_mode 未决策 = "none"（已在模板初始化时置 "none"，此处兜底）。
 fn log_fail(
@@ -964,12 +1007,17 @@ fn entry_error(entry: Protocol, fail: &Fail) -> (u16, serde_json::Value) {
             }
         },
         Fail::Convert(e) => {
+            // 请求解析失败属客户端成因（400）；能力不支持等仍为 502
+            let status = match e {
+                ConvertError::Parse(_) => 400,
+                _ => 502,
+            };
             let ir = IrError {
-                status: 502,
+                status,
                 message: e.to_string(),
                 ..Default::default()
             };
-            (502, error_from_ir(entry, &ir))
+            (status, error_from_ir(entry, &ir))
         }
     }
 }
@@ -1332,6 +1380,10 @@ async fn run_gateway(
     // 7-10. 协议决策 → 请求构建 → 执行/重试/故障转移 → 响应
     let mut last_err: Option<Fail> = None;
     let mut last_upstream: Option<String> = None;
+    // 失败事件回填：最后尝试的上游 ID / 请求侧降级 / 失败 debug 载荷
+    let mut last_upstream_id: Option<Uuid> = None;
+    let mut last_degraded = false;
+    let mut last_debug: Option<serde_json::Value> = None;
     // retry_count 定义：本候选内重试次数 idx + 之前彻底失败的候选数。
     let mut failed_candidates: u32 = 0;
     let mut last_idx: u32 = 0;
@@ -1368,9 +1420,21 @@ async fn run_gateway(
                 // Mode::Convert 蕴含入口协议不在该上游支持列表，「转换失败回退透传」
                 // 的前提不成立；转换失败只能转移到下一候选。
                 last_upstream = Some(upstream.name.clone());
+                last_upstream_id = Some(upstream.id);
+                // 失败调试：记录入口请求与转换错误（转换失败无出站请求体）
+                last_debug = debug_fail_payload(
+                    &debug_req,
+                    None,
+                    serde_json::json!({ "convert_error": cvt.to_string() }),
+                );
+                // 请求解析失败属客户端成因：同一 body 换候选必然同样失败，不故障转移
+                let no_failover = matches!(cvt, ConvertError::Parse(_));
                 last_err = Some(Fail::Convert(cvt));
                 failed_candidates += 1;
                 last_idx = 0;
+                if no_failover {
+                    break 'outer;
+                }
                 continue 'outer;
             }
         };
@@ -1629,6 +1693,20 @@ async fn run_gateway(
                     // 且每个候选都可能计费——不故障转移，直接返回当前错误（发布审阅 L12）。
                     let no_failover = e.client_causal();
                     last_upstream = Some(upstream.name.clone());
+                    last_upstream_id = Some(upstream.id);
+                    last_degraded = outbound.req_degraded.is_some();
+                    // 失败调试：入口请求 + 实际发往上游的（转换后）请求体 + 上游错误原文
+                    {
+                        let resp_val = match &e {
+                            UpstreamError::Status(s, body) => serde_json::json!({
+                                "status": s,
+                                "body": serde_json::from_str::<serde_json::Value>(body)
+                                    .unwrap_or_else(|_| serde_json::Value::String(body.clone())),
+                            }),
+                            other => serde_json::json!({ "error": other.to_string() }),
+                        };
+                        last_debug = debug_fail_payload(&debug_req, Some(&outbound.body), resp_val);
+                    }
                     last_err = Some(Fail::Upstream(e));
                     let can_retry = retryable && !lock && idx < retry_limit;
                     if can_retry {
@@ -1673,6 +1751,10 @@ async fn run_gateway(
     let mut ev = tmpl.clone();
     ev.protocol_out = last_protocol_out.unwrap_or_else(|| entry_protocol.as_str().to_string());
     ev.convert_mode = last_convert_mode.unwrap_or_else(|| "none".into());
+    // 失败终点回填实际尝试的上游与请求侧降级标记（此前恒 NULL/false，日志无法定位上游）
+    ev.upstream_id = last_upstream_id;
+    ev.degraded = last_degraded;
+    ev.debug_payload = last_debug;
     let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
     log_fail(&state, &ev, start, status, &msg, retry_count);
     if let Some(rid) = idem_rec {

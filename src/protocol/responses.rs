@@ -164,6 +164,18 @@ fn parse_input_content_part(p: &Value, ctx: &mut ConvCtx) -> Option<IrPart> {
             Some(IrPart::File { name, url, data })
         }
         other => {
+            // 容错：缺/未知 type 但带 text 的 part（含客户端回显 assistant 历史的
+            // output_text / refusal）按文本解析，避免整条消息被掏空（review：直通
+            // 上游能容忍的形态，转换不应丢弃）
+            if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                ctx.degrade(
+                    "input.content.part.type",
+                    format!("part 缺/未知 type（{other}），按文本解析"),
+                );
+                return Some(IrPart::Text {
+                    text: t.to_string(),
+                });
+            }
             ctx.degrade(
                 "input.content.part.type",
                 format!("未知 part 类型: {other}"),
@@ -202,24 +214,7 @@ fn parse_input_item(item: &Value, ctx: &mut ConvCtx) -> Result<Option<IrMessage>
     }
     let typ = item["type"].as_str().unwrap_or_default();
     match typ {
-        "message" => {
-            let mut msg = IrMessage {
-                role: parse_response_role(item["role"].as_str(), ctx),
-                ..Default::default()
-            };
-            if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
-                let mut parts = Vec::new();
-                for p in content {
-                    if let Some(part) = parse_input_content_part(p, ctx) {
-                        parts.push(part);
-                    }
-                }
-                if !parts.is_empty() {
-                    msg.content = Some(IrContent::Parts(parts));
-                }
-            }
-            Ok(Some(msg))
-        }
+        "message" => Ok(Some(parse_message_item(item, ctx))),
         "function_call" => {
             let id = item["call_id"]
                 .as_str()
@@ -273,10 +268,42 @@ fn parse_input_item(item: &Value, ctx: &mut ConvCtx) -> Result<Option<IrMessage>
             Ok(None)
         }
         other => {
+            // 容错：省略 type:"message" 的输入项（不少客户端这么发，直通上游可容忍；
+            // 转换整条丢弃会导致 messages 为空被上游拒绝——ernie-5.1 实测 400
+            // "messages cannot be empty"）。带 role/content 即按 message 解析。
+            if item.get("role").is_some() || item.get("content").is_some() {
+                ctx.degrade(
+                    "input.item.type",
+                    format!("输入项缺/未知 type（{other}），按 message 解析"),
+                );
+                return Ok(Some(parse_message_item(item, ctx)));
+            }
             ctx.degrade("input.item.type", format!("未知输入项类型，忽略: {other}"));
             Ok(None)
         }
     }
+}
+
+/// 解析 message 类型输入项（role + content parts；content 为纯字符串时容错为文本）。
+fn parse_message_item(item: &Value, ctx: &mut ConvCtx) -> IrMessage {
+    let mut msg = IrMessage {
+        role: parse_response_role(item["role"].as_str(), ctx),
+        ..Default::default()
+    };
+    if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+        let mut parts = Vec::new();
+        for p in content {
+            if let Some(part) = parse_input_content_part(p, ctx) {
+                parts.push(part);
+            }
+        }
+        if !parts.is_empty() {
+            msg.content = Some(IrContent::Parts(parts));
+        }
+    } else if let Some(s) = item.get("content").and_then(|c| c.as_str()) {
+        msg.content = Some(IrContent::Text(s.to_string()));
+    }
+    msg
 }
 
 /// 将一条待插入的消息合并进 messages 列表。
@@ -1728,6 +1755,33 @@ mod tests {
 
     fn ctx() -> ConvCtx {
         ConvCtx::new()
+    }
+
+    #[test]
+    fn typeless_message_items_are_kept() {
+        // 容错：客户端省略 type:"message" 的输入项不应被整条丢弃
+        //（否则 messages 为空被上游拒绝——ernie-5.1 实测 "messages cannot be empty"）
+        let j = serde_json::json!({
+            "model": "ernie-5.1",
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "你好"}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "你好！有什么可以帮你？"}]},
+                {"role": "user", "content": "纯字符串 content 也要保留"},
+            ],
+        });
+        let mut c = ctx();
+        let req = request_to_ir(&j, &mut c).unwrap();
+        assert_eq!(req.messages.len(), 3);
+        assert_eq!(req.messages[0].role, IrRole::User);
+        assert_eq!(req.messages[1].role, IrRole::Assistant);
+        assert_eq!(req.messages[2].role, IrRole::User);
+        // 转 Chat 后 messages 非空且内容完整
+        let out = crate::protocol::chat::request_from_ir(&req, &mut ctx()).unwrap();
+        let msgs = out["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[2]["content"], "纯字符串 content 也要保留");
+        // 容错均记了降级（可观测）
+        assert!(c.degraded_header().is_some());
     }
 
     #[test]
