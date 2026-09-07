@@ -47,7 +47,35 @@
         </div>
       </el-form-item>
 
-      <el-form-item label="API Key" prop="api_key">
+      <!-- Codex 渠道：OAuth 凭证（auth.json 粘贴） -->
+      <template v-if="isCodex">
+        <el-form-item label="OAuth 凭证">
+          <div class="api-key-block">
+            <div v-if="isEdit && form.hasOauth" class="oauth-state">
+              <el-tag type="success" size="small">已授权</el-tag>
+              <span class="hint">账号 {{ form.oauthAccountId || '-' }}</span>
+              <span class="hint">令牌有效期至 {{ form.oauthExpiresAt ? fmtTime(form.oauthExpiresAt) : '-' }}</span>
+              <el-button size="small" :loading="oauthRefreshing" @click="refreshOAuth">手动刷新</el-button>
+            </div>
+            <el-input
+              v-model="form.auth_json"
+              type="textarea"
+              :rows="5"
+              class="mono"
+              :placeholder="
+                isEdit && form.hasOauth
+                  ? '留空保持现有凭证；粘贴新的 auth.json 覆盖'
+                  : '粘贴 codex CLI 的 ~/.codex/auth.json 全文（含 tokens.access_token / refresh_token）'
+              "
+            />
+            <div class="hint" style="margin-top: 4px">
+              获取方式：本机安装 codex CLI 执行 <span class="mono">codex login</span>
+              后复制 ~/.codex/auth.json。凭证加密存储，到期自动刷新；内置授权流程（免 CLI）后续版本提供。
+            </div>
+          </div>
+        </el-form-item>
+      </template>
+      <el-form-item v-else label="API Key" prop="api_key">
         <div v-if="isEdit" class="api-key-block">
           <div class="api-key-state">
             <el-tag v-if="form.hasApiKey" type="success" size="small">已设置</el-tag>
@@ -310,6 +338,9 @@ const emit = defineEmits<{ (e: 'saved'): void }>()
 
 const IMAGE_PROTOCOLS = PROTOCOL_OPTIONS.filter((o) => o.value.startsWith('images_')).map((o) => o.value)
 
+/** Codex 渠道默认值（与后端 upstream/codex.rs 常量一致） */
+const CODEX_DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex'
+
 const visible = ref(false)
 const saving = ref(false)
 const isEdit = ref(false)
@@ -357,6 +388,11 @@ interface FormState {
   model_exclude: string[]
   /** 分协议 base_url 覆盖（proto → url；空串=不覆盖） */
   protocolBaseUrls: Record<string, string>
+  /** Codex：auth.json 原文（仅传输用，不展示回读） */
+  auth_json: string
+  hasOauth: boolean
+  oauthAccountId: string
+  oauthExpiresAt: string
 }
 
 function defaultForm(): FormState {
@@ -384,8 +420,15 @@ function defaultForm(): FormState {
     model_sync: 'manual',
     model_exclude: [],
     protocolBaseUrls: {},
+    auth_json: '',
+    hasOauth: false,
+    oauthAccountId: '',
+    oauthExpiresAt: '',
   }
 }
+
+const isCodex = computed(() => form.kind === 'codex')
+const oauthRefreshing = ref(false)
 
 // ---- 模型与路由（编辑态） ----
 const modelsLoading = ref(false)
@@ -522,6 +565,32 @@ watch(
   },
 )
 
+// 切到 codex：预填官方后端地址与 Responses 协议（可改）；切走不回滚用户已改内容
+watch(
+  () => form.kind,
+  (k) => {
+    if (k === 'codex') {
+      if (!form.base_url.trim() || form.base_url === CODEX_DEFAULT_BASE_URL) {
+        form.base_url = CODEX_DEFAULT_BASE_URL
+      }
+      if (!form.protocols.length) form.protocols = ['openai_responses']
+    }
+  },
+)
+
+async function refreshOAuth() {
+  oauthRefreshing.value = true
+  try {
+    const r = await upstreamApi.refreshOAuth(editingId.value)
+    ElMessage.success(`令牌已刷新（账号 ${r.account_id}）`)
+    emit('saved')
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    oauthRefreshing.value = false
+  }
+}
+
 const rules: FormRules = {
   name: [{ required: true, message: '请输入上游名称', trigger: 'blur' }],
   base_url: [
@@ -568,6 +637,9 @@ function open(upstream?: UpstreamOut) {
     base.protocolBaseUrls = Object.fromEntries(
       Object.entries(pbu).map(([k, v]) => [k, String(v ?? '')]),
     )
+    base.hasOauth = upstream.has_oauth
+    base.oauthAccountId = upstream.oauth_account_id ?? ''
+    base.oauthExpiresAt = upstream.oauth_expires_at ?? ''
   }
   Object.assign(form, base)
   extraSnapshot.value = upstream?.extra
@@ -624,6 +696,14 @@ function buildBody(): UpstreamIn {
     model_sync: form.model_sync,
     model_exclude: [...form.model_exclude],
   }
+  // Codex：auth_json 掩码语义（未传保持 / 空串清除 / 其他覆盖）
+  if (isCodex.value) {
+    if (isEdit.value) {
+      if (form.auth_json.trim()) body.auth_json = form.auth_json
+    } else if (form.auth_json.trim()) {
+      body.auth_json = form.auth_json
+    }
+  }
   if (isEdit.value) {
     if (form.clearKey) body.api_key = ''
     else if (form.api_key && form.api_key !== '***') body.api_key = form.api_key
@@ -652,10 +732,12 @@ async function submit() {
     }
     visible.value = false
     form.api_key = '' // 敏感字段用完即清（发布审阅前端 M3）
+    form.auth_json = ''
     emit('saved')
   } catch (e) {
     ElMessage.error(errMsg(e))
     form.api_key = '' // 失败也清：避免已输入的新密钥长期驻留
+    form.auth_json = ''
   } finally {
     saving.value = false
   }
@@ -670,6 +752,13 @@ defineExpose({ open })
 }
 .api-key-state {
   margin-bottom: 6px;
+}
+.oauth-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 .caps-grid {
   display: grid;

@@ -1435,16 +1435,39 @@ async fn run_gateway(
         };
         let mut idx: u32 = 0;
         loop {
-            let exec_res: Result<ExecOutcome, UpstreamError> = if stream {
-                upstream::execute_stream(
-                    &client,
-                    &url,
-                    req_headers.clone(),
-                    &outbound.body,
-                    stream_timeout_ms,
-                )
-                .await
-                .map(ExecOutcome::Stream)
+            // Codex 渠道（kind='codex'）：OAuth token 注入 + 请求整形（恒流式 Responses）。
+            // token 刷新失败 → 构造连接类错误走统一熔断/重试/故障转移路径。
+            let is_codex = upstream.kind == "codex";
+            let mut codex_ctx: Option<(reqwest::header::HeaderMap, serde_json::Value)> = None;
+            let mut codex_err: Option<String> = None;
+            if is_codex {
+                match crate::upstream::codex::ensure_token(&state, upstream).await {
+                    Ok((tok, acct)) => {
+                        let mut h = req_headers.clone();
+                        crate::upstream::codex::apply_headers(&mut h, &tok, &acct);
+                        codex_ctx = Some((h, crate::upstream::codex::prepare_body(&outbound.body)));
+                    }
+                    Err(e) => codex_err = Some(e),
+                }
+            }
+
+            let exec_res: Result<ExecOutcome, UpstreamError> = if let Some(e) = codex_err {
+                Err(UpstreamError::Connect(format!("codex oauth: {e}")))
+            } else if stream {
+                let (h, b) = codex_ctx
+                    .clone()
+                    .unwrap_or_else(|| (req_headers.clone(), outbound.body.clone()));
+                upstream::execute_stream(&client, &url, h, &b, stream_timeout_ms)
+                    .await
+                    .map(ExecOutcome::Stream)
+            } else if let Some((h, b)) = codex_ctx {
+                // Codex 后端仅流式：非流式入口走流式收取 + 聚合 response.completed 帧
+                match upstream::execute_stream(&client, &url, h, &b, upstream.timeout_ms).await {
+                    Ok(resp) => crate::upstream::codex::aggregate_stream_to_json(resp)
+                        .await
+                        .map(ExecOutcome::Json),
+                    Err(e) => Err(e),
+                }
             } else {
                 upstream::execute_nonstream(
                     &client,
@@ -2484,6 +2507,7 @@ mod tests {
             kind: "openai".into(),
             base_url: "http://localhost".into(),
             api_key_plain: None,
+            oauth_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,
             timeout_ms: 300_000,
@@ -2638,6 +2662,7 @@ mod tests {
             kind: "openai".into(),
             base_url: "http://localhost".into(),
             api_key_plain: Some("sk-up".into()),
+            oauth_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,
             timeout_ms: 30_000,

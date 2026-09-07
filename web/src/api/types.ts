@@ -167,6 +167,10 @@ export interface UpstreamOut {
   /** 最近一次成功拉取的模型列表缓存 */
   models_cache: string[]
   models_fetched_at: string | null
+  /** Codex OAuth：仅状态，不含 token */
+  has_oauth: boolean
+  oauth_account_id: string | null
+  oauth_expires_at: string | null
   created_at: string
   updated_at: string
 }
@@ -202,6 +206,8 @@ export interface UpstreamIn {
   extra?: UpstreamExtra | null
   model_sync?: 'manual' | 'auto' | null
   model_exclude?: string[] | null
+  /** Codex 渠道：粘贴 auth.json 原文；未传/"***"=保持，""=清除 */
+  auth_json?: string | null
 }
 
 export interface TestResp {

@@ -33,6 +33,8 @@ pub struct AppState {
     pub sticky: crate::routing::StickyMap,
     /// 上游 HTTP 客户端池（按代理/直连分池）
     pub client_pools: ClientPools,
+    /// Codex token 刷新 single-flight 锁表（per-upstream）
+    pub codex_locks: crate::upstream::codex::CodexLockTable,
     /// 最近一次加载的 YAML 配置（供 /api/config 导出）
     pub file_config: std::sync::RwLock<ConfigFile>,
     pub config_path: PathBuf,

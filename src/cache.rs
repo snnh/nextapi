@@ -60,7 +60,7 @@ impl EntityCache {
             "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
              breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
              use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
-             created_at, updated_at FROM upstreams",
+             oauth_enc, created_at, updated_at FROM upstreams",
         )
         .fetch_all(pool)
         .await?;
@@ -105,12 +105,30 @@ impl EntityCache {
                 },
                 _ => None,
             };
+            // Codex OAuth 凭证解密进内存（同 api_key 语义；解析失败记 warn 置 None）
+            let oauth_plain = match u.oauth_enc.as_deref() {
+                Some(enc) if !enc.is_empty() => match crypto.decrypt(enc) {
+                    Ok(json) => match serde_json::from_str(&json) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            tracing::warn!("上游 `{}` 的 oauth 凭证解析失败: {e}", u.name);
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!("上游 `{}` 的 oauth 凭证解密失败: {e}", u.name);
+                        None
+                    }
+                },
+                _ => None,
+            };
             let row = UpstreamRow {
                 id: u.id,
                 name: u.name,
                 kind: u.kind,
                 base_url: u.base_url,
                 api_key_plain,
+                oauth_plain,
                 protocols: u.protocols,
                 enabled: u.enabled,
                 timeout_ms: u.timeout_ms,
@@ -201,6 +219,7 @@ struct UpstreamDbRow {
     model_exclude: Vec<String>,
     models_cache: serde_json::Value,
     models_fetched_at: Option<DateTime<Utc>>,
+    oauth_enc: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }

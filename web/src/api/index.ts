@@ -104,6 +104,9 @@ export const upstreamApi = {
   /** 自动模式：立即全量对账托管路由 */
   syncModels: (id: string) =>
     http.post<ModelSyncReport>(`/api/upstreams/${id}/models/sync`).then((r) => r.data),
+  /** Codex：手动刷新 OAuth access_token */
+  refreshOAuth: (id: string) =>
+    http.post<{ ok: boolean; account_id: string }>(`/api/upstreams/${id}/oauth/refresh`).then((r) => r.data),
   /** 手动模式：为勾选模型创建手动路由 */
   addModelRoutes: (id: string, models: string[]) =>
     http.post<ModelSyncReport>(`/api/upstreams/${id}/models/routes`, { models }).then((r) => r.data),

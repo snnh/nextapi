@@ -97,9 +97,12 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="API Key" width="100" align="center">
+        <el-table-column label="凭证" width="100" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.has_api_key" type="success" size="small">已设置</el-tag>
+            <el-tooltip v-if="row.has_oauth" content="OAuth 凭证（到期自动刷新）" placement="top">
+              <el-tag type="primary" size="small" effect="plain">OAuth</el-tag>
+            </el-tooltip>
+            <el-tag v-else-if="row.has_api_key" type="success" size="small">已设置</el-tag>
             <el-tag v-else type="info" size="small">未设置</el-tag>
           </template>
         </el-table-column>
