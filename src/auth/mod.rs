@@ -502,7 +502,8 @@ struct TotpDisableReq {
 }
 
 /// POST /totp/disable {password, code}：密码 + 验证码双重校验后禁用并清除机密。
-/// 认证器丢失的恢复途径：直接操作数据库清空这两列（README 记载）。
+/// 认证器丢失的恢复途径：直接操作数据库清空
+/// `totp_enabled` / `totp_secret_enc` / `last_totp_step` 三列（README 记载）。
 async fn totp_disable(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

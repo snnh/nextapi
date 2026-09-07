@@ -32,7 +32,7 @@
 | 数据库 | PostgreSQL 15+，sqlx（运行时校验，rustls）|
 | 配置 | YAML（serde_yaml）+ ArcSwap 热加载 |
 | 精度 | 计价全程 `rust_decimal`（DB `NUMERIC(20,10)`）|
-| 观测 | tracing；Prometheus `/metrics` |
+| 观测 | tracing；Prometheus `/metrics`（管理员 JWT 鉴权） |
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus + ECharts，rust-embed 嵌入二进制 |
 | 部署 | 单 Docker 镜像（后端 + 内嵌前端）+ docker-compose（含 PG）|
 
@@ -100,7 +100,9 @@ src/
     ├── presets.rs   # /api/presets 列表 + /{name}/provision 一键接入
     ├── system.rs    # /api/system/version + check-update（GitHub Releases，代理矩阵）+ 定时检查任务
     └── audit.rs     # /api/audit 分页查询
-migrations/          # 0001_init.sql + 0002_gateway.sql + 0003_logging.sql（usage_logs 分区表/usage_hourly）
+migrations/          # 0001_init + 0002_gateway + 0003_logging + 0004_pricing + 0005_media
+                     # + 0006_hardening + 0007_aliases + 0008_idempotency + 0009_totp
+                     # + 0010_totp_replay（last_totp_step 防重放）
                      # + 0004_pricing.sql（price_rules）+ 0005_media.sql（media_tasks）
 contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考，不进版本库）
 tests/               # 集成测试

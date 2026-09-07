@@ -113,7 +113,8 @@ curl http://localhost:8080/v1beta/models/gemini-1.5-pro:generateContent \
 - `usage_hourly` 滚动小时聚合（明细按天/小时查询自动回落选择数据源）；
 - `quota_usage` 独立计数器，与日志清理解耦、request_id 幂等；
 - 管理后台「日志」页支持 CSV 导出；审计（登录/管理操作，含来源 IP）独立 `admin_audit_logs` 表；
-- Prometheus `/metrics`（建议置于内网/反向代理后访问）。
+- Prometheus `/metrics` 需管理员 JWT（`Authorization: Bearer <token>`；Prometheus 抓取配置 `bearer_token`）。
+- 管理员登录支持可选 TOTP 二步验证（RFC 6238，SHA1/30s/6 位 ±1 步）：设置 → 系统设置 → 安全；设置与禁用均需当前密码，启用/禁用即注销全部会话；同一验证码不可重放。
 
 ### 计价
 
