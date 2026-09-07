@@ -69,9 +69,9 @@ CREATE INDEX IF NOT EXISTS model_routes_pattern_idx ON model_routes (model_patte
 CREATE TABLE IF NOT EXISTS quota_usage (
     key_id       UUID NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
     unit         TEXT NOT NULL,                        -- 'tokens'|'cost_cny'|'cost_usd'
-    window       TEXT NOT NULL,                        -- 'daily'|'monthly'|'total'
+    window_kind  TEXT NOT NULL,                        -- 'daily'|'monthly'|'total'
     period_start TIMESTAMPTZ NOT NULL,                 -- total 固定 '1970-01-01'
     value        NUMERIC(20,10) NOT NULL DEFAULT 0,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (key_id, unit, window, period_start)
+    PRIMARY KEY (key_id, unit, window_kind, period_start)
 );
