@@ -30,6 +30,23 @@
         <el-input v-model="form.base_url" placeholder="如 https://api.openai.com/v1" clearable />
       </el-form-item>
 
+      <el-form-item label="分协议地址">
+        <div class="pbu-block">
+          <div v-for="proto in pbuProtocols" :key="proto" class="pbu-row">
+            <span class="pbu-label">{{ PROTOCOL_LABELS[proto] ?? proto }}</span>
+            <el-input
+              v-model="form.protocolBaseUrls[proto]"
+              :placeholder="`（可选）${PROTOCOL_LABELS[proto] ?? proto} 请求的独立根地址；留空 = 用 Base URL`"
+              clearable
+            />
+          </div>
+          <div v-if="!pbuProtocols.length" class="hint">
+            先选择协议；同一 Key 下不同协议根地址不同（如 DeepSeek 的 Anthropic 根）时可在此分别覆盖。
+          </div>
+          <div v-else class="hint">留空即回落 Base URL；同一套 API Key，多协议各自独立地址。</div>
+        </div>
+      </el-form-item>
+
       <el-form-item label="API Key" prop="api_key">
         <div v-if="isEdit" class="api-key-block">
           <div class="api-key-state">
@@ -338,6 +355,8 @@ interface FormState {
   capMaxContext: number | undefined
   model_sync: 'manual' | 'auto'
   model_exclude: string[]
+  /** 分协议 base_url 覆盖（proto → url；空串=不覆盖） */
+  protocolBaseUrls: Record<string, string>
 }
 
 function defaultForm(): FormState {
@@ -364,6 +383,7 @@ function defaultForm(): FormState {
     capMaxContext: undefined,
     model_sync: 'manual',
     model_exclude: [],
+    protocolBaseUrls: {},
   }
 }
 
@@ -470,6 +490,15 @@ const standardSelected = computed<ProtocolName[]>(() =>
   STANDARD_PROTOCOLS.filter((p) => form.protocols.includes(p)),
 )
 
+/** 分协议地址编辑行：已选标准协议 ∪ 已有覆盖值的协议 */
+const pbuProtocols = computed<ProtocolName[]>(() => {
+  const set = new Set<ProtocolName>(standardSelected.value)
+  for (const k of Object.keys(form.protocolBaseUrls)) {
+    if (form.protocolBaseUrls[k]?.trim()) set.add(k as ProtocolName)
+  }
+  return STANDARD_PROTOCOLS.filter((p) => set.has(p))
+})
+
 function computePriority(selected: ProtocolName[], base?: ProtocolName[]): ProtocolName[] {
   const selSet = new Set(selected)
   const baseArr: ProtocolName[] = base?.length ? base : [...DEFAULT_PRIORITY]
@@ -535,6 +564,10 @@ function open(upstream?: UpstreamOut) {
     base.capMaxContext = caps?.max_context ?? undefined
     base.model_sync = upstream.model_sync ?? 'manual'
     base.model_exclude = [...(upstream.model_exclude ?? [])]
+    const pbu = upstream.extra?.protocol_base_urls ?? {}
+    base.protocolBaseUrls = Object.fromEntries(
+      Object.entries(pbu).map(([k, v]) => [k, String(v ?? '')]),
+    )
   }
   Object.assign(form, base)
   extraSnapshot.value = upstream?.extra
@@ -550,6 +583,13 @@ function buildExtra(): UpstreamExtra {
   const extra: UpstreamExtra = JSON.parse(JSON.stringify(extraSnapshot.value ?? {}))
   if (Object.keys(form.overrides).length) extra.overrides = form.overrides
   else delete extra.overrides
+  const pbu = Object.fromEntries(
+    Object.entries(form.protocolBaseUrls)
+      .map(([k, v]) => [k, v.trim()] as const)
+      .filter(([, v]) => v),
+  )
+  if (Object.keys(pbu).length) extra.protocol_base_urls = pbu
+  else delete extra.protocol_base_urls
   extra.protocol_priority = [...form.protocolPriority]
   extra.media_base_url = form.media_base_url.trim() || null
   const tri = (v: 'unset' | 'on' | 'off') => (v === 'unset' ? null : v === 'on')
@@ -644,6 +684,21 @@ defineExpose({ open })
 }
 .models-block {
   width: 100%;
+}
+.pbu-block {
+  width: 100%;
+}
+.pbu-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.pbu-label {
+  font-size: 13px;
+  color: #4b5563;
+  text-align: right;
 }
 .models-toolbar {
   display: flex;

@@ -32,7 +32,26 @@ async fn list_presets(
 ) -> ApiResult<Json<serde_json::Value>> {
     let items: Vec<serde_json::Value> = presets::presets()
         .iter()
-        .map(|p| serde_json::json!(p))
+        .map(|p| {
+            // protocol_base_urls 以对象（协议→URL）输出，前端直接展示/编辑
+            let mut v = serde_json::json!({
+                "name": p.name,
+                "display_name": p.display_name,
+                "kind": p.kind,
+                "base_url": p.base_url,
+                "protocols": p.protocols,
+                "media_base_url": p.media_base_url,
+                "description": p.description,
+            });
+            if let Some(pbu) = p.protocol_base_urls {
+                let map: serde_json::Map<String, serde_json::Value> = pbu
+                    .iter()
+                    .map(|(k, u)| (k.to_string(), serde_json::Value::String(u.to_string())))
+                    .collect();
+                v["protocol_base_urls"] = serde_json::Value::Object(map);
+            }
+            v
+        })
         .collect();
     Ok(Json(serde_json::json!({ "items": items })))
 }
