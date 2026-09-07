@@ -1,48 +1,99 @@
-# NextAPI
+<div align="center">
+  <h1>NextAPI</h1>
+  <p><strong>自托管 LLM 网关：四协议互转 · 多上游聚合 · 成本统计</strong></p>
+  <p>
+    <a href="https://github.com/snnh/nextapi/releases"><img src="https://img.shields.io/github/v/release/snnh/nextapi" alt="Release"></a>
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
+    <img src="https://img.shields.io/badge/platform-Docker%20%7C%20Linux-informational" alt="Platform">
+  </p>
+  <p>简体中文</p>
+</div>
 
-自托管 **LLM 网关**（Rust + axum）：统一接入多供应商模型，一套网关 Key 走遍四种主流协议。
+NextAPI 是一个自托管的 LLM 网关（Rust + axum + PostgreSQL）：客户端用任一主流协议接入，网关按路由规则转发到多个上游供应商，自动完成协议互转、故障转移、限流与成本记账。管理后台（Vue 3）内嵌进单二进制，同源部署，浏览器打开即用。
 
-- **协议互转**：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互相转换，客户端与上游可用任意协议组合；
-- **聚合路由**：模型通配匹配、优先级分组 + 加权随机、自动故障转移与重试、熔断（连续失败自动禁用 + 冷却 + 半开探活）；
-- **鉴权限流**：网关 Key（哈希存储）+ 每 Key RPM/TPM/配额（token/成本）上限；
-- **日志与成本**：请求明细（分区存储）+ 小时聚合 + 双币种（CNY/USD）计价，**只统计不扣费**；
-- **图片生成**：统一 OpenAI 语义入口，适配 OpenAI / Gemini / Dashscope（同步与异步任务）四种上游形状；
-- **管理后台**：内置 Vue 3 控制台（登录 / 仪表盘 / 密钥 / 上游 / 路由 / 价格 / 日志 / 统计 / 系统设置 9 页），产物内嵌进单二进制，同源部署。
-
-## 快速开始（Docker Compose）
-
-```bash
-cp config.example.yaml config.yaml
-# 生产必改（docker-compose.yml 中）：
-#   NEXTAPI_SECRET_KEY        —— 敏感字段 AES-256-GCM 加密密钥（env-only），如 `openssl rand -base64 48`
-#   NEXTAPI_ADMIN_JWT_SECRET  —— 管理端 JWT 签名密钥
-docker compose up -d
+```
+客户端 (OpenAI / Anthropic / Gemini SDK)  ──任一协议──►  NextAPI 网关  ──透传或转换──►  多上游供应商
+                                                              │
+                              管理后台 (内嵌 SPA) + PostgreSQL（日志 / 计价 / 配额）
 ```
 
-启动后：
+## 配置要求
 
-1. 打开 `http://<host>:8080`，使用管理员账号登录。
-   - 用户名：`config.yaml` 的 `admin.username`（默认 `admin`）；
-   - 初始密码优先级：`admin.password_hash` > `admin.initial_password` > 环境变量 `NEXTAPI_ADMIN_INITIAL_PASSWORD` > **自动生成的随机密码（仅打印一次到容器日志）**；
-   - 登录后请立即在「系统设置 → 修改密码」中更换密码。
-2. 在「供应商预设」页一键接入上游（仅需填 API Key），或手动创建上游与路由；
-3. 创建网关 Key，即可以 OpenAI/Anthropic/Gemini 客户端直连网关。
+1. 服务端（二选一）：
+  - Docker：Docker 20.10+ 与 Compose v2（推荐，镜像含全部依赖，自动迁移数据库）；
+  - 源码运行：Linux / macOS，Rust stable、Node.js ≥ 20（构建前端）、PostgreSQL 15+。
+  - 资源：内存 ≥ 256 MiB 空闲，硬盘 ≥ 500 MiB 可用。
 
-> 单容器运行（无 Docker）：需要 PostgreSQL 15+，`cargo build --release` 后以 `DATABASE_URL` / `NEXTAPI_SECRET_KEY` / `NEXTAPI_ADMIN_JWT_SECRET` 环境变量启动；`server.admin_jwt_secret` 与 `admin_jwt_secret` 为空且非 `server.debug` 时拒绝启动。
+2. 客户端：
+  - 管理后台：可运行 Chrome / Edge ≥ 111 或 Firefox ≥ 113 的设备（含手机和平板）；
+  - 网关调用：任意 OpenAI / Anthropic / Gemini 兼容 SDK 或 HTTP 客户端。
+
+## 主要功能
+
+- 协议互转：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互相转换，客户端与上游可任意组合；上游支持入口协议时透传优先（仅改写模型名与鉴权头）。
+- 聚合路由：模型通配匹配、优先级分组 + 加权随机、自动重试与故障转移、熔断（连续失败自动禁用 + 冷却 + 半开探活，冷却状态重启不丢）。
+- 渠道类型：标准 API Key 渠道 + Codex OAuth 渠道（粘贴 `~/.codex/auth.json`，临期自动刷新、轮换回写、失败联动熔断）；8 个内置供应商预设一键接入；渠道模型列表自动同步托管路由。
+- 鉴权限流：网关 Key（SHA-256 哈希存储）+ 每 Key RPM/TPM 滑窗与 token/成本配额上限；管理员登录防爆破 + 可选 TOTP 二步验证。
+- 日志与成本：请求明细按 30 天声明式分区（不自动清理，手动整分区 DROP）+ 小时聚合；双币种（CNY/USD）分段计价，只统计不扣费；异步批量写库 + WAL 兜底，绝不阻塞主链路。
+- 图片生成：统一 OpenAI 语义入口，适配 OpenAI / Gemini / Dashscope（同步与异步任务轮询计费闭环）四种上游形状。
+- 可观测：Prometheus `/metrics`（管理员 JWT 鉴权）、审计日志（含来源 IP）、日志 CSV 导出、脱敏存储。
+- 管理后台：登录 / 仪表盘 / 密钥 / 上游 / 路由 / 价格 / 日志 / 统计 / 系统设置 9 页，移动端抽屉侧栏适配。
+
+## 快速开始
+
+### Docker（推荐，x86_64 / arm64）
+
+发布镜像托管在 GitHub Container Registry（`ghcr.io/snnh/nextapi`），compose 默认拉取发布镜像，PostgreSQL 16 一并启动：
+
+```sh
+# 1. 准备配置与密钥
+cp config.example.yaml config.yaml
+export NEXTAPI_SECRET_KEY=$(openssl rand -base64 48)        # 敏感字段加密密钥（env-only）
+export NEXTAPI_ADMIN_JWT_SECRET=$(openssl rand -base64 48)  # 管理端 JWT 签名密钥
+
+# 2. 启动
+docker compose up -d
+
+# 3. 查看初始管理员密码（未设 NEXTAPI_ADMIN_INITIAL_PASSWORD 时随机生成，仅打印一次）
+docker compose logs nextapi | grep 初始密码
+```
+
+浏览器打开 `http://<主机IP>:8080` 登录管理后台。
+
+不用 compose 时（需自备 PostgreSQL 15+）：
+
+```sh
+docker run -d --name nextapi --restart unless-stopped \
+  -p 8080:8080 -v nextapi-data:/data \
+  -e DATABASE_URL=postgres://user:pass@host:5432/nextapi \
+  -e NEXTAPI_SECRET_KEY=$(openssl rand -base64 48) \
+  -e NEXTAPI_ADMIN_JWT_SECRET=$(openssl rand -base64 48) \
+  ghcr.io/snnh/nextapi:latest
+```
+
+- **数据**：日志/配额持久化在 PostgreSQL（卷 `pgdata`），WAL 与运行数据在卷 `nextapi-data`。
+- **升级**：`docker compose pull && docker compose up -d`（迁移自动执行）。
+- **从源码构建**：`docker build -t nextapi .`，或在 compose 里取消 `build:` 注释替换 `image:`。
+
+### 首次使用
+
+1. 登录后台（用户名默认 `admin`，初始密码见上；登录后立即在「系统设置 → 修改密码」更换）。
+2. 在「上游」页用供应商预设一键接入（仅填 API Key），或粘贴 Codex `auth.json` 建 OAuth 渠道。
+3. 在「路由」页确认网关模型 → 上游模型的映射（预设与模型同步会自动托管）。
+4. 在「密钥」页创建网关 Key（完整 Key 仅展示一次），即可用客户端直连网关。
 
 ## 网关调用示例
 
-网关默认监听 `0.0.0.0:8080`，四协议端点：
+网关默认监听 `0.0.0.0:8080`，四协议端点共用网关 Key 鉴权：
 
-| 协议 | 端点 |
-|---|---|
-| OpenAI Chat Completions | `POST /v1/chat/completions` |
-| OpenAI Responses | `POST /v1/responses` |
-| Anthropic Messages | `POST /v1/messages` |
-| Gemini | `POST /v1beta/models/{model}:generateContent`（流式 `:streamGenerateContent?alt=sse`） |
-| 模型列表 | `GET /v1/models`（需网关 Key） |
-| 图片生成 | `POST /v1/images/generations`、`GET /v1/images/tasks/{id}` |
-| 视频 | `POST /v1/videos/generations`（占位 501，未接入） |
+| 协议 | 端点 | 鉴权头 |
+|---|---|---|
+| OpenAI Chat Completions | `POST /v1/chat/completions` | `Authorization: Bearer sk-…` |
+| OpenAI Responses | `POST /v1/responses` | `Authorization: Bearer sk-…` |
+| Anthropic Messages | `POST /v1/messages` | `x-api-key: sk-…` |
+| Gemini | `POST /v1beta/models/{model}:generateContent` | `x-goog-api-key: sk-…` |
+| 模型列表 | `GET /v1/models` | 任一上述鉴权头 |
+| 图片生成 | `POST /v1/images/generations`、`GET /v1/images/tasks/{id}` | 任一上述鉴权头 |
 
 ```bash
 # OpenAI 风格
@@ -53,8 +104,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 # Anthropic 风格（同一网关 Key）
 curl http://localhost:8080/v1/messages \
-  -H "x-api-key: sk-网关Key" \
-  -H "anthropic-version: 2023-06-01" \
+  -H "x-api-key: sk-网关Key" -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-3-5-sonnet","max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'
 
@@ -65,116 +115,57 @@ curl http://localhost:8080/v1beta/models/gemini-1.5-pro:generateContent \
   -d '{"contents":[{"parts":[{"text":"你好"}]}]}'
 ```
 
-**请求的是「网关模型名」而非上游模型名**：`路由（model_routes）` 负责把网关模型映射到上游模型的协议端点；透传模式下仅改写模型名与鉴权头，上游请求体原样转发（支持的协议），上游不支持入口协议时网关按内部 IR 自动转换。
+**请求的是「网关模型名」而非上游模型名**：路由把网关模型映射到上游模型；透传模式下仅改写模型名与鉴权头，上游不支持入口协议时网关按内部 IR 自动转换。
 
 ## 配置
 
-配置文件默认 `./config.yaml`（环境变量 `NEXTAPI_CONFIG` 可覆盖），字段与默认值见 `config.example.yaml`。
-
-**配置分类**（详细语义见文件头部注释）：
+配置文件默认 `./config.yaml`（`NEXTAPI_CONFIG` 可覆盖），字段与默认值见 [`config.example.yaml`](./config.example.yaml)。
 
 | 分类 | 生效方式 |
 |---|---|
-| `hot`（网关运行参数） | 文件热加载；**UI 保存值优先**（`system_settings.source=ui` 不被文件重载覆盖） |
+| `hot`（运行参数） | 文件热加载；**UI 保存值优先**（不被文件重载覆盖） |
 | 启动类（`server.*` / `database.url`） | 需重启；优先级 **env > UI > YAML** |
-| `seed`（admin/上游/汇率种子） | 仅首次初始化写入 DB（`app_meta.seeded_at` 标记），之后以管理后台为准 |
+| `seed`（admin/上游/汇率种子） | 仅首次初始化写入 DB，之后以管理后台为准 |
 | `NEXTAPI_SECRET_KEY` | env-only 例外：不落 DB、不进 YAML、不可 UI 设置 |
 
-**环境变量**：
-
-| 变量 | 用途 |
+| 环境变量 | 用途 |
 |---|---|
-| `NEXTAPI_SECRET_KEY` | 敏感字段（上游 api_key、JWT secret、代理密码）落库 AES-256-GCM 加密密钥，**生产必配** |
+| `NEXTAPI_SECRET_KEY` | 敏感字段（上游 Key、OAuth token、代理密码）AES-256-GCM 加密密钥，**生产必配** |
 | `NEXTAPI_ADMIN_JWT_SECRET` / `NEXTAPI_LISTEN` / `DATABASE_URL` | 启动类参数 env 覆盖 |
-| `NEXTAPI_ADMIN_INITIAL_PASSWORD` | 首次启动管理员初始密码 |
-| `NEXTAPI_CONFIG` | 配置文件路径（默认 `./config.yaml`） |
-
-> `log_partition_days` 首次建分区时固化到 `app_meta`，此后以固化值为准（修改仅对尚未建过分区的空库生效）。
+| `NEXTAPI_ADMIN_INITIAL_PASSWORD` | 首次启动管理员初始密码（留空则随机生成打印一次） |
 
 ## 核心设计
 
-### 请求链路
-
 ```
 网关 Key 鉴权 → RPM/TPM 限流 + 配额预检 → 协议解析（内部 IR）
-→ 模型路由（通配匹配/加权/熔断过滤）→ 上游调用
-   ├─ 透传优先：支持入口协议 → 原样转发（改写模型/鉴权头/覆盖规则；SSE 边转发边改写 model/id）
+→ 模型路由（通配匹配 / 加权 / 熔断过滤）→ 上游调用
+   ├─ 透传优先：支持入口协议 → 原样转发（SSE 边转发边改写 model/id）
    └─ 否则按 IR 转换协议（失败可回退透传）
 → （旁路）usage 提取 → 计价 → 异步批量写库（绝不阻塞主链路）
 ```
 
-- **透传优先**：上游支持入口协议则原样转发，仅改写模型名、替换鉴权头、应用用户配置的 add/set 覆盖；SSE 流式边转发边改写 `model`/`id`，并保留 `event:` 事件行（Anthropic / Responses 原生流式兼容）。
-- **路由容灾**：重试参数在 `model_routes` 维护；熔断状态回写 DB（`disabled_by='auto' + cooldown_until`），进程重启后冷却仍生效；手动禁用不被自动恢复；SSE 首字节发出后不可换上游。
-- **异步记账**：有界 mpsc 队列 + 批量写者（同事务：`usage_logs` UNNEST 多行 → `usage_hourly` 聚合 → `quota_usage` 累加 → `last_used_at`）；队列满则先写 WAL（append-only JSONL + CRC，单文件 128MB 滚动）再丢弃内存条目，后台定时重放；`insert_batch` 以 `RETURNING request_id` 保证重复重放只聚落实际新插入的行（幂等）。
+- **异步记账**：有界队列 + 批量写者（同事务写明细/聚合/配额）；队列满先落 WAL（append-only JSONL + CRC）再丢弃内存条目，后台幂等重放。
+- **计价**：`cost = matched_price × quantity`，分段（时间窗/星期/上下文长度）有序第一命中、无命中回落 base_price；汇率手动维护或自动拉取（USD↔CNY 内置兜底 6.73）；价格表 XML/JSON 导入导出。**只统计、不扣费**。
+- **明确不做**：充值/余额/兑换码/套餐/支付等运营售卖功能、终端用户账号体系、倍率体系、Embeddings/Rerank/Audio/Moderation/Fine-tuning 端点（v1）。
 
-### 日志与统计
+## 从源码构建
 
-- `usage_logs` 按时间声明式分区（每 30 天，epoch 对齐），**不自动清理**，管理员手动整分区 DROP（支持 dry_run 预览）；
-- `usage_hourly` 滚动小时聚合（明细按天/小时查询自动回落选择数据源）；
-- `quota_usage` 独立计数器，与日志清理解耦、request_id 幂等；
-- 管理后台「日志」页支持 CSV 导出；审计（登录/管理操作，含来源 IP）独立 `admin_audit_logs` 表；
-- Prometheus `/metrics` 需管理员 JWT（`Authorization: Bearer <token>`；Prometheus 抓取配置 `bearer_token`）。
-- 管理员登录支持可选 TOTP 二步验证（RFC 6238，SHA1/30s/6 位 ±1 步）：设置 → 系统设置 → 安全；设置与禁用均需当前密码，启用/禁用即注销全部会话；同一验证码不可重放。
+需要 Rust stable、Node.js ≥ 20、PostgreSQL 15+：
 
-### 计价
-
-`cost = matched_price × quantity`，分段（时间窗/星期/上下文长度）有序第一命中、无命中回落 `base_price`；CNY/USD 双币种快照（`price_used` / `fx_snapshot` 入账）；汇率支持手动维护与自动拉取（Frankfurter / ECB / 自定义），USD↔CNY 内置兜底 6.73（source=builtin，manual/新鲜 auto 恒覆盖）；价格表支持 XML/JSON 导入导出。**只统计、不扣费**——不设余额/扣减语义，成本配额仅用于用量上限告警与阻断。
-
-## 管理后台 API（前缀 `/api`）
-
-- `POST /api/auth/login`（公开，防爆破限速）/ `GET /api/auth/me` / `PUT /api/auth/password`；
-- `/api/keys`、`/api/upstreams`（含连通性测试）、`/api/proxies`、`/api/model-routes`；
-- `/api/pricing`（规则/预览/建议/未定价/导入导出）、`/api/fx`、`/api/presets`（8 个内置预设 + 一键接入）；
-- `/api/logs`（明细/详情/分区清理/CSV）、`/api/stats`（summary/series）、`/api/audit`；
-- `/api/settings`（运行参数键值）、`/api/config`（YAML 查看/保存/重载）、`/api/system`（版本/更新检查）。
-
-除登录外全部接口需 `Authorization: Bearer <管理端 JWT>`（1 小时短期令牌）；管理操作自动写审计。
-
-## 开发
-
-```bash
-# 后端（需要 PostgreSQL 15+）
-cargo run                     # 或 cargo run --release
-# 前端（web/）
-cd web && npm install && npm run dev   # vite :5173，/api 代理到 127.0.0.1:8080
+```sh
+cd web && npm install && npm run build   # 前端（产物经 rust-embed 内嵌进二进制）
+cargo build --release                    # 后端
+cargo test                               # 单元测试（集成测试 tests/ 需 docker compose 起 PG + mock 上游）
 ```
 
-> **注意**：`cargo build`/`cargo test` 编译期读取 `web/dist`（rust-embed 内嵌），目录缺失会编译失败——改动前端后先 `npm run build` 再执行 cargo 命令；Docker 多阶段构建已自动保证顺序。
+> **注意**：`cargo build`/`cargo test` 编译期读取 `web/dist`，目录缺失会编译失败——改完前端先 `npm run build` 再执行 cargo 命令；Docker 多阶段构建已自动保证顺序。
 
-- 检查：`cargo check` / `cargo fmt` / `cargo clippy`；测试：`cargo test`（单元测试随模块；集成测试在 `tests/`，需要 docker compose 起的 PG + mock 上游）；
-- 前端：`cd web && npm run typecheck`（vue-tsc）、`npm run build`；
-- 所有 SQL 用 sqlx 运行时校验（`sqlx::query`，禁用 `query!` 宏），无数据库环境也能 `cargo check`。
+## 文档
 
-### 目录结构
-
-```
-src/
-├── main.rs        # 启动流程：配置 → 加密 → DB → 迁移 → 种子 → 设置引擎 → 路由 → 热加载 → serve
-├── config.rs      # YAML 加载 + hot/seed/derived 分类 + 掩码 + 文件监听
-├── settings.rs    # system_settings 持久化 + 优先级引擎（UI > YAML / env > UI > YAML）
-├── gateway.rs     # 网关入口与主链路（/v1/*、图片通道、视频占位）
-├── protocol/      # IR + 4 协议适配器 + SSE + 错误映射
-├── routing/       # 通配匹配、加权路由、熔断状态机
-├── limit/         # RPM/TPM 滑窗、配额预检
-├── upstream/      # reqwest 分池、透传改写、SSE 流、usage 提取
-├── logging/       # 日志队列/批量写者/WAL/分区/脱敏
-├── billing/       # 计价引擎 + 汇率（fx）+ 价格导入导出
-├── media/         # 图片通道（4 上游形状适配 + 异步任务闭环）
-├── auth/ admin/   # 管理后台：JWT/防爆破/审计 + /api CRUD
-├── presets.rs     # 供应商预设 + 一键接入
-└── embed.rs       # 前端静态资源内嵌 + SPA fallback
-migrations/        # 0001~0006 SQL 迁移（sqlx::migrate! 自动执行）
-web/               # Vue 3 管理后台（详见 web/README.md）
-contracts/         # 里程碑实现契约（仅本地参考，不进版本库）
-tests/             # 集成测试（需要 PG + mock 上游）
-```
-
-### 设计文档与约定
-
-- `AGENTS.md`：面向 AI 编码代理的工程约定（请求链路、配置单一事实源、透传优先、安全考虑、测试约定）；
-- `PLAN.md`：里程碑计划与版本记录（唯一事实源，仅本地）；
-- 明确不做：充值/余额/兑换码/套餐/支付等运营售卖功能、终端用户账号体系、倍率体系、Embeddings/Rerank/Audio/Moderation/Fine-tuning 端点（v1）。
+- [`AGENTS.md`](./AGENTS.md) — 面向 AI 编码代理的工程约定：请求链路、配置单一事实源、透传优先、安全考虑、测试约定
+- [`config.example.yaml`](./config.example.yaml) — 全部配置项与默认值
+- [`CHANGELOG.md`](./CHANGELOG.md) — 版本更新日志
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](./LICENSE)

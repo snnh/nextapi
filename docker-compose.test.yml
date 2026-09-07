@@ -1,5 +1,10 @@
-# 集成测试覆盖：仅改宿主机端口映射（8080 被 1panel 占用），其余继承主 compose。
+# 集成测试覆盖：本地源码构建（主 compose 默认拉 GHCR 发布镜像），
+# 并改宿主机端口映射（8080 被 1panel 占用），其余继承主 compose。
 services:
   nextapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nextapi-nextapi
     ports: !override
       - "18080:8080"

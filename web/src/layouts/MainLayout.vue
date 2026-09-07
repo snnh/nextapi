@@ -17,6 +17,7 @@
           <template #title><span>{{ m.title }}</span></template>
         </el-menu-item>
       </el-menu>
+      <div v-show="!collapsed || isMobile" class="aside-version">v{{ version }}</div>
     </el-aside>
     <transition name="mask-fade">
       <div v-if="isMobile && navOpen" class="nav-mask" @click="navOpen = false" />
@@ -59,6 +60,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { ArrowDown, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { systemApi } from '@/api'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 
 const route = useRoute()
@@ -90,6 +92,16 @@ const onMq = (e: MediaQueryListEvent) => {
   isMobile.value = e.matches
   if (!e.matches) navOpen.value = false
 }
+// 侧栏底部版本号（来自后端真实二进制版本，失败静默）
+const version = ref('')
+onMounted(async () => {
+  try {
+    version.value = (await systemApi.version()).version
+  } catch {
+    /* 忽略：版本号仅为展示 */
+  }
+})
+
 onMounted(() => {
   mq = window.matchMedia(MOBILE_MQ)
   isMobile.value = mq.matches
@@ -133,6 +145,7 @@ async function onCommand(cmd: string) {
 
 /* ---------- 侧栏（深色） ---------- */
 .aside {
+  position: relative;
   background: #17202a;
   transition: width .2s ease;
   overflow: hidden;
@@ -170,6 +183,17 @@ async function onCommand(cmd: string) {
   border-right: none;
   padding: 4px 8px;
   --el-menu-item-height: 42px;
+}
+.aside-version {
+  position: absolute;
+  bottom: 12px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: #5b6874;
+  font-size: 11px;
+  letter-spacing: .3px;
+  user-select: none;
 }
 .menu :deep(.el-menu-item) {
   border-radius: 8px;

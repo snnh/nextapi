@@ -28,9 +28,11 @@ services:
       retries: 10
 
   nextapi:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # 默认拉取 GHCR 发布镜像；从源码构建时注释 image、取消 build 注释
+    image: ghcr.io/snnh/nextapi:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
