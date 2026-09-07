@@ -1117,6 +1117,10 @@ pub struct StreamState {
     reasoning_text: String,
     /// function_call 输出 item：IR 工具 index → 状态
     tool_items: HashMap<u32, FnItemState>,
+    /// 已见的最新 usage（OpenAI include_usage 下真实 usage 常在 finish 后的独立尾帧）
+    last_usage: Option<crate::protocol::ir::IrUsage>,
+    /// finish 已收但尚无 usage：延迟终止帧至 usage 尾帧或 stream_end（发布审阅 H1）
+    pending_finish: Option<String>,
 }
 
 /// function_call 输出 item 的累积状态（出站用）。
@@ -1554,10 +1558,10 @@ fn output_function_call_item_from_state(t: &FnItemState) -> Value {
 /// 构造 response.completed 事件。
 fn encode_response_completed(
     st: &StreamState,
-    chunk: &IrChunk,
+    usage: Option<&crate::protocol::ir::IrUsage>,
     ctx: &mut ConvCtx,
 ) -> Result<String, ConvertError> {
-    let resp = build_final_response(st, chunk.usage.as_ref(), ctx, "completed");
+    let resp = build_final_response(st, usage, ctx, "completed");
     json_to_string(&Value::Object({
         let mut o = Map::new();
         o.insert("type".into(), Value::String("response.completed".into()));
@@ -1571,19 +1575,16 @@ fn encode_response_completed(
 /// 上游流式失败被伪装成成功响应）。
 fn encode_response_finished(
     st: &StreamState,
-    chunk: &IrChunk,
+    finish: Option<&str>,
+    usage: Option<&crate::protocol::ir::IrUsage>,
     ctx: &mut ConvCtx,
 ) -> Result<String, ConvertError> {
-    let finish = chunk
-        .choices
-        .first()
-        .and_then(|c| c.finish_reason.as_deref());
     let (status, etype) = match finish {
         Some("failed") => ("failed", "response.failed"),
         Some("length") => ("incomplete", "response.incomplete"),
-        _ => return encode_response_completed(st, chunk, ctx),
+        _ => return encode_response_completed(st, usage, ctx),
     };
-    let resp = build_final_response(st, chunk.usage.as_ref(), ctx, status);
+    let resp = build_final_response(st, usage, ctx, status);
     json_to_string(&Value::Object({
         let mut o = Map::new();
         o.insert("type".into(), Value::String(etype.into()));
@@ -1663,16 +1664,28 @@ pub fn chunk_from_ir(
         }
     }
 
-    // finish_reason 或 usage → 终止帧（completed / incomplete / failed 按 finish 分派）
-    let has_finish = chunk
-        .choices
-        .first()
-        .map(|c| c.finish_reason.is_some())
-        .unwrap_or(false);
-    let has_usage = chunk.usage.is_some();
-    if (has_finish || has_usage) && !st.completed {
-        st.completed = true;
-        events.push(encode_response_finished(st, chunk, ctx)?);
+    // usage 累积：OpenAI include_usage 下内容 chunk 的 usage 为 null（入口已滤除），
+    // 真实 usage 常在 finish 之后的独立尾帧到达（发布审阅 H1）。
+    if chunk.usage.is_some() {
+        st.last_usage = chunk.usage.clone();
+    }
+    if let Some(fr) = chunk.choices.first().and_then(|c| c.finish_reason.clone()) {
+        st.pending_finish = Some(fr);
+    }
+    // 终止时机：failed（上游错误）立即终止；否则 finish 且已见 usage（同帧或尾帧）；
+    // finish 先到而 usage 未至 → 等 usage 尾帧，stream_end 兜底（usage 为 None）。
+    if !st.completed && st.pending_finish.is_some() {
+        let failed = st.pending_finish.as_deref() == Some("failed");
+        if failed || st.last_usage.is_some() {
+            st.completed = true;
+            let fr = st.pending_finish.take();
+            events.push(encode_response_finished(
+                st,
+                fr.as_deref(),
+                st.last_usage.as_ref(),
+                ctx,
+            )?);
+        }
     }
 
     Ok(events)
@@ -1686,9 +1699,15 @@ pub fn stream_end(st: &mut StreamState, ctx: &mut ConvCtx) -> Result<Vec<String>
         return Ok(vec![]);
     }
     st.completed = true;
-    let resp = build_final_response(st, None, ctx, "completed");
+    let fr = st.pending_finish.take();
+    let (status, etype) = match fr.as_deref() {
+        Some("failed") => ("failed", "response.failed"),
+        Some("length") => ("incomplete", "response.incomplete"),
+        _ => ("completed", "response.completed"),
+    };
+    let resp = build_final_response(st, st.last_usage.as_ref(), ctx, status);
     let mut o = Map::new();
-    o.insert("type".into(), Value::String("response.completed".into()));
+    o.insert("type".into(), Value::String(etype.into()));
     o.insert("response".into(), resp);
     Ok(vec![json_to_string(&Value::Object(o))?])
 }
@@ -2244,6 +2263,10 @@ mod tests {
                 evs.push(serde_json::from_str(&e).unwrap());
             }
         }
+        // 无 usage 的 finish 帧延迟终止（发布审阅 H1）：completed 在 stream_end 补发
+        for e in stream_end(&mut st, &mut c).unwrap() {
+            evs.push(serde_json::from_str(&e).unwrap());
+        }
         let added_id = evs
             .iter()
             .find(|e| e["type"] == "response.output_item.added")
@@ -2266,6 +2289,73 @@ mod tests {
             completed["response"]["output"][0]["id"].as_str().unwrap(),
             added_id
         );
+    }
+
+    /// 发布审阅 H1 回归：OpenAI include_usage 模式——finish 帧 usage=null（入口已滤除），
+    /// 真实 usage 在独立尾帧。completed 必须在 usage 尾帧发出且携带真实 usage。
+    #[test]
+    fn stream_completed_waits_for_usage_tail() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let mk = |text: Option<&str>, finish: Option<&str>, usage: Option<(u64, u64)>| IrChunk {
+            id: "chatcmpl_1".into(),
+            model: "gpt-5".into(),
+            created: 1,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: text.map(String::from),
+                    ..Default::default()
+                },
+                finish_reason: finish.map(String::from),
+            }],
+            usage: usage.map(|(p, ct)| crate::protocol::ir::IrUsage {
+                prompt_tokens: p,
+                completion_tokens: ct,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // 内容 chunk（usage 已被入口滤除）→ 不得发 completed
+        let e1 = chunk_from_ir(&mk(Some("hi"), None, None), &mut st, &mut c).unwrap();
+        assert!(!e1.iter().any(|e| e.contains("response.completed")));
+        // finish 帧（无 usage）→ 仍不得发 completed
+        let e2 = chunk_from_ir(&mk(None, Some("stop"), None), &mut st, &mut c).unwrap();
+        assert!(!e2.iter().any(|e| e.contains("response.completed")));
+        // usage 尾帧 → 发出 completed 且带真实 usage
+        let e3 = chunk_from_ir(&mk(None, None, Some((11, 7))), &mut st, &mut c).unwrap();
+        let completed = e3
+            .iter()
+            .find(|e| e.contains("response.completed"))
+            .unwrap();
+        let v: Value = serde_json::from_str(completed).unwrap();
+        assert_eq!(v["response"]["usage"]["input_tokens"], 11);
+        assert_eq!(v["response"]["usage"]["output_tokens"], 7);
+        // stream_end 不再重复发
+        assert!(stream_end(&mut st, &mut c).unwrap().is_empty());
+    }
+
+    /// 无 usage 尾帧的上游（未开 include_usage）：stream_end 兜底发 completed。
+    #[test]
+    fn stream_completed_fallback_at_stream_end() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let ch = IrChunk {
+            id: "chatcmpl_2".into(),
+            model: "m".into(),
+            created: 1,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta::default(),
+                finish_reason: Some("length".into()),
+            }],
+            ..Default::default()
+        };
+        let evs = chunk_from_ir(&ch, &mut st, &mut c).unwrap();
+        assert!(!evs.iter().any(|e| e.contains("response.incomplete")));
+        let end = stream_end(&mut st, &mut c).unwrap();
+        let v: Value = serde_json::from_str(&end[0]).unwrap();
+        assert_eq!(v["type"], "response.incomplete"); // finish=length → incomplete
     }
 
     /// review P5 回归：上游 response.failed 不再被丢弃后伪装成 completed，

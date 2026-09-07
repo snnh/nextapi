@@ -970,6 +970,9 @@ pub struct StreamState {
     tool_block_of: HashMap<u32, u32>,
     /// 工具调用序号 → (id, name) 元数据（后续增量不再携带，重开块时兜底）
     tool_meta: HashMap<u32, (String, String)>,
+    /// finish 已收但本帧无 usage：延迟 message_delta 至 usage 尾帧或 stream_end
+    /// （OpenAI include_usage 下 usage 在 finish 后的独立尾帧，发布审阅 H2）
+    pending_finish: Option<String>,
 }
 
 /// 出站当前打开的内容块。
@@ -1255,10 +1258,17 @@ fn content_block_stop(idx: u32) -> Value {
 fn message_delta_event(fr: &str, st: &StreamState) -> Value {
     let sr = reverse_finish_reason(fr);
     let mut usage = Map::new();
+    usage.insert("input_tokens".into(), Value::from(st.usage.prompt_tokens));
     usage.insert(
         "output_tokens".into(),
         Value::from(st.usage.completion_tokens),
     );
+    if let Some(c) = st.usage.cache_read_tokens {
+        usage.insert("cache_read_input_tokens".into(), Value::from(c));
+    }
+    if let Some(c) = st.usage.cache_write_tokens {
+        usage.insert("cache_creation_input_tokens".into(), Value::from(c));
+    }
     serde_json::json!({
         "type": "message_delta",
         "delta": {"stop_reason": sr, "stop_sequence": null},
@@ -1401,7 +1411,9 @@ pub fn chunk_from_ir(
         st.usage.cache_write_tokens = u.cache_write_tokens.or(st.usage.cache_write_tokens);
     }
 
-    // finish_reason：关闭当前打开的块，再发 message_delta
+    // finish_reason：关闭当前打开的块，再发 message_delta。
+    // 本帧无 usage（OpenAI 系 usage 尾帧未至）时延迟到 usage 尾帧或 stream_end，
+    // 用最终累计值发出——否则 input/output 恒 0，计费与客户端统计全丢（发布审阅 H2）。
     if let Some(fr) = finish_reason {
         if let Some(ev) = close_open_block(st) {
             events.push(event_str(ev)?);
@@ -1409,9 +1421,17 @@ pub fn chunk_from_ir(
         // failed 无 Anthropic 合法 stop_reason（ inbound 侧已记 degrade），stop_reason 置 null
         if fr == "failed" {
             events.push(event_str(message_delta_end_event(st))?);
-        } else {
+            st.message_delta_emitted = true;
+        } else if chunk.usage.is_some() {
             events.push(event_str(message_delta_event(fr, st))?);
+            st.message_delta_emitted = true;
+        } else {
+            st.pending_finish = Some(fr.to_string());
         }
+    } else if st.pending_finish.is_some() && chunk.usage.is_some() && !st.message_delta_emitted {
+        // usage 尾帧到达：补发延迟的 message_delta
+        let fr = st.pending_finish.take().unwrap_or_default();
+        events.push(event_str(message_delta_event(&fr, st))?);
         st.message_delta_emitted = true;
     }
 
@@ -1426,7 +1446,11 @@ pub fn stream_end(st: &mut StreamState, _ctx: &mut ConvCtx) -> Result<Vec<String
         events.push(event_str(ev)?);
     }
     if st.message_start_emitted && !st.message_delta_emitted {
-        events.push(event_str(message_delta_end_event(st))?);
+        if let Some(fr) = st.pending_finish.take() {
+            events.push(event_str(message_delta_event(&fr, st))?);
+        } else {
+            events.push(event_str(message_delta_end_event(st))?);
+        }
         st.message_delta_emitted = true;
     }
     // 从未发出 message_start（上游流立即结束）则不补任何事件：裸 message_stop 本身非法。
@@ -1435,6 +1459,83 @@ pub fn stream_end(st: &mut StreamState, _ctx: &mut ConvCtx) -> Result<Vec<String
         events.push(event_str(message_stop_event())?);
     }
     Ok(events)
+}
+
+#[cfg(test)]
+mod stream_usage_tests {
+    use super::*;
+    use crate::protocol::ir::{IrChunk, IrChunkChoice, IrDelta, IrUsage};
+
+    fn ctx() -> ConvCtx {
+        ConvCtx::new()
+    }
+    fn mk(text: Option<&str>, finish: Option<&str>, usage: Option<(u64, u64)>) -> IrChunk {
+        IrChunk {
+            id: "msg_1".into(),
+            model: "claude-x".into(),
+            created: 1,
+            choices: vec![IrChunkChoice {
+                index: 0,
+                delta: IrDelta {
+                    content: text.map(String::from),
+                    ..Default::default()
+                },
+                finish_reason: finish.map(String::from),
+            }],
+            usage: usage.map(|(p, ct)| IrUsage {
+                prompt_tokens: p,
+                completion_tokens: ct,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// 发布审阅 H2 回归：OpenAI 源 include_usage——finish 帧无 usage，
+    /// message_delta 必须延迟到 usage 尾帧并携带最终累计值（input+output 非 0）。
+    #[test]
+    fn message_delta_waits_for_usage_tail() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        let mut all: Vec<serde_json::Value> = vec![];
+        for ch in [mk(Some("hi"), None, None), mk(None, Some("stop"), None)] {
+            for e in chunk_from_ir(&ch, &mut st, &mut c).unwrap() {
+                all.push(serde_json::from_str(&e).unwrap());
+            }
+        }
+        // finish 后不应有 message_delta
+        assert!(!all.iter().any(|e| e["type"] == "message_delta"));
+        for e in chunk_from_ir(&mk(None, None, Some((11, 7))), &mut st, &mut c).unwrap() {
+            all.push(serde_json::from_str(&e).unwrap());
+        }
+        let delta = all.iter().find(|e| e["type"] == "message_delta").unwrap();
+        assert_eq!(delta["usage"]["input_tokens"], 11);
+        assert_eq!(delta["usage"]["output_tokens"], 7);
+        assert_eq!(delta["delta"]["stop_reason"], "end_turn");
+    }
+
+    /// 无 usage 尾帧（未开 include_usage）：stream_end 兜底发 message_delta。
+    #[test]
+    fn message_delta_fallback_at_stream_end() {
+        let mut c = ctx();
+        let mut st = StreamState::default();
+        for e in chunk_from_ir(&mk(Some("hi"), Some("stop"), None), &mut st, &mut c).unwrap() {
+            let v: serde_json::Value = serde_json::from_str(&e).unwrap();
+            assert_ne!(v["type"], "message_delta");
+        }
+        let end = stream_end(&mut st, &mut c).unwrap();
+        let types: Vec<String> = end
+            .iter()
+            .map(|e| {
+                serde_json::from_str::<serde_json::Value>(e).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(types.iter().any(|t| t == "message_delta"));
+        assert!(types.iter().any(|t| t == "message_stop"));
+    }
 }
 
 #[cfg(test)]

@@ -864,7 +864,9 @@ pub fn chunk_to_ir(
             chunk.choices.push(parse_chunk_choice(c, ctx)?);
         }
     }
-    if let Some(u) = v.get("usage") {
+    // include_usage 下内容 chunk 会带 "usage": null——null 不是 usage，
+    // 否则下游（Responses/Anthropic 出口）会把首个 chunk 误判为终止帧（发布审阅 H1）。
+    if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
         chunk.usage = Some(parse_usage(u));
     }
 
