@@ -40,6 +40,9 @@ impl ApiError {
     pub fn bad_request<S: Into<String>>(s: S) -> Self {
         Self::BadRequest(s.into())
     }
+    pub fn bad_gateway<S: Into<String>>(s: S) -> Self {
+        Self::BadGateway(s.into())
+    }
 
     pub fn status(&self) -> StatusCode {
         match self {

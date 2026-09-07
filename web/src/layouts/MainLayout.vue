@@ -1,30 +1,39 @@
 <template>
   <el-container class="layout">
-    <el-aside :width="collapsed ? '64px' : '220px'" class="aside">
-      <div class="brand" :class="{ 'brand-collapsed': collapsed }">
-        <span class="brand-mark">N</span>
-        <div v-show="!collapsed" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
+    <el-aside
+      :width="isMobile ? '248px' : collapsed ? '64px' : '220px'"
+      class="aside"
+      :class="{ 'aside-mobile': isMobile, 'aside-mobile-open': navOpen }"
+    >
+      <div class="brand" :class="{ 'brand-collapsed': collapsed && !isMobile }">
+        <span class="brand-mark">next</span>
+        <div v-show="!collapsed || isMobile" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
       </div>
-      <el-menu :default-active="active" router :collapse="collapsed" :collapse-transition="false"
-        background-color="transparent" text-color="#4b5563" active-text-color="#3a6ff7" class="menu">
+      <el-menu :default-active="active" router :collapse="collapsed && !isMobile" :collapse-transition="false"
+        background-color="transparent" text-color="#94a3b8" active-text-color="#ffffff" class="menu"
+        @select="onMenuSelect">
         <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
           <el-icon><component :is="m.icon" /></el-icon>
           <template #title><span>{{ m.title }}</span></template>
         </el-menu-item>
       </el-menu>
     </el-aside>
+    <transition name="mask-fade">
+      <div v-if="isMobile && navOpen" class="nav-mask" @click="navOpen = false" />
+    </transition>
     <el-container>
       <el-header class="header">
         <div class="header-left">
-          <el-icon class="collapse-btn" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="collapsed = !collapsed">
-            <Expand v-if="collapsed" /><Fold v-else />
+          <el-icon class="collapse-btn" :title="isMobile ? '打开菜单' : collapsed ? '展开侧栏' : '收起侧栏'"
+            @click="onMenuBtn">
+            <component :is="menuBtnIcon" />
           </el-icon>
           <div class="page-title">{{ route.meta.title ?? '' }}</div>
         </div>
-        <el-dropdown @command="onCommand">
+        <el-dropdown @command="onCommand" trigger="click">
           <span class="user">
             <el-icon><UserFilled /></el-icon>
-            {{ auth.username ?? 'admin' }}
+            <span class="username">{{ auth.username ?? 'admin' }}</span>
             <el-icon><ArrowDown /></el-icon>
           </span>
           <template #dropdown>
@@ -45,10 +54,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { ArrowDown, Expand, Fold, UserFilled } from '@element-plus/icons-vue'
+import { ArrowDown, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 
@@ -70,7 +79,37 @@ const menus = computed(() => {
 
 const active = computed(() => route.path)
 const collapsed = ref(false)
+const navOpen = ref(false)
 const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()
+
+// 移动端断点：≤768px 时侧栏改为滑出式抽屉（不占据布局宽度）
+const MOBILE_MQ = '(max-width: 768px)'
+const isMobile = ref(false)
+let mq: MediaQueryList | null = null
+const onMq = (e: MediaQueryListEvent) => {
+  isMobile.value = e.matches
+  if (!e.matches) navOpen.value = false
+}
+onMounted(() => {
+  mq = window.matchMedia(MOBILE_MQ)
+  isMobile.value = mq.matches
+  mq.addEventListener('change', onMq)
+})
+onBeforeUnmount(() => mq?.removeEventListener('change', onMq))
+
+const menuBtnIcon = computed(() => {
+  if (isMobile.value) return MenuIcon
+  return collapsed.value ? Expand : Fold
+})
+
+function onMenuBtn() {
+  if (isMobile.value) navOpen.value = !navOpen.value
+  else collapsed.value = !collapsed.value
+}
+
+function onMenuSelect() {
+  if (isMobile.value) navOpen.value = false
+}
 
 async function onCommand(cmd: string) {
   if (cmd === 'logout') {
@@ -91,59 +130,104 @@ async function onCommand(cmd: string) {
 .layout {
   height: 100%;
 }
-@media (max-width: 720px) {
-  .brand { justify-content: center; padding: 18px 8px; }
-  .brand-text, .menu span { display: none; }
-  .menu .el-menu-item { justify-content: center; padding: 0 !important; }
-  .header { padding: 0 14px; }
-  .page-title { font-size: 15px; }
-}
 
+/* ---------- 侧栏（深色） ---------- */
 .aside {
-  background: #fff;
-  border-right: 1px solid #e5e7eb;
+  background: #0f172a;
   transition: width .2s ease;
   overflow: hidden;
+  flex-shrink: 0;
 }
 .brand {
-  color: #1f2329;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 20px 18px;
+  padding: 18px;
   white-space: nowrap;
 }
 .brand-collapsed {
   justify-content: center;
-  padding: 20px 0;
+  padding: 18px 0;
 }
 .brand-mark {
   flex-shrink: 0;
-  width: 30px;
   height: 30px;
+  padding: 0 10px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  background: #3a6ff7;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
   color: #fff;
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: .5px;
+  line-height: 1;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, .35);
 }
-.brand strong { display: block; font-size: 16px; letter-spacing: .2px; }
-.brand small { display: block; margin-top: 2px; color: #9ca3af; font-size: 11px; }
+.brand strong { display: block; font-size: 15px; letter-spacing: .2px; color: #f1f5f9; }
+.brand small { display: block; margin-top: 2px; color: #64748b; font-size: 11px; }
 .menu {
   border-right: none;
+  padding: 4px 8px;
+  --el-menu-item-height: 42px;
 }
+.menu :deep(.el-menu-item) {
+  border-radius: 8px;
+  margin: 2px 0;
+}
+.menu :deep(.el-menu-item:hover) {
+  background-color: rgba(148, 163, 184, .1);
+  color: #e2e8f0;
+}
+.menu :deep(.el-menu-item.is-active) {
+  background-color: rgba(79, 70, 229, .92);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(79, 70, 229, .35);
+}
+
+/* ---------- 移动端：侧栏变滑出抽屉 ---------- */
+.aside-mobile {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 1001;
+  transform: translateX(-100%);
+  transition: transform .22s ease;
+  box-shadow: 8px 0 24px rgba(15, 23, 42, .3);
+}
+.aside-mobile-open {
+  transform: translateX(0);
+}
+.nav-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, .45);
+}
+.mask-fade-enter-active,
+.mask-fade-leave-active {
+  transition: opacity .2s ease;
+}
+.mask-fade-enter-from,
+.mask-fade-leave-to {
+  opacity: 0;
+}
+
+/* ---------- 顶栏 ---------- */
 .header {
   background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e8eaee;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  height: 56px;
 }
 .header-left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  min-width: 0;
 }
 .collapse-btn {
   font-size: 18px;
@@ -160,6 +244,9 @@ async function onCommand(cmd: string) {
   font-size: 16px;
   font-weight: 600;
   color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .user {
   display: inline-flex;
@@ -171,6 +258,14 @@ async function onCommand(cmd: string) {
 .main {
   padding: 0;
   overflow-y: auto;
-  background: #f5f6f8;
+  background: #f4f5f7;
+}
+
+@media (max-width: 768px) {
+  .header { padding: 0 12px; }
+  .page-title { font-size: 15px; }
+}
+@media (max-width: 400px) {
+  .username { display: none; }
 }
 </style>

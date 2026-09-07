@@ -58,6 +58,7 @@ pub struct ConfigFile {
     pub proxies: Vec<ProxySeed>,
     pub update_check: UpdateCheckCfg,
     pub media_poller: MediaPollerCfg,
+    pub model_sync: ModelSyncCfg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,6 +374,24 @@ impl Default for MediaPollerCfg {
     }
 }
 
+/// hot 类：渠道模型自动同步（model_sync='auto' 的上游定时拉取模型列表并对账托管路由）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelSyncCfg {
+    pub enabled: bool,
+    /// 同步间隔（分钟）；0 = 仅手动触发
+    pub interval_minutes: u64,
+}
+
+impl Default for ModelSyncCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_minutes: 30,
+        }
+    }
+}
+
 /// hot 类运行参数全集（热加载原子替换的单位）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -384,6 +403,7 @@ pub struct HotConfig {
     pub proxy: ProxyCfg,
     pub update_check: UpdateCheckCfg,
     pub media_poller: MediaPollerCfg,
+    pub model_sync: ModelSyncCfg,
 }
 
 impl ConfigFile {
@@ -397,6 +417,7 @@ impl ConfigFile {
             proxy: self.proxy.clone(),
             update_check: self.update_check.clone(),
             media_poller: self.media_poller.clone(),
+            model_sync: self.model_sync.clone(),
         }
     }
 }

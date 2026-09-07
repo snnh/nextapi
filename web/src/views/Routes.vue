@@ -30,6 +30,13 @@
         <el-table-column label="模型模式" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="mono">{{ row.model_pattern }}</span>
+            <el-tooltip
+              v-if="row.managed_by === 'auto'"
+              content="由渠道模型同步托管：自动跟随上游模型列表增删；手动编辑请先关闭该渠道的自动跟随"
+              placement="top"
+            >
+              <el-tag size="small" type="primary" effect="plain" style="margin-left: 6px">自动</el-tag>
+            </el-tooltip>
             <el-tag
               v-if="isRowDirty(row)"
               size="small"

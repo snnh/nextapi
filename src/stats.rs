@@ -265,7 +265,7 @@ async fn series_hourly(
         format!(" GROUP BY date_trunc('{g}', hour) ORDER BY 1")
     };
     let mut qb = QueryBuilder::<Postgres>::new(format!(
-        "SELECT date_trunc('{g}', hour) AS hour, \
+        "SELECT date_trunc('{g}', hour) AS bucket, \
          {dim_sql} \
          sum(requests)::bigint AS requests, \
          sum(errors)::bigint AS errors, \

@@ -1,8 +1,8 @@
 <template>
   <div class="page login-page">
-    <el-card class="login-card" shadow="always">
+    <el-card class="login-card" shadow="never">
       <div class="login-head">
-        <div class="logo">NextAPI</div>
+        <div class="logo">next</div>
         <h1 class="title">NextAPI 管理后台</h1>
         <div class="subtitle">自托管 LLM 网关</div>
       </div>
@@ -105,14 +105,15 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f6f8;
+  background: linear-gradient(160deg, #eef0f6 0%, #f4f5f7 55%, #f4f5f7 100%);
 }
 
 .login-card {
   width: 380px;
   max-width: 92vw;
   border-radius: 10px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e8eaee;
+  box-shadow: 0 4px 24px rgba(16, 24, 40, .06);
 }
 
 .login-head {
@@ -121,10 +122,17 @@ async function handleLogin() {
 }
 
 .logo {
-  font-size: 26px;
-  font-weight: 700;
-  color: #3a6ff7;
-  letter-spacing: .5px;
+  display: inline-grid;
+  place-items: center;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  box-shadow: 0 3px 10px rgba(79, 70, 229, .35);
 }
 
 .title {

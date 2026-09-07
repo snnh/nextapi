@@ -160,6 +160,13 @@ export interface UpstreamOut {
   proxy_id: string | null
   /** 可含 protocol_priority / overrides / media_base_url */
   extra: UpstreamExtra
+  /** 模型同步策略：manual=仅手动 / auto=跟随上游自动更新托管路由 */
+  model_sync: 'manual' | 'auto'
+  /** 自动同步排除名单 */
+  model_exclude: string[]
+  /** 最近一次成功拉取的模型列表缓存 */
+  models_cache: string[]
+  models_fetched_at: string | null
   created_at: string
   updated_at: string
 }
@@ -191,6 +198,8 @@ export interface UpstreamIn {
   use_proxy?: boolean | null
   proxy_id?: string | null
   extra?: UpstreamExtra | null
+  model_sync?: 'manual' | 'auto' | null
+  model_exclude?: string[] | null
 }
 
 export interface TestResp {
@@ -198,6 +207,32 @@ export interface TestResp {
   status?: number
   latency_ms: number
   error?: string
+}
+
+/** 渠道模型列表项（实时拉取 + 路由状态标注） */
+export interface UpstreamModelItem {
+  name: string
+  /** new=未路由 / routed_manual=本渠道手动路由 / routed_auto=本渠道托管路由 /
+   *  routed_other=已被其他渠道占用 / excluded=排除名单内 */
+  status: 'new' | 'routed_manual' | 'routed_auto' | 'routed_other' | 'excluded'
+}
+
+export interface UpstreamModelsResp {
+  items: UpstreamModelItem[]
+  fetched_at: string
+  model_sync: 'manual' | 'auto'
+  model_exclude: string[]
+}
+
+/** 模型同步/手动添加报告 */
+export interface ModelSyncReport {
+  fetched: number
+  desired: number
+  excluded: number
+  added: string[]
+  removed: string[]
+  skipped: string[]
+  kept: number
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +274,8 @@ export interface RouteItem {
   retry_status_codes?: number[] | null
   lock_upstream?: boolean | null
   sort_order?: number | null
+  /** 透传托管标记（'auto'）；新建手动路由无需传 */
+  managed_by?: string | null
 }
 
 export interface RouteOut {
@@ -254,6 +291,8 @@ export interface RouteOut {
   retry_status_codes: number[]
   lock_upstream: boolean
   sort_order: number
+  /** NULL=手动；'auto'=渠道模型同步托管 */
+  managed_by: string | null
   created_at: string
   updated_at: string
 }

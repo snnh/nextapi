@@ -78,6 +78,13 @@ pub struct UpstreamRow {
     pub use_proxy: bool,
     pub proxy_id: Option<Uuid>,
     pub extra: serde_json::Value,
+    /// 模型同步策略：manual=仅手动 / auto=跟随上游自动更新路由
+    pub model_sync: String,
+    /// 自动同步排除名单（命中即不生成/移除托管路由）
+    pub model_exclude: Vec<String>,
+    /// 最近一次成功拉取的模型列表缓存（JSONB 数组，元素为字符串）
+    pub models_cache: serde_json::Value,
+    pub models_fetched_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -215,6 +222,8 @@ pub struct ModelRouteRow {
     pub retry_status_codes: Vec<i32>,
     pub lock_upstream: bool,
     pub sort_order: i32,
+    /// NULL=手动路由；'auto'=渠道模型同步托管（同步引擎只增删托管路由）
+    pub managed_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

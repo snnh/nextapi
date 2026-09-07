@@ -1,30 +1,34 @@
 :root {
-  --el-color-primary: #3a6ff7;
-  --el-color-primary-light-3: #6b93f9;
-  --el-color-primary-light-5: #93aefb;
-  --el-color-primary-light-7: #c1d0fd;
-  --el-color-primary-light-9: #eef3fe;
+  --el-color-primary: #4f46e5;
+  --el-color-primary-light-3: #7a73ec;
+  --el-color-primary-light-5: #a09cf2;
+  --el-color-primary-light-7: #c6c3f8;
+  --el-color-primary-light-9: #efedfc;
+  --el-color-primary-dark-2: #4338ca;
   --el-border-radius-base: 6px;
   --el-border-radius-small: 4px;
-  --el-bg-color-page: #f5f6f8;
-  --el-border-color: #e5e7eb;
+  --el-bg-color-page: #f4f5f7;
+  --el-border-color: #e8eaee;
+  --el-border-color-light: #eceef1;
+  --el-border-color-lighter: #eef0f3;
   --el-text-color-primary: #1f2329;
   --el-text-color-regular: #4b5563;
 }
 
 .el-button--primary {
-  --el-button-bg-color: #3a6ff7;
-  --el-button-border-color: #3a6ff7;
-  --el-button-hover-bg-color: #2f5fe0;
-  --el-button-hover-border-color: #2f5fe0;
+  --el-button-bg-color: #4f46e5;
+  --el-button-border-color: #4f46e5;
+  --el-button-hover-bg-color: #4338ca;
+  --el-button-hover-border-color: #4338ca;
 }
 
-.el-card { --el-card-border-color: #e5e7eb; }
+.el-card {
+  --el-card-border-color: #e8eaee;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
 .el-table { --el-table-border-color: #eceef1; --el-table-header-bg-color: #fafbfc; }
 .el-table th.el-table__cell { font-weight: 600; color: #4b5563; }
 .el-tabs__item { font-weight: 500; }
-.el-menu-item { transition: background-color .15s ease, color .15s ease; }
-.el-menu-item:hover { background-color: #f3f4f6 !important; }
-.el-menu-item.is-active { background-color: #eef3fe !important; color: #3a6ff7 !important; border-right: 2px solid #3a6ff7; }
 .el-input__wrapper, .el-select__wrapper { box-shadow: 0 0 0 1px #dcdfe4 inset; }
-.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px #3a6ff7 inset; }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px #4f46e5 inset; }
+.el-radio-button__inner:hover { color: #4338ca; }

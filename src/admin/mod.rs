@@ -10,6 +10,7 @@ pub mod audit;
 pub mod fx;
 pub mod keys;
 pub mod logs;
+pub mod model_sync;
 pub mod presets;
 pub mod pricing;
 pub mod proxies;
@@ -22,7 +23,10 @@ pub mod upstreams;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .nest("/keys", keys::router())
-        .nest("/upstreams", upstreams::router())
+        .nest(
+            "/upstreams",
+            upstreams::router().merge(model_sync::router()),
+        )
         .nest("/model-routes", routes::router())
         .nest("/aliases", aliases::router())
         .nest("/proxies", proxies::router())

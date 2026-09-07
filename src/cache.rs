@@ -59,15 +59,16 @@ impl EntityCache {
         let upstream_rows: Vec<UpstreamDbRow> = sqlx::query_as::<_, UpstreamDbRow>(
             "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
              breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
-             use_proxy, proxy_id, extra, created_at, updated_at FROM upstreams",
+             use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
+             created_at, updated_at FROM upstreams",
         )
         .fetch_all(pool)
         .await?;
 
         let routes: Vec<ModelRouteRow> = sqlx::query_as::<_, ModelRouteRow>(
             "SELECT id, model_pattern, upstream_id, override_model, priority, weight, enabled, \
-             retries, retry_status_codes, lock_upstream, sort_order, created_at, updated_at \
-             FROM model_routes",
+             retries, retry_status_codes, lock_upstream, sort_order, managed_by, \
+             created_at, updated_at FROM model_routes",
         )
         .fetch_all(pool)
         .await?;
@@ -121,6 +122,10 @@ impl EntityCache {
                 use_proxy: u.use_proxy,
                 proxy_id: u.proxy_id,
                 extra: u.extra,
+                model_sync: u.model_sync,
+                model_exclude: u.model_exclude,
+                models_cache: u.models_cache,
+                models_fetched_at: u.models_fetched_at,
                 created_at: u.created_at,
                 updated_at: u.updated_at,
             };
@@ -192,6 +197,10 @@ struct UpstreamDbRow {
     use_proxy: bool,
     proxy_id: Option<Uuid>,
     extra: serde_json::Value,
+    model_sync: String,
+    model_exclude: Vec<String>,
+    models_cache: serde_json::Value,
+    models_fetched_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }

@@ -56,6 +56,10 @@ struct UpstreamDbRow {
     use_proxy: bool,
     proxy_id: Option<Uuid>,
     extra: serde_json::Value,
+    model_sync: String,
+    model_exclude: Vec<String>,
+    models_cache: serde_json::Value,
+    models_fetched_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -79,6 +83,10 @@ struct UpstreamOut {
     use_proxy: bool,
     proxy_id: Option<Uuid>,
     extra: serde_json::Value,
+    model_sync: String,
+    model_exclude: Vec<String>,
+    models_cache: serde_json::Value,
+    models_fetched_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -101,6 +109,10 @@ fn to_out(row: UpstreamDbRow) -> UpstreamOut {
         use_proxy: row.use_proxy,
         proxy_id: row.proxy_id,
         extra: row.extra,
+        model_sync: row.model_sync,
+        model_exclude: row.model_exclude,
+        models_cache: row.models_cache,
+        models_fetched_at: row.models_fetched_at,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }
@@ -131,6 +143,12 @@ struct CreateUpstreamReq {
     proxy_id: Option<Uuid>,
     #[serde(default)]
     extra: Option<serde_json::Value>,
+    /// 模型同步策略：manual（默认）| auto（跟随上游自动更新托管路由）
+    #[serde(default)]
+    model_sync: Option<String>,
+    /// 自动同步排除名单
+    #[serde(default)]
+    model_exclude: Option<Vec<String>>,
 }
 
 /// 更新上游请求体（全字段 Option）。
@@ -160,6 +178,10 @@ struct UpdateUpstreamReq {
     proxy_id: Option<Uuid>,
     #[serde(default)]
     extra: Option<serde_json::Value>,
+    #[serde(default)]
+    model_sync: Option<String>,
+    #[serde(default)]
+    model_exclude: Option<Vec<String>>,
 }
 
 /// GET /：列表（has_api_key 布尔；绝不输出 api_key）。
@@ -170,7 +192,8 @@ async fn list_upstreams(
     let rows: Vec<UpstreamDbRow> = sqlx::query_as::<_, UpstreamDbRow>(
         "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
          breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
-         use_proxy, proxy_id, extra, created_at, updated_at FROM upstreams ORDER BY name",
+         use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
+         created_at, updated_at FROM upstreams ORDER BY name",
     )
     .fetch_all(&state.db)
     .await?;
@@ -206,12 +229,19 @@ async fn create_upstream(
     let timeout_ms = body.timeout_ms.unwrap_or(300000);
     let breaker_threshold = body.breaker_threshold.unwrap_or(5);
     let extra = body.extra.clone().unwrap_or_else(|| serde_json::json!({}));
+    let model_sync = body
+        .model_sync
+        .clone()
+        .unwrap_or_else(|| "manual".to_string());
+    let model_exclude = body.model_exclude.clone().unwrap_or_default();
+    validate_model_sync(&model_sync, &model_exclude)?;
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO upstreams \
          (name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, breaker_threshold, \
-          probe_model, consecutive_failures, disabled_by, cooldown_until, use_proxy, proxy_id, extra) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,NULL,$11,$12,$13) RETURNING id",
+          probe_model, consecutive_failures, disabled_by, cooldown_until, use_proxy, proxy_id, extra, \
+          model_sync, model_exclude) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,NULL,$11,$12,$13,$14,$15) RETURNING id",
     )
     .bind(&body.name)
     .bind(body.kind.as_deref().unwrap_or("custom"))
@@ -226,6 +256,8 @@ async fn create_upstream(
     .bind(body.use_proxy.unwrap_or(false))
     .bind(body.proxy_id)
     .bind(&extra)
+    .bind(model_sync)
+    .bind(&model_exclude)
     .fetch_one(&state.db)
     .await?;
 
@@ -269,6 +301,11 @@ async fn update_upstream(
     let use_proxy = body.use_proxy.unwrap_or(row.use_proxy);
     let proxy_id = body.proxy_id.or(row.proxy_id);
     let extra = body.extra.unwrap_or_else(|| row.extra.clone());
+    let model_sync = body.model_sync.unwrap_or_else(|| row.model_sync.clone());
+    let model_exclude = body
+        .model_exclude
+        .unwrap_or_else(|| row.model_exclude.clone());
+    validate_model_sync(&model_sync, &model_exclude)?;
 
     validate_upstream(
         &name,
@@ -319,8 +356,9 @@ async fn update_upstream(
     sqlx::query(
         "UPDATE upstreams SET name=$1, kind=$2, base_url=$3, api_key_enc=$4, protocols=$5, \
          enabled=$6, timeout_ms=$7, breaker_threshold=$8, probe_model=$9, consecutive_failures=$10, \
-         disabled_by=$11, cooldown_until=$12, use_proxy=$13, proxy_id=$14, extra=$15, updated_at=now() \
-         WHERE id=$16",
+         disabled_by=$11, cooldown_until=$12, use_proxy=$13, proxy_id=$14, extra=$15, \
+         model_sync=$16, model_exclude=$17, updated_at=now() \
+         WHERE id=$18",
     )
     .bind(&name)
     .bind(&kind)
@@ -337,6 +375,8 @@ async fn update_upstream(
     .bind(use_proxy)
     .bind(proxy_id)
     .bind(&extra)
+    .bind(&model_sync)
+    .bind(&model_exclude)
     .bind(id)
     .execute(&state.db)
     .await?;
@@ -445,6 +485,22 @@ async fn test_upstream(
             serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
         )),
     }
+}
+
+/// 校验模型同步策略与排除名单边界（review P2 风格：长度/数量上限）。
+fn validate_model_sync(sync: &str, exclude: &[String]) -> Result<(), ApiError> {
+    if sync != "manual" && sync != "auto" {
+        return Err(ApiError::bad_request("model_sync 必须为 manual 或 auto"));
+    }
+    if exclude.len() > 500 {
+        return Err(ApiError::bad_request("model_exclude 不能超过 500 条"));
+    }
+    for m in exclude {
+        if m.is_empty() || m.len() > 200 {
+            return Err(ApiError::bad_request("model_exclude 单项长度须为 1..=200"));
+        }
+    }
+    Ok(())
 }
 
 /// 图片上游协议值（契约 m6：upstreams.protocols 新增四个 images_* 值，其余校验不变）。
@@ -582,7 +638,8 @@ async fn fetch_upstream(state: &AppState, id: Uuid) -> ApiResult<UpstreamDbRow> 
     sqlx::query_as::<_, UpstreamDbRow>(
         "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
          breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
-         use_proxy, proxy_id, extra, created_at, updated_at FROM upstreams WHERE id=$1",
+         use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
+         created_at, updated_at FROM upstreams WHERE id=$1",
     )
     .bind(id)
     .fetch_optional(&state.db)
