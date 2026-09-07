@@ -578,6 +578,65 @@ fn decode_totp_secret(state: &AppState, enc: Option<String>) -> ApiResult<Vec<u8
     totp::secret_from_base32(&b32).ok_or_else(|| ApiError::internal("TOTP 机密损坏"))
 }
 
+/// 敏感操作二次验证（如查看上游明文 API Key）：校验当前管理员密码；
+/// 若已启用 TOTP 则同时校验动态码（含防重放步消费，语义与登录一致）。
+///
+/// - 失败统一返回 400（不吊销会话），错误与上游资源状态无关，防未授权探测；
+/// - 每次调用都受 per-username 敏感限速（与登录共用滑窗，键前缀 `sens:`）约束；
+/// - 调用方在验证通过后自行完成目标操作并写审计。
+pub(crate) async fn sensitive_verify(
+    state: &AppState,
+    username: &str,
+    password: &str,
+    totp_code: Option<&str>,
+) -> ApiResult<()> {
+    sensitive_rate_check(state, username)?;
+
+    let row = sqlx::query(
+        "SELECT password_hash, totp_enabled, totp_secret_enc, last_totp_step \
+         FROM admin_users WHERE username = $1",
+    )
+    .bind(username)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
+    let hash: String = row.get("password_hash");
+    if !verify_password(&hash, password) {
+        return Err(ApiError::bad_request("密码不正确"));
+    }
+
+    // TOTP 未启用：密码通过即放行
+    if !row.try_get::<bool, _>("totp_enabled").unwrap_or(false) {
+        return Ok(());
+    }
+    // 已启用：动态码必填，校验并防重放（命中步须大于上次消费步，原子推进）
+    let code = totp_code.unwrap_or("").trim().to_string();
+    if code.is_empty() {
+        return Err(ApiError::bad_request("已启用 TOTP，需要二次验证码"));
+    }
+    let secret = decode_totp_secret(
+        state,
+        row.try_get::<Option<String>, _>("totp_secret_enc")
+            .ok()
+            .flatten(),
+    )?;
+    let now = Utc::now().timestamp().max(0) as u64;
+    let step =
+        totp::verify(&secret, &code, now).ok_or_else(|| ApiError::bad_request("二次验证码错误"))?;
+    let consumed = sqlx::query(
+        "UPDATE admin_users SET last_totp_step = $2 \
+         WHERE username = $1 AND (last_totp_step IS NULL OR last_totp_step < $2)",
+    )
+    .bind(username)
+    .bind(step)
+    .execute(&state.db)
+    .await?;
+    if consumed.rows_affected() != 1 {
+        return Err(ApiError::bad_request("二次验证码已使用，请稍后重新获取"));
+    }
+    Ok(())
+}
+
 /// 审计用客户端 IP（复用 trusted_proxies 配置的解析逻辑）。
 fn current_client_ip(state: &AppState, headers: &HeaderMap) -> Option<std::net::IpAddr> {
     let trusted = state
