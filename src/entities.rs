@@ -108,6 +108,23 @@ pub struct OverrideMap {
 
 impl UpstreamRow {
     /// 上游声明支持的协议（解析为 IR Protocol）。
+    /// 按协议取 base_url：extra.protocol_base_urls 覆盖优先（DeepSeek 等多根供应商），
+    /// 否则回落 base_url。
+    pub fn base_url_for(&self, p: crate::protocol::ir::Protocol) -> String {
+        if let Some(v) = self
+            .extra
+            .get("protocol_base_urls")
+            .and_then(|m| m.get(p.as_str()))
+            .and_then(|u| u.as_str())
+        {
+            let v = v.trim();
+            if !v.is_empty() {
+                return v.to_string();
+            }
+        }
+        self.base_url.clone()
+    }
+
     pub fn protocol_list(&self) -> Vec<crate::protocol::ir::Protocol> {
         self.protocols
             .iter()
@@ -440,6 +457,63 @@ mod cap_tests {
                 tools: true,
                 ..Default::default()
             }) == vec!["tools"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    use super::*;
+
+    fn up(extra: serde_json::Value) -> UpstreamRow {
+        UpstreamRow {
+            id: uuid::Uuid::new_v4(),
+            name: "up".into(),
+            kind: "deepseek".into(),
+            base_url: "https://api.deepseek.com/v1".into(),
+            api_key_plain: None,
+            protocols: vec!["openai_chat".into()],
+            enabled: true,
+            timeout_ms: 300_000,
+            breaker_threshold: 5,
+            probe_model: None,
+            consecutive_failures: 0,
+            disabled_by: None,
+            cooldown_until: None,
+            use_proxy: false,
+            proxy_id: None,
+            extra,
+            model_sync: "manual".into(),
+            model_exclude: vec![],
+            models_cache: serde_json::json!([]),
+            models_fetched_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn base_url_for_override_and_fallback() {
+        let u = up(serde_json::json!({
+            "protocol_base_urls": {"anthropic": "https://api.deepseek.com/anthropic/v1"}
+        }));
+        assert_eq!(
+            u.base_url_for(crate::protocol::ir::Protocol::Anthropic),
+            "https://api.deepseek.com/anthropic/v1"
+        );
+        assert_eq!(
+            u.base_url_for(crate::protocol::ir::Protocol::OpenaiChat),
+            "https://api.deepseek.com/v1"
+        );
+        let u2 = up(serde_json::json!({}));
+        assert_eq!(
+            u2.base_url_for(crate::protocol::ir::Protocol::Anthropic),
+            "https://api.deepseek.com/v1"
+        );
+        let u3 = up(serde_json::json!({"protocol_base_urls": {"anthropic": "  "}}));
+        assert_eq!(
+            u3.base_url_for(crate::protocol::ir::Protocol::Anthropic),
+            "https://api.deepseek.com/v1"
         );
     }
 }
