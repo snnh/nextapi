@@ -10,7 +10,7 @@
         <div v-show="!collapsed || isMobile" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
       </div>
       <el-menu :default-active="active" router :collapse="collapsed && !isMobile" :collapse-transition="false"
-        background-color="transparent" text-color="#94a3b8" active-text-color="#ffffff" class="menu"
+        background-color="transparent" text-color="#9aa7ae" active-text-color="#ffffff" class="menu"
         @select="onMenuSelect">
         <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
           <el-icon><component :is="m.icon" /></el-icon>
@@ -133,7 +133,7 @@ async function onCommand(cmd: string) {
 
 /* ---------- 侧栏（深色） ---------- */
 .aside {
-  background: #0f172a;
+  background: #17202a;
   transition: width .2s ease;
   overflow: hidden;
   flex-shrink: 0;
@@ -156,16 +156,16 @@ async function onCommand(cmd: string) {
   display: grid;
   place-items: center;
   border-radius: 8px;
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  background: #3d444c;
   color: #fff;
   font-weight: 800;
   font-size: 14px;
   letter-spacing: .5px;
   line-height: 1;
-  box-shadow: 0 2px 8px rgba(79, 70, 229, .35);
+  box-shadow: 0 2px 8px rgba(23, 32, 42, .35);
 }
-.brand strong { display: block; font-size: 15px; letter-spacing: .2px; color: #f1f5f9; }
-.brand small { display: block; margin-top: 2px; color: #64748b; font-size: 11px; }
+.brand strong { display: block; font-size: 15px; letter-spacing: .2px; color: #f5f7f8; }
+.brand small { display: block; margin-top: 2px; color: #7c8890; font-size: 11px; }
 .menu {
   border-right: none;
   padding: 4px 8px;
@@ -176,13 +176,13 @@ async function onCommand(cmd: string) {
   margin: 2px 0;
 }
 .menu :deep(.el-menu-item:hover) {
-  background-color: rgba(148, 163, 184, .1);
-  color: #e2e8f0;
+  background-color: rgba(255, 255, 255, .07);
+  color: #e8edef;
 }
 .menu :deep(.el-menu-item.is-active) {
-  background-color: rgba(79, 70, 229, .92);
+  background-color: rgba(255, 255, 255, .12);
   color: #fff;
-  box-shadow: 0 2px 6px rgba(79, 70, 229, .35);
+
 }
 
 /* ---------- 移动端：侧栏变滑出抽屉 ---------- */
@@ -194,7 +194,7 @@ async function onCommand(cmd: string) {
   z-index: 1001;
   transform: translateX(-100%);
   transition: transform .22s ease;
-  box-shadow: 8px 0 24px rgba(15, 23, 42, .3);
+  box-shadow: 8px 0 24px rgba(0, 0, 0, .3);
 }
 .aside-mobile-open {
   transform: translateX(0);
@@ -203,7 +203,7 @@ async function onCommand(cmd: string) {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(15, 23, 42, .45);
+  background: rgba(8, 12, 16, .5);
 }
 .mask-fade-enter-active,
 .mask-fade-leave-active {

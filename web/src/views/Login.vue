@@ -105,7 +105,7 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #eef0f6 0%, #f4f5f7 55%, #f4f5f7 100%);
+  background: linear-gradient(160deg, #e9eef0 0%, #f1f4f5 55%, #f1f4f5 100%);
 }
 
 .login-card {
@@ -127,7 +127,7 @@ async function handleLogin() {
   height: 42px;
   padding: 0 16px;
   border-radius: 11px;
-  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  background: #3d444c;
   color: #fff;
   font-size: 20px;
   font-weight: 800;
