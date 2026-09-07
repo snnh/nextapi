@@ -229,10 +229,8 @@ export const pricingApi = {
   importFile: async (file: File, dry_run: boolean): Promise<ImportReport> => {
     const fd = new FormData()
     fd.append('file', file)
-    const r = await http.post<ImportReport>('/api/pricing/import', fd, {
-      params: { dry_run },
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    // 不显式设置 Content-Type：浏览器会自动带 boundary（手写会丢 boundary 导致解析失败）
+    const r = await http.post<ImportReport>('/api/pricing/import', fd, { params: { dry_run } })
     return r.data
   },
   /** 网络链接导入 */

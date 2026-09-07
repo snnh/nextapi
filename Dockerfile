@@ -39,7 +39,7 @@ RUN cargo build --release
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r nextapi \
     && useradd -r -g nextapi nextapi \
@@ -55,4 +55,6 @@ EXPOSE 8080
 VOLUME /data
 
 USER nextapi
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 CMD ["nextapi"]

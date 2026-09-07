@@ -64,7 +64,24 @@ async fn main() -> anyhow::Result<()> {
     if db_url.is_empty() {
         anyhow::bail!("数据库未配置：请设置 DATABASE_URL 或 config.yaml 的 database.url");
     }
-    let pool = db::connect(&db_url).await?;
+    // PG 可能尚未就绪（compose 健康门外竞态/升级重启）：指数退避重试约 30s
+    let pool = {
+        let mut attempt = 0u32;
+        loop {
+            match db::connect(&db_url).await {
+                Ok(p) => break p,
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= 8 {
+                        anyhow::bail!("数据库连接失败（重试 {attempt} 次后放弃）: {e}");
+                    }
+                    let wait = std::time::Duration::from_millis(500 << attempt.min(6));
+                    warn!(attempt, ?wait, "数据库未就绪，重试中: {e}");
+                    tokio::time::sleep(wait).await;
+                }
+            }
+        }
+    };
     db::migrate(&pool).await?;
     info!("数据库迁移完成");
     seed::seed_if_needed(&pool, &cfg, &crypto).await?;
@@ -81,10 +98,33 @@ async fn main() -> anyhow::Result<()> {
     let (jwt_secret, jwt_src) = engine
         .effective_startup("server.admin_jwt_secret", &cfg.server.admin_jwt_secret)
         .await?;
-    if jwt_secret.is_empty() && !cfg.server.debug {
-        anyhow::bail!(
-            "生产模式必须配置 server.admin_jwt_secret 或环境变量 NEXTAPI_ADMIN_JWT_SECRET（或开启 server.debug）"
-        );
+    // 已知占位值（docker-compose.yml / config.example.yaml 中的 CHANGE_ME）一律拒绝——
+    // 公开仓库的固定占位串等同公开密钥，不可用于签名/加密。
+    const KNOWN_PLACEHOLDERS: &[&str] = &["__CHANGE_ME__请替换为随机密钥__", "CHANGE_ME", "changeme"];
+    let is_placeholder = |v: &str| {
+        KNOWN_PLACEHOLDERS.iter().any(|p| v.contains(p))
+    };
+    let mut jwt_secret = jwt_secret;
+    if is_placeholder(&jwt_secret) {
+        anyhow::bail!("JWT 密钥仍是占位值，请替换为随机密钥（openssl rand -base64 48）");
+    }
+    if jwt_secret.is_empty() {
+        if !cfg.server.debug {
+            anyhow::bail!(
+                "生产模式必须配置 server.admin_jwt_secret 或环境变量 NEXTAPI_ADMIN_JWT_SECRET（或开启 server.debug）"
+            );
+        }
+        // debug 模式空密钥：生成随机临时密钥（重启会话失效，但不可伪造）
+        let mut buf = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut buf);
+        jwt_secret = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf);
+        warn!("server.debug 且未配置 JWT 密钥：已生成随机临时密钥（重启后所有会话失效）");
+    }
+    {
+        let sk = std::env::var("NEXTAPI_SECRET_KEY").unwrap_or_default();
+        if is_placeholder(&sk) {
+            anyhow::bail!("NEXTAPI_SECRET_KEY 仍是占位值，请替换为随机密钥（openssl rand -base64 48）");
+        }
     }
     info!(%listen, listen_src, jwt_src, "启动类参数解析完成");
 

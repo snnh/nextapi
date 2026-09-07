@@ -9,3 +9,5 @@ config.local.yaml
 .owc/
 PLAN.md
 contracts/
+# 本地运行配置（含密钥，勿入库；模板见 config.example.yaml）
+/config.yaml

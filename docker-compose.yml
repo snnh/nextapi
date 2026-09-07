@@ -34,16 +34,23 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     ports:
       - "8080:8080"
     environment:
       # 数据库连接（启动类参数，env 优先于 YAML 的 database.url）
       DATABASE_URL: postgres://nextapi:nextapi@postgres:5432/nextapi
-      # ⚠️ 生产必改：敏感字段 AES-256-GCM 加密密钥（env-only，不落 DB/YAML）。
-      #    用足够长的随机串，如 `openssl rand -base64 48`。
-      NEXTAPI_SECRET_KEY: "__CHANGE_ME__请替换为随机密钥__"
-      # ⚠️ 生产必填：管理端 JWT 签名密钥。为空且未开启 server.debug 则拒绝启动。
-      NEXTAPI_ADMIN_JWT_SECRET: "__CHANGE_ME__请替换为随机密钥__"
+      # ⚠️ 必填：敏感字段 AES-256-GCM 加密密钥（env-only，不落 DB/YAML）。
+      #    `openssl rand -base64 48` 生成；留空则加密字段不可用，占位值会拒绝启动。
+      NEXTAPI_SECRET_KEY: "${NEXTAPI_SECRET_KEY:-}"
+      # ⚠️ 必填：管理端 JWT 签名密钥；留空/占位值拒绝启动。
+      NEXTAPI_ADMIN_JWT_SECRET: "${NEXTAPI_ADMIN_JWT_SECRET:-}"
       # 可选：首次启动的管理员初始密码；留空则生成随机密码并打印到容器日志。
       NEXTAPI_ADMIN_INITIAL_PASSWORD: ""
     volumes:
