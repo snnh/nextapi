@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-head"><span>网关信息</span></div>
       </template>
-      <el-descriptions :column="2" border>
+      <el-descriptions :column="descColumns" border>
         <el-descriptions-item label="版本">
           <span class="mono">{{ version?.version ?? '-' }}</span>
         </el-descriptions-item>
@@ -16,10 +16,10 @@
       <template #header>
         <div class="card-head">
           <span>运行状态</span>
-          <el-button link type="primary" :icon="Refresh" @click="loadStatus">刷新</el-button>
+          <el-button link type="primary" :loading="statusLoading" :icon="Refresh" @click="loadStatus">刷新</el-button>
         </div>
       </template>
-      <el-descriptions v-if="status" :column="2" border>
+      <el-descriptions v-if="status" :column="descColumns" border>
         <el-descriptions-item label="运行时长">{{ fmtUptime(status.uptime_secs) }}</el-descriptions-item>
         <el-descriptions-item label="数据库">
           <el-tag :type="status.database.ok ? 'success' : 'danger'" size="small">
@@ -42,7 +42,7 @@
           {{ status.media_poller.interval_secs > 0 ? `每 ${status.media_poller.interval_secs}s` : '已停用' }}
           <span class="hint">（待回联任务 {{ status.media_poller.pending_tasks }}）</span>
         </el-descriptions-item>
-        <el-descriptions-item label="熔断上游" :span="2">
+        <el-descriptions-item label="熔断上游" :span="descColumns === 1 ? 1 : 2">
           <template v-if="status.breakers.length">
             <el-tag v-for="b in status.breakers" :key="b.name" size="small" type="danger" effect="plain" style="margin-right: 6px">
               {{ b.name }}（连续失败 {{ b.consecutive_failures }}<template v-if="b.disabled_by">，{{ b.disabled_by === 'manual' ? '手动禁用' : '自动熔断' }}</template>）
@@ -66,7 +66,7 @@
 
     <el-card shadow="never" class="card">
       <template #header>
-        <div class="card-head"><span>YAML 配置</span></div>
+        <div class="card-head"><span>当前配置（YAML 文件视图）</span></div>
       </template>
       <div class="hint" style="margin-bottom: 12px">
         <span class="mono">***</span> = 已设置；导出文件中的 <span class="mono">***</span> 回传即保持原值。
@@ -78,7 +78,7 @@
       </div>
       <el-collapse v-model="configOpen" class="config-collapse">
         <el-collapse-item name="config">
-          <template #title><span class="notes-title">当前配置（掩码视图）</span></template>
+          <template #title><span class="notes-title">配置内容（掩码 · JSON 序列化展示）</span></template>
           <pre v-if="configText" class="config-pre">{{ configText }}</pre>
           <div v-else class="hint">暂无配置。</div>
         </el-collapse-item>
@@ -89,10 +89,14 @@
       <template #header>
         <div class="card-head"><span>修改密码</span></div>
       </template>
-      <el-alert type="info" :closable="false" show-icon title="修改密码请使用右上角头像菜单「修改密码」。" />
+      <p class="hint pwd-hint">直接修改当前账号的登录密码（新密码至少 8 位），无需再到右上角头像菜单操作。</p>
+      <el-button type="primary" @click="pwdDlg?.open()">修改密码</el-button>
     </el-card>
 
-    <el-dialog v-model="importVisible" title="导入 YAML / JSON" width="680px" :close-on-click-modal="false">
+    <!-- 修改密码弹窗（组件内部自带表单与提交，仅在此处唤起 open()） -->
+    <ChangePwdDialog ref="pwdDlg" />
+
+    <el-dialog v-model="importVisible" title="导入 YAML / JSON" class="dlg" :close-on-click-modal="false">
       <el-input
         v-model="importText"
         type="textarea"
@@ -119,26 +123,39 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ElMessage, type UploadFile } from 'element-plus'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import { Download, Refresh, Upload } from '@element-plus/icons-vue'
 import yaml from 'js-yaml'
 import { configApi, systemApi } from '@/api'
 import { errMsg } from '@/api/http'
-import { fmtTime } from '@/utils/format'
+import { fmtBytes, fmtTime } from '@/utils/format'
 import { downloadText } from '@/utils/download'
+import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 import type { ConfigFileView, SystemStatusResp, VersionResp } from '@/api/types'
 
 const version = ref<VersionResp | null>(null)
 const status = ref<SystemStatusResp | null>(null)
 const config = ref<ConfigFileView | null>(null)
 const pageLoading = ref(false)
+const statusLoading = ref(false)
 const exporting = ref(false)
 const reloading = ref(false)
 const savingConfig = ref(false)
 const configOpen = ref<string[]>(['config'])
 const importVisible = ref(false)
 const importText = ref('')
+
+// 修改密码弹窗（expose 了 open()，仅在按钮点击时唤起）
+const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()
+
+// el-descriptions 列数响应式：桌面 2 列，≤768px 降为 1 列（matchMedia 监听）
+const MOBILE_MQ = '(max-width: 768px)'
+const descColumns = ref(2)
+let mq: MediaQueryList | null = null
+const onMqChange = (e: MediaQueryListEvent) => {
+  descColumns.value = e.matches ? 1 : 2
+}
 
 const configText = computed(() =>
   config.value ? JSON.stringify(config.value, null, 2) : '',
@@ -153,23 +170,24 @@ const settingsSourceText = computed(() => {
     .join(' · ')
 })
 
+/**
+ * 秒级运行时长人性化。@/utils/format 无等价函数（fmtDur 按毫秒、fmtInt 仅千分位），故保留本地实现。
+ */
 function fmtUptime(secs: number): string {
   if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
   if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
   return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
 }
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
-
 async function loadStatus() {
+  if (statusLoading.value) return // 防连点
+  statusLoading.value = true
   try {
     status.value = await systemApi.status()
   } catch (e) {
     ElMessage.error(errMsg(e))
+  } finally {
+    statusLoading.value = false
   }
 }
 
@@ -249,6 +267,16 @@ async function doImport() {
     ElMessage.error('配置必须为对象（键值）形式，不能是数组或标量')
     return
   }
+  // 整包覆盖属危险操作：二次确认，说明将覆盖 config 文件并热加载
+  try {
+    await ElMessageBox.confirm(
+      '整包导入将整体覆盖当前 config 配置文件并立即热加载。请确认内容无误（掩码字段 *** 回传保持原值）。',
+      '确认覆盖配置',
+      { type: 'warning', confirmButtonText: '覆盖并写入', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
   savingConfig.value = true
   try {
     await configApi.put(parsed as ConfigFileView)
@@ -264,10 +292,19 @@ async function doImport() {
 }
 
 onMounted(() => {
+  // 描述列数响应式初始化与监听
+  mq = window.matchMedia(MOBILE_MQ)
+  descColumns.value = mq.matches ? 1 : 2
+  mq.addEventListener('change', onMqChange)
+
   pageLoading.value = true
   Promise.all([loadVersion(), loadConfig(), loadStatus()]).finally(() => {
     pageLoading.value = false
   })
+})
+
+onBeforeUnmount(() => {
+  mq?.removeEventListener('change', onMqChange)
 })
 </script>
 
@@ -289,6 +326,10 @@ onMounted(() => {
 .hint {
   font-size: 12px;
   color: #6b7280;
+}
+.pwd-hint {
+  margin: 0 0 12px;
+  line-height: 1.7;
 }
 .config-actions {
   display: flex;

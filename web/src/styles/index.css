@@ -82,6 +82,19 @@ body {
   max-width: 96vw;
 }
 
+/* 弹窗响应式兜底：任何遗漏固定 px 宽度的弹窗在小屏不溢出；
+   长表单弹窗限制体高并内部滚动（配合 body 类 long-form） */
+@media (max-width: 768px) {
+  .el-dialog {
+    --el-dialog-width: 94vw;
+  }
+}
+.el-dialog.long-form .el-dialog__body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+}
+
+
 .page > .toolbar:first-child { padding: 2px 0 4px; }
 .el-card__header { font-weight: 600; color: #1f2329; }
 @media (max-width: 768px) {

@@ -4,6 +4,8 @@ import axios, { AxiosError } from 'axios'
 import type { ApiErrorBody } from './types'
 
 export const TOKEN_KEY = 'nextapi_token'
+/** 登录用户名持久化键（auth store 与 401 清理共用，避免循环 import） */
+export const USER_KEY = 'nextapi_user'
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -47,6 +49,7 @@ http.interceptors.response.use(
   (error: AxiosError<ApiErrorBody>) => {
     if (error.response?.status === 401 && !error.config?.url?.includes('/auth/login')) {
       clearToken()
+      localStorage.removeItem(USER_KEY)
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }

@@ -22,7 +22,7 @@
             <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
             <div class="el-upload__text">拖拽文件到此处，或<em>点击选择</em></div>
             <template #tip>
-              <div class="el-upload__tip">单个文件，支持 XML / JSON</div>
+              <div class="el-upload__tip">单个文件，支持 XML / JSON，≤ 1MB</div>
             </template>
           </el-upload>
 
@@ -35,7 +35,7 @@
               :loading="filePreviewLoading"
               @click="previewFile"
             >
-              预览导入（dry_run）
+              {{ fileDryRun ? '预览导入（dry_run）' : '立即导入' }}
             </el-button>
           </div>
         </el-card>
@@ -54,7 +54,7 @@
             <span class="import-label">预览模式（dry-run）</span>
             <el-switch v-model="urlDryRun" />
             <el-button type="primary" :disabled="!url.trim()" :loading="urlImporting" @click="importFromUrl">
-              导入
+              {{ urlDryRun ? '预览导入（dry_run）' : '立即导入' }}
             </el-button>
           </div>
         </el-card>
@@ -72,7 +72,7 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { pricingApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -90,24 +90,78 @@ const report = ref<ImportReport | null>(null)
 const confirmLoading = ref(false)
 const uploadRef = ref()
 
+/** 本地/网络价格文件体积上限（后端同样限制单文件 ≤ 1MB） */
+const MAX_IMPORT_BYTES = 1024 * 1024
+const IMPORT_EXTS = ['xml', 'json']
+
 const lastSource = reactive<{ kind: 'file' | 'url'; file: File | null; url: string }>({
   kind: 'file',
   file: null,
   url: '',
 })
 
+function extOf(name: string): string {
+  const i = name.lastIndexOf('.')
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : ''
+}
+
+/** 本地文件预检（大小 + 扩展名），通过返回 true；不通过即时提示并清空选择 */
+function checkLocalFile(f: File): boolean {
+  const ext = extOf(f.name)
+  if (!IMPORT_EXTS.includes(ext)) {
+    ElMessage.error(`文件「${f.name}」不是价格文件：仅支持 ${IMPORT_EXTS.join(' / ').toUpperCase()} 扩展名（拖拽也会校验）`)
+    return false
+  }
+  if (f.size > MAX_IMPORT_BYTES) {
+    ElMessage.error(`文件「${f.name}」大小 ${(f.size / 1024 / 1024).toFixed(2)}MB，超过 1MB 上限`)
+    return false
+  }
+  return true
+}
+
 function onFileChange(file: { raw?: File }) {
-  selectedFile.value = file.raw || null
+  const f = file.raw || null
+  if (!f) {
+    selectedFile.value = null
+    return
+  }
+  if (!checkLocalFile(f)) {
+    uploadRef.value?.clearFiles()
+    selectedFile.value = null
+    return
+  }
+  selectedFile.value = f
 }
 
 function onFileRemove() {
   selectedFile.value = null
 }
 
-function onFileExceed() {
-  // 已选文件时重新选择：清空后选择新文件
+/** 已选文件后再选/拖入新文件：替换原文件（先清空列表，避免触发 limit 追加失败） */
+function onFileExceed(files: File[]) {
+  const f = files[0] ?? null
+  if (!f) return
   uploadRef.value?.clearFiles()
-  selectedFile.value = null
+  if (!checkLocalFile(f)) {
+    selectedFile.value = null
+    return
+  }
+  selectedFile.value = f
+  ElMessage.info('已替换原选择文件')
+}
+
+/** dry-run 关闭（正式写库）时二次确认，返回是否继续 */
+async function confirmRealImport(): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm('数据将直接写入价格表，确认导入？', '正式导入', {
+      type: 'warning',
+      confirmButtonText: '确认导入',
+      cancelButtonText: '取消',
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function previewFile() {
@@ -115,6 +169,10 @@ async function previewFile() {
   if (!f) {
     ElMessage.warning('请先选择文件')
     return
+  }
+  if (!fileDryRun.value) {
+    const ok = await confirmRealImport()
+    if (!ok) return
   }
   filePreviewLoading.value = true
   try {
@@ -140,6 +198,10 @@ async function importFromUrl() {
   if (!u.startsWith('https://')) {
     ElMessage.warning('仅支持 https 协议')
     return
+  }
+  if (!urlDryRun.value) {
+    const ok = await confirmRealImport()
+    if (!ok) return
   }
   urlImporting.value = true
   try {

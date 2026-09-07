@@ -124,6 +124,10 @@ export const PROTOCOL_IN_LABELS: Record<string, string> = {
   openai_responses: 'Responses',
   anthropic: 'Anthropic',
   gemini: 'Gemini',
+  images_openai: '图片·OpenAI',
+  images_gemini: '图片·Gemini',
+  images_dashscope_sync: '图片·阿里云同步',
+  images_dashscope_async: '图片·阿里云异步',
 }
 
 // —— 状态码语义 ——

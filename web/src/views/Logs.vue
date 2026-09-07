@@ -2,7 +2,7 @@
   <div class="page">
     <!-- 顶部工具栏：右侧 CSV 导出 & 分区清理 -->
     <div class="toolbar">
-      <div class="hint">时间留空表示服务端默认「当天」；筛选条件与 CSV 导出共用。</div>
+      <div class="hint">时间默认「今天 00:00 ~ 现在」，清空即按服务端默认；筛选与 CSV 导出共用并同步地址栏。</div>
       <div class="spacer" />
       <el-tooltip
         content="按当前筛选导出；上限 10 万行，超出将截断并追加注释行"
@@ -51,15 +51,28 @@
         </div>
         <div class="f-item">
           <span class="f-label">模型</span>
-          <el-input v-model="model" placeholder="模型" clearable style="width: 160px" />
+          <el-input v-model="model" placeholder="模型" clearable style="width: 160px" @keyup.enter="onQuery" />
         </div>
         <div class="f-item">
           <span class="f-label">request_id</span>
-          <el-input v-model="requestId" placeholder="request_id" clearable style="width: 200px" />
+          <el-input
+            v-model="requestId"
+            placeholder="request_id"
+            clearable
+            style="width: 200px"
+            @keyup.enter="onQuery"
+          />
         </div>
         <div class="f-item">
           <span class="f-label">状态码</span>
-          <el-input v-model="statusStr" type="number" placeholder="如 429" clearable style="width: 110px" />
+          <el-input
+            v-model="statusStr"
+            type="number"
+            placeholder="如 429"
+            clearable
+            style="width: 110px"
+            @keyup.enter="onQuery"
+          />
         </div>
         <div class="f-item">
           <span class="f-label">流式</span>
@@ -89,12 +102,24 @@
       <div class="table-head">
         <span>请求日志</span>
       </div>
+      <template v-if="listError">
+        <div v-loading="loading" class="error-state">
+          <p class="error-msg">请求日志加载失败：{{ listError }}</p>
+          <el-button type="primary" :icon="Refresh" @click="loadLogs">重新加载</el-button>
+        </div>
+      </template>
+      <template v-else>
       <el-table :data="rows" v-loading="loading" stripe>
         <template #empty>
           <el-empty description="无匹配日志" :image-size="90" />
         </template>
         <el-table-column prop="ts" label="时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.ts) }}</template>
+        </el-table-column>
+        <el-table-column label="request_id" width="200">
+          <template #default="{ row }">
+            <CopyText :text="row.request_id" :truncate="16" />
+          </template>
         </el-table-column>
         <el-table-column prop="model" label="模型" min-width="150" show-overflow-tooltip />
         <el-table-column label="Key" min-width="170" show-overflow-tooltip>
@@ -128,7 +153,7 @@
         <el-table-column label="延迟" width="130">
           <template #default="{ row }">
             <div>{{ fmtDur(row.latency_ms) }}</div>
-            <div v-if="row.ttfb_ms != null" class="hint">TTFB {{ row.ttfb_ms }}ms</div>
+            <div v-if="row.ttfb_ms != null" class="hint">TTFB {{ fmtDur(row.ttfb_ms) }}</div>
           </template>
         </el-table-column>
         <el-table-column label="Tokens" min-width="175">
@@ -155,25 +180,26 @@
           </template>
         </el-table-column>
       </el-table>
-      <div class="pagination">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :total="total"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="onPageChange"
-          @size-change="onSizeChange"
-        />
-      </div>
+        <div class="pagination">
+          <el-pagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :total="total"
+            :page-sizes="[20, 50, 100]"
+            layout="total, sizes, prev, pager, next"
+            @current-change="onPageChange"
+            @size-change="onSizeChange"
+          />
+        </div>
+      </template>
     </el-card>
 
     <!-- 详情抽屉 -->
-    <el-drawer v-model="detailVisible" title="请求详情" size="60%">
+    <el-drawer v-model="detailVisible" title="请求详情" :size="drawerSize">
       <div v-loading="detailLoading">
         <template v-if="detail">
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="request_id" :span="2">
+          <el-descriptions :column="descColumn" border>
+            <el-descriptions-item label="request_id" :span="descColumn">
               <span class="mono">{{ detail?.request_id }}</span>
               <el-button size="small" link type="primary" @click="copyRequestId(detail?.request_id ?? '')">
                 复制
@@ -195,9 +221,7 @@
             <el-descriptions-item label="降级">{{ detail?.degraded ? '是' : '否' }}</el-descriptions-item>
             <el-descriptions-item label="重试次数">{{ detail?.retry_count }}</el-descriptions-item>
             <el-descriptions-item label="延迟">{{ fmtDur(detail?.latency_ms) }}</el-descriptions-item>
-            <el-descriptions-item label="TTFB">
-              {{ detail?.ttfb_ms != null ? `${detail?.ttfb_ms}ms` : '-' }}
-            </el-descriptions-item>
+            <el-descriptions-item label="TTFB">{{ fmtDur(detail?.ttfb_ms) }}</el-descriptions-item>
             <el-descriptions-item label="Prompt Tokens">{{ fmtInt(detail?.prompt_tokens) }}</el-descriptions-item>
             <el-descriptions-item label="Completion Tokens">{{ fmtInt(detail?.completion_tokens) }}</el-descriptions-item>
             <el-descriptions-item label="Cache Write">{{ fmtInt(detail?.cache_write_tokens) }}</el-descriptions-item>
@@ -234,6 +258,10 @@
             </el-collapse-item>
           </el-collapse>
         </template>
+        <div v-else-if="detailError" class="error-state">
+          <p class="error-msg">详情加载失败：{{ detailError }}</p>
+          <el-button type="primary" :icon="Refresh" @click="retryDetail">重试</el-button>
+        </div>
         <el-empty v-else-if="!detailLoading" description="无详情" :image-size="80" />
       </div>
     </el-drawer>
@@ -292,16 +320,18 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Download, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import { useRoute, useRouter } from 'vue-router'
 import { keyApi, logApi, upstreamApi, type LogListQuery } from '@/api'
 import { errMsg } from '@/api/http'
 import type { ApiKeyRow, LogItem, PartitionInfo, UpstreamOut } from '@/api/types'
+import CopyText from '@/components/common/CopyText.vue'
 import { PROTOCOL_IN_LABELS, statusType } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
-import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtTime } from '@/utils/format'
+import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtTime, todayRange } from '@/utils/format'
 
 type TriState = '' | 'true' | 'false'
 
@@ -327,8 +357,18 @@ const timeShortcuts = [
   },
 ]
 
+// —— 路由（筛选同步到 URL query）——
+const route = useRoute()
+const router = useRouter()
+
 // —— 筛选状态 ——
-const range = ref<[Date, Date] | null>(null)
+/** 默认时间范围：今天 00:00 ~ 现在（用户清空后仍可恢复服务端默认语义） */
+function defaultRange(): [Date, Date] {
+  const [s, e] = todayRange()
+  return [new Date(s), new Date(e)]
+}
+
+const range = ref<[Date, Date] | null>(defaultRange())
 const keyId = ref('')
 const upstreamId = ref('')
 const model = ref('')
@@ -343,6 +383,9 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+const listError = ref('')
+/** 响应式判定：≤768px 视为窄屏（挂载时确定即可） */
+const isNarrow = ref(false)
 
 const keys = ref<ApiKeyRow[]>([])
 const upstreams = ref<UpstreamOut[]>([])
@@ -397,23 +440,52 @@ async function loadLogs() {
     if (seq !== loadSeq) return
     rows.value = resp.items
     total.value = resp.total
+    listError.value = ''
   } catch (e) {
     if (seq !== loadSeq) return
-    ElMessage.error(errMsg(e))
+    rows.value = []
+    total.value = 0
+    listError.value = errMsg(e)
   } finally {
     if (seq === loadSeq) loading.value = false
   }
 }
 
-function onQuery() {
+/** 程序化重置页码（避免触发 pagination 的 current-change 二次加载） */
+function resetPage() {
   suppressPageEvent = true
   currentPage.value = 1
   suppressPageEvent = false
+}
+
+/** 仅「查询」动作与分页变化时把当前筛选写入 URL query */
+function syncQueryToUrl() {
+  const f = buildFilterQuery()
+  const q: Record<string, string | number> = {}
+  if (f.from_ts) q.from_ts = f.from_ts
+  if (f.to_ts) q.to_ts = f.to_ts
+  if (f.key_id) q.key_id = f.key_id
+  if (f.upstream_id) q.upstream_id = f.upstream_id
+  if (f.model) q.model = f.model
+  if (f.request_id) q.request_id = f.request_id
+  if (f.status !== undefined) q.status = f.status
+  if (f.stream !== undefined) q.stream = f.stream ? 'true' : 'false'
+  if (f.degraded !== undefined) q.degraded = f.degraded ? 'true' : 'false'
+  q.page = currentPage.value
+  q.page_size = pageSize.value
+  // 内容相同则跳过 replace，避免冗余导航
+  if (canonicalQuery(q) === canonicalQuery(route.query)) return
+  router.replace({ path: route.path, query: q })
+}
+
+function onQuery() {
+  resetPage()
+  syncQueryToUrl()
   loadLogs()
 }
 
 function onReset() {
-  range.value = null
+  range.value = defaultRange()
   keyId.value = ''
   upstreamId.value = ''
   model.value = ''
@@ -426,14 +498,64 @@ function onReset() {
 
 function onPageChange() {
   if (suppressPageEvent) return
+  syncQueryToUrl()
   loadLogs()
 }
 
 function onSizeChange() {
-  suppressPageEvent = true
-  currentPage.value = 1
-  suppressPageEvent = false
+  resetPage()
+  syncQueryToUrl()
   loadLogs()
+}
+
+// —— URL query 同步辅助 ——
+function canonicalQuery(q: Record<string, unknown>): string {
+  return Object.keys(q)
+    .filter((k) => q[k] !== undefined && q[k] !== null && q[k] !== '')
+    .sort()
+    .map((k) => {
+      const v = q[k]
+      const val = Array.isArray(v) ? v[0] : v
+      return `${k}=${String(val)}`
+    })
+    .join('&')
+}
+
+function qv(key: string): string {
+  const v = route.query[key]
+  if (Array.isArray(v)) return v[0] ?? ''
+  return v ?? ''
+}
+
+/** 挂载时从 URL query 恢复筛选（page/status 转数字，stream/degraded 转布尔） */
+function restoreFromQuery() {
+  const from = qv('from_ts')
+  const to = qv('to_ts')
+  if (from && to) {
+    const d1 = new Date(from)
+    const d2 = new Date(to)
+    if (!Number.isNaN(d1.getTime()) && !Number.isNaN(d2.getTime())) {
+      range.value = [d1, d2]
+    }
+  }
+  keyId.value = qv('key_id')
+  upstreamId.value = qv('upstream_id')
+  model.value = qv('model')
+  requestId.value = qv('request_id')
+
+  const status = qv('status')
+  statusStr.value = /^\d+$/.test(status) ? status : ''
+
+  const stream = qv('stream')
+  streamOpt.value = stream === 'true' || stream === 'false' ? stream : ''
+
+  const degraded = qv('degraded')
+  degradedOpt.value = degraded === 'true' || degraded === 'false' ? degraded : ''
+
+  const page = Number.parseInt(qv('page'), 10)
+  if (Number.isFinite(page) && page > 0) currentPage.value = page
+  const size = Number.parseInt(qv('page_size'), 10)
+  if (Number.isFinite(size) && size > 0) pageSize.value = size
 }
 
 async function loadKeys() {
@@ -453,6 +575,8 @@ async function loadUpstreams() {
 }
 
 onMounted(() => {
+  restoreFromQuery()
+  isNarrow.value = window.innerWidth <= 768
   loadKeys()
   loadUpstreams()
   loadLogs()
@@ -478,19 +602,37 @@ function protoLabel(v?: string | null): string {
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<LogItem | null>(null)
+const detailError = ref('')
+const detailRequestId = ref('')
 const detailOpen = ref(['usage_raw'])
 
-async function openDetail(row: LogItem) {
-  detailVisible.value = true
+/** 响应式：≤768px 抽屉全宽、字段单列，桌面 60% / 双列 */
+const drawerSize = computed(() => (isNarrow.value ? '100%' : '60%'))
+const descColumn = computed(() => (isNarrow.value ? 1 : 2))
+
+async function fetchDetail() {
+  const rid = detailRequestId.value
+  if (!rid) return
   detailLoading.value = true
   detail.value = null
+  detailError.value = ''
   try {
-    detail.value = await logApi.detail(row.request_id)
+    detail.value = await logApi.detail(rid)
   } catch (e) {
-    ElMessage.error(errMsg(e))
+    detailError.value = errMsg(e)
   } finally {
     detailLoading.value = false
   }
+}
+
+function openDetail(row: LogItem) {
+  detailVisible.value = true
+  detailRequestId.value = row.request_id
+  fetchDetail()
+}
+
+function retryDetail() {
+  fetchDetail()
 }
 
 async function copyRequestId(id: string) {
@@ -584,7 +726,8 @@ async function confirmCleanup() {
     const n = resp.dropped.length
     ElMessage.success(`已删除 ${n} 个分区`)
     cleanupVisible.value = false
-    loadLogs()
+    // 删除后当前页可能越界：回到第 1 页再刷新
+    onQuery()
   } catch (e) {
     ElMessage.error(errMsg(e))
   } finally {
@@ -660,6 +803,31 @@ async function confirmCleanup() {
 
 .json-cards {
   margin-top: 16px;
+}
+
+/* JSON 详情块：抽屉内自滚动，避免内外两层滚动条叠加 */
+.json-cards pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* 列表 / 详情加载失败的错误块（区别于「无数据」空态） */
+.error-state {
+  padding: 30px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.error-msg {
+  margin: 0;
+  max-width: 100%;
+  color: #f56c6c;
+  font-size: 13px;
+  text-align: center;
+  word-break: break-all;
 }
 
 .error-block {

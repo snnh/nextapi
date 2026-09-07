@@ -3,7 +3,6 @@
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建上游</el-button>
       <div class="spacer" />
-      <el-button :icon="Refresh" @click="loadUpstreams">刷新</el-button>
     </div>
 
     <!-- 预设一键接入 -->
@@ -72,24 +71,36 @@
                   {{ PROTOCOL_LABEL(proto) }}
                 </el-tag>
               </template>
-              <el-tag
+              <el-tooltip
                 v-if="row.protocols.length > 3 && !expandedRows.has(row.id)"
-                size="small"
-                type="info"
-                class="clickable"
-                @click="toggleExpand(row.id)"
+                content="展开全部协议"
+                placement="top"
               >
-                +{{ row.protocols.length - 3 }}
-              </el-tag>
-              <el-tag
-                v-if="expandedRows.has(row.id)"
-                size="small"
-                type="info"
-                class="clickable"
-                @click="toggleExpand(row.id)"
-              >
-                收起
-              </el-tag>
+                <el-tag
+                  size="small"
+                  type="info"
+                  class="clickable"
+                  role="button"
+                  tabindex="0"
+                  @click="toggleExpand(row.id)"
+                  @keyup.enter="toggleExpand(row.id)"
+                >
+                  +{{ row.protocols.length - 3 }}
+                </el-tag>
+              </el-tooltip>
+              <el-tooltip v-if="expandedRows.has(row.id)" content="收起" placement="top">
+                <el-tag
+                  size="small"
+                  type="info"
+                  class="clickable"
+                  role="button"
+                  tabindex="0"
+                  @click="toggleExpand(row.id)"
+                  @keyup.enter="toggleExpand(row.id)"
+                >
+                  收起
+                </el-tag>
+              </el-tooltip>
               <el-tag v-for="t in capsTags(row)" :key="t" size="small" type="warning" effect="plain">
                 {{ t }}
               </el-tag>
@@ -136,7 +147,15 @@
             <el-button size="small" :loading="testingId === row.id" @click="testUpstream(row)">
               连通测试
             </el-button>
-            <el-button size="small" type="danger" @click="removeUpstream(row)">删除</el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :loading="deletingSet.has(row.id)"
+              :disabled="deletingSet.has(row.id)"
+              @click="removeUpstream(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -201,8 +220,13 @@
       </div>
 
       <template #footer>
-        <el-button @click="provisionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="provisionSaving" @click="submitProvision">确认接入</el-button>
+        <template v-if="provisionResult">
+          <el-button type="primary" @click="finishProvision">完成</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="provisionVisible = false">取消</el-button>
+          <el-button type="primary" :loading="provisionSaving" @click="submitProvision">确认接入</el-button>
+        </template>
       </template>
     </el-dialog>
 
@@ -232,9 +256,13 @@ const presets = ref<Preset[]>([])
 const upstreams = ref<UpstreamOut[]>([])
 const proxies = ref<ProxyOut[]>([])
 const pageLoading = ref(false)
-const presetOpen = ref<string[]>(['presets'])
+/** 预设区折叠态；初始空，首次加载上游成功后按数量决定（有上游默认收起，空库展开引导） */
+const presetOpen = ref<string[]>([])
+/** 预设折叠态是否已按首次加载结果决定过 */
+const presetInitDone = ref(false)
 const expandedRows = reactive(new Set<string>())
 const togglingSet = reactive(new Set<string>())
+const deletingSet = reactive(new Set<string>())
 const testingId = ref('')
 const formDialogRef = ref<InstanceType<typeof UpstreamFormDialog>>()
 
@@ -242,6 +270,10 @@ async function loadUpstreams() {
   pageLoading.value = true
   try {
     upstreams.value = await upstreamApi.list()
+    if (!presetInitDone.value) {
+      presetInitDone.value = true
+      presetOpen.value = upstreams.value.length > 0 ? [] : ['presets']
+    }
   } catch (e) {
     ElMessage.error(errMsg(e))
   } finally {
@@ -359,21 +391,25 @@ async function testUpstream(row: UpstreamOut) {
 }
 
 async function removeUpstream(row: UpstreamOut) {
+  if (deletingSet.has(row.id)) return
+  deletingSet.add(row.id)
   try {
-    await ElMessageBox.confirm(
-      `确定删除上游「${row.name}」？关联的模型路由可能受影响。`,
-      '删除上游',
-      { type: 'warning' },
-    )
-  } catch {
-    return
-  }
-  try {
+    try {
+      await ElMessageBox.confirm(
+        `确定删除上游「${row.name}」？关联的模型路由可能受影响。`,
+        '删除上游',
+        { type: 'warning' },
+      )
+    } catch {
+      return
+    }
     await upstreamApi.remove(row.id)
     ElMessage.success('已删除')
     loadUpstreams()
   } catch (e) {
     ElMessage.error(errMsg(e))
+  } finally {
+    deletingSet.delete(row.id)
   }
 }
 
@@ -435,6 +471,16 @@ async function submitProvision() {
   } finally {
     provisionSaving.value = false
   }
+}
+
+/** provision 成功后主按钮「完成」：关闭弹窗并重置接入状态 */
+function finishProvision() {
+  provisionVisible.value = false
+  provisionResult.value = null
+  provisionConflict.value = false
+  provisionPreset.value = null
+  provisionName.value = ''
+  provisionKey.value = ''
 }
 </script>
 

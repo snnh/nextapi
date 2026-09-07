@@ -12,8 +12,24 @@
       <el-tag :type="selectedSet.has(p) ? 'primary' : 'info'" size="small">{{ PROTOCOL_LABELS[p] }}</el-tag>
       <span class="priority-state">{{ selectedSet.has(p) ? '已选' : '未选' }}</span>
       <span class="priority-ops">
-        <el-button size="small" :icon="ArrowUp" :disabled="!canMove(idx, -1)" @click="move(idx, -1)" />
-        <el-button size="small" :icon="ArrowDown" :disabled="!canMove(idx, 1)" @click="move(idx, 1)" />
+        <el-tooltip content="上移优先级" placement="top">
+          <el-button
+            size="small"
+            :icon="ArrowUp"
+            aria-label="上移优先级"
+            :disabled="!canMove(idx, -1)"
+            @click="move(idx, -1)"
+          />
+        </el-tooltip>
+        <el-tooltip content="下移优先级" placement="top">
+          <el-button
+            size="small"
+            :icon="ArrowDown"
+            aria-label="下移优先级"
+            :disabled="!canMove(idx, 1)"
+            @click="move(idx, 1)"
+          />
+        </el-tooltip>
       </span>
     </div>
   </div>
@@ -100,6 +116,10 @@ function move(idx: number, delta: number) {
   border-radius: 6px;
   margin-bottom: 6px;
   background: #fff;
+  transition: background 0.15s ease;
+}
+.priority-row:hover {
+  background: #f8fafc;
 }
 .priority-row.is-unselected {
   opacity: 0.65;

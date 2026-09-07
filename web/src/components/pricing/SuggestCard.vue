@@ -8,6 +8,12 @@
 
     <div v-if="loading" class="hint">正在生成建议…</div>
 
+    <!-- 加载失败：与真空态区分，给出错误提示与重试入口 -->
+    <div v-else-if="loadError" class="suggest-error">
+      <span class="hint">建议加载失败，请稍后重试</span>
+      <el-link type="primary" :underline="false" @click="load">重试</el-link>
+    </div>
+
     <div v-else-if="groups.length === 0" class="hint">
       {{ ready ? '暂无相似上游定价可参考' : '请先选择上游并填写 model_id 后再生成建议' }}
     </div>
@@ -29,9 +35,15 @@
             <span v-if="rule.segments && rule.segments.length" class="suggest-segs">共 {{ rule.segments.length }} 段</span>
             <span v-else class="suggest-no-seg">无分段</span>
           </div>
-          <el-button size="small" type="primary" plain :disabled="!canAdopt(rule)" @click="adopt(rule)">
-            采用
-          </el-button>
+          <!-- 采用：同上游规则置灰并说明原因 -->
+          <span v-if="!canAdopt(rule)" class="adopt-anchor">
+            <el-tooltip content="该规则已属于当前上游，无需采用" placement="top">
+              <span class="adopt-anchor">
+                <el-button size="small" type="primary" plain disabled>采用</el-button>
+              </span>
+            </el-tooltip>
+          </span>
+          <el-button v-else size="small" type="primary" plain @click="adopt(rule)">采用</el-button>
         </div>
       </div>
     </div>
@@ -55,6 +67,8 @@ const emit = defineEmits<{ (e: 'adopt', rule: PriceRuleRow): void }>()
 
 const groups = ref<SuggestGroup[]>([])
 const loading = ref(false)
+// 加载失败（非真空态）：展示错误与「重试」，不再静默伪装成「暂无参考」
+const loadError = ref(false)
 
 const ready = computed(() => !!props.upstream && !!props.model)
 
@@ -80,6 +94,7 @@ async function load() {
   const seq = ++loadSeq
   if (!props.upstream || !props.model) {
     groups.value = []
+    loadError.value = false
     return
   }
   loading.value = true
@@ -87,9 +102,11 @@ async function load() {
     const resp = await pricingApi.suggest(props.upstream, props.model)
     if (seq !== loadSeq) return
     groups.value = resp.items ?? []
+    loadError.value = false
   } catch {
     if (seq !== loadSeq) return
     groups.value = []
+    loadError.value = true
   } finally {
     if (seq === loadSeq) loading.value = false
   }
@@ -120,6 +137,14 @@ function adopt(rule: PriceRuleRow) {
   font-size: 13px;
   font-weight: 600;
   color: #1f2329;
+}
+.suggest-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.adopt-anchor {
+  display: inline-block;
 }
 .suggest-groups {
   display: flex;

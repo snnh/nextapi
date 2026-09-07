@@ -17,7 +17,10 @@
     </div>
 
     <el-card shadow="never">
-      <el-table :data="rows" empty-text="暂无审计日志" v-loading="loading">
+      <el-table :data="rows" v-loading="loading">
+        <template #empty>
+          <el-empty description="暂无审计日志" :image-size="60" />
+        </template>
         <el-table-column label="时间" width="180">
           <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
         </el-table-column>
@@ -38,15 +41,15 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="object_id" label="对象 ID" min-width="200" show-overflow-tooltip>
+        <el-table-column prop="object_id" label="对象 ID" min-width="200">
           <template #default="{ row }">
-            <span v-if="row.object_id" class="mono">{{ row.object_id }}</span>
+            <CopyText v-if="row.object_id" :text="row.object_id" :truncate="16" />
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
         <el-table-column prop="ip" label="IP" min-width="130">
           <template #default="{ row }">
-            <span v-if="row.ip" class="mono">{{ row.ip }}</span>
+            <CopyText v-if="row.ip" :text="row.ip" />
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
@@ -72,19 +75,25 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="summaryVisible" title="摘要详情" width="640px">
+    <el-dialog v-model="summaryVisible" title="摘要详情" class="dlg">
       <pre class="summary-pre">{{ summaryText }}</pre>
+      <template #footer>
+        <el-button @click="summaryVisible = false">关闭</el-button>
+        <el-button type="primary" :icon="CopyDocument" @click="copySummary">复制</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search } from '@element-plus/icons-vue'
+import { CopyDocument, Refresh, Search } from '@element-plus/icons-vue'
 import { auditApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
+import { copyText } from '@/utils/clipboard'
+import CopyText from '@/components/common/CopyText.vue'
 import type { AuditRow } from '@/api/types'
 
 const rows = ref<AuditRow[]>([])
@@ -96,6 +105,7 @@ const objectType = ref('')
 const loading = ref(false)
 
 const summaryVisible = ref(false)
+const summaryJson = ref<Record<string, unknown> | null>(null)
 const summaryText = ref('')
 
 function hasSummary(row: AuditRow): boolean {
@@ -103,8 +113,15 @@ function hasSummary(row: AuditRow): boolean {
 }
 
 function showSummary(row: AuditRow) {
+  summaryJson.value = row.summary
   summaryText.value = JSON.stringify(row.summary, null, 2)
   summaryVisible.value = true
+}
+
+/** 复制当前摘要 JSON（同展示格式，缩进 2 空格） */
+function copySummary() {
+  if (!summaryJson.value) return
+  copyText(JSON.stringify(summaryJson.value, null, 2))
 }
 
 // 请求序号：防翻页/筛选并发时旧响应覆盖（发布审阅前端 M2）
@@ -148,7 +165,7 @@ function onSizeChange() {
   load()
 }
 
-load()
+onMounted(load)
 </script>
 
 <style scoped>

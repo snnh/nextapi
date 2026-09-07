@@ -8,10 +8,25 @@
       </div>
       <el-form ref="formRef" :model="form" :rules="rules" size="large" @submit.prevent @keyup.enter="handleLogin">
         <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="用户名" :prefix-icon="User" clearable />
+          <el-input
+            v-model="form.username"
+            name="username"
+            autocomplete="username"
+            placeholder="用户名"
+            :prefix-icon="User"
+            clearable
+          />
         </el-form-item>
         <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
+          <el-input
+            v-model="form.password"
+            name="current-password"
+            autocomplete="current-password"
+            type="password"
+            placeholder="密码"
+            :prefix-icon="Lock"
+            show-password
+          />
         </el-form-item>
         <el-form-item v-if="needTotp" prop="totpCode">
           <el-input
@@ -90,6 +105,9 @@ async function handleLogin() {
       form.totpCode = ''
       ElMessage.error('验证码错误或已过期，请重新输入')
     } else {
+      // 普通失败（多为密码错误）：重置二次验证展示，避免残留误导
+      needTotp.value = false
+      form.totpCode = ''
       ElMessage.error(errMsg(e))
     }
   } finally {

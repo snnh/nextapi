@@ -14,12 +14,22 @@
 
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建代理</el-button>
+      <el-input
+        v-model="keyword"
+        :prefix-icon="Search"
+        placeholder="按名称 / host 过滤"
+        clearable
+        class="search-input"
+      />
       <div class="spacer" />
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
     <el-card shadow="never">
-      <el-table :data="proxies" empty-text="暂无代理" v-loading="loading">
+      <el-table :data="filtered" v-loading="loading">
+        <template #empty>
+          <el-empty :description="keyword.trim() ? '无匹配的代理' : '暂无代理'" :image-size="60" />
+        </template>
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.name }}</template>
         </el-table-column>
@@ -74,7 +84,7 @@
               <el-button size="small" :loading="testing.has(row.id)" @click="test(row)">测试</el-button>
             </el-tooltip>
             <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
+            <el-button size="small" type="danger" :loading="deleting.has(row.id)" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -83,7 +93,7 @@
     <el-dialog
       v-model="dlg.visible"
       :title="dlg.isEdit ? '编辑代理' : '新建代理'"
-      width="620px"
+      class="dlg"
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -145,9 +155,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { proxyApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { PROXY_KINDS } from '@/utils/consts'
@@ -160,8 +170,20 @@ const loading = ref(false)
 const saving = ref(false)
 const toggling = reactive(new Set<string>())
 const testing = reactive(new Set<string>())
+const deleting = reactive(new Set<string>())
+// 列表搜索关键字（按名称 / host 客户端过滤）
+const keyword = ref('')
 
 const formRef = ref<FormInstance>()
+
+/** 按名称 / host 客户端过滤后的展示数据 */
+const filtered = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  if (!kw) return proxies.value
+  return proxies.value.filter(
+    (p) => p.name.toLowerCase().includes(kw) || p.host.toLowerCase().includes(kw),
+  )
+})
 
 function kindType(kind: string): 'primary' | 'success' | 'warning' | 'info' {
   if (kind === 'https') return 'success'
@@ -235,17 +257,22 @@ async function test(row: ProxyOut) {
 }
 
 async function remove(row: ProxyOut) {
+  if (deleting.has(row.id)) return // 防重复删除
+  deleting.add(row.id)
   try {
     await ElMessageBox.confirm(`确定删除代理「${row.name}」？`, '删除代理', { type: 'warning' })
   } catch {
+    deleting.delete(row.id)
     return
   }
   try {
     await proxyApi.remove(row.id)
     ElMessage.success('已删除')
-    load()
+    proxies.value = proxies.value.filter((p) => p.id !== row.id)
   } catch (e) {
     ElMessage.error(errMsg(e))
+  } finally {
+    deleting.delete(row.id)
   }
 }
 
@@ -323,9 +350,39 @@ function openEdit(row: ProxyOut) {
   dlg.visible = true
 }
 
+const IPV4_RE = /^(?:\d{1,3}\.){3}\d{1,3}$/
+// 域名 / host 名：段内字母数字开头结尾，可含 - 与内部 _；可选 *. 前缀通配
+const HOST_RE = /^(?:\*\.)?(?:[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\.)*[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$/
+
+/** no_proxy 单项宽松校验：host/域名（可 *. 通配）、IPv4/CIDR、IPv6（含 [] 与 CIDR） */
+function isValidNoProxyEntry(raw: string): boolean {
+  const v = raw.trim()
+  if (!v || v.length > 253 || /\s/.test(v)) return false
+  const slashIdx = v.indexOf('/')
+  if (slashIdx !== -1) {
+    // CIDR：前缀须为数字，网段须为 IPv4 或含冒号的 IPv6
+    const net = v.slice(0, slashIdx)
+    const prefix = v.slice(slashIdx + 1)
+    if (!/^\d+$/.test(prefix)) return false
+    const p = Number(prefix)
+    if (net.includes(':')) return p <= 128 && /^[0-9A-Fa-f:.]+$/.test(net.replace(/[[\]]/g, ''))
+    return p <= 32 && IPV4_RE.test(net)
+  }
+  if (v.includes(':')) {
+    // 宽松 IPv6（可带 []），仅允许十六进制、冒号与点
+    return /^\[?[0-9A-Fa-f:.]+\]?$/.test(v)
+  }
+  return HOST_RE.test(v)
+}
+
 function addTag() {
   const v = noProxyInput.value.trim()
   if (!v) return
+  if (!isValidNoProxyEntry(v)) {
+    // 非法格式即时提示：不添加也不清空输入，便于就地修改
+    ElMessage.warning('格式不合法：仅支持 host/域名（可带 *. 通配）、IPv4/CIDR、IPv6')
+    return
+  }
   if (!dlg.form.no_proxy.includes(v)) dlg.form.no_proxy.push(v)
   noProxyInput.value = ''
 }
@@ -360,6 +417,18 @@ async function submit() {
   } catch {
     return
   }
+  // 编辑态勾选「清除密码」属破坏性操作：提交前确认一次
+  if (dlg.isEdit && dlg.form.clearPassword) {
+    try {
+      await ElMessageBox.confirm(
+        '将清除该代理已设置的密码（以空串提交覆盖）。确认清除？',
+        '清除密码',
+        { type: 'warning', confirmButtonText: '确认清除', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
   saving.value = true
   try {
     const body = buildBody()
@@ -381,7 +450,7 @@ async function submit() {
   }
 }
 
-load()
+onMounted(load)
 </script>
 
 <style scoped>
@@ -407,6 +476,9 @@ load()
 }
 .toolbar .spacer {
   flex: 1;
+}
+.search-input {
+  width: 220px;
 }
 .muted {
   color: #c0c4cc;

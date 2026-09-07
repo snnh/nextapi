@@ -24,34 +24,28 @@
     <el-card shadow="never">
       <el-table :data="drafts" border>
         <template #empty>
-          <el-empty description="暂无模型路由，点击右上角「新增规则」创建" />
+          <el-empty description="暂无模型路由，点击左上角「新增规则」创建" />
         </template>
 
-        <el-table-column label="模型模式" min-width="180" show-overflow-tooltip>
+        <el-table-column label="模型模式" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="mono">{{ row.model_pattern }}</span>
-            <el-tooltip
-              v-if="row.managed_by === 'auto'"
-              content="由渠道模型同步托管：自动跟随上游模型列表增删；手动编辑请先关闭该渠道的自动跟随"
-              placement="top"
-            >
-              <el-tag size="small" type="primary" effect="plain" style="margin-left: 6px">自动</el-tag>
-            </el-tooltip>
-            <el-tag
-              v-if="isRowDirty(row)"
-              size="small"
-              type="warning"
-              effect="plain"
-              style="margin-left: 6px"
-            >
-              未保存
-            </el-tag>
+            <div class="cell-inline">
+              <CopyText :text="row.model_pattern" :truncate="24" />
+              <el-tooltip
+                v-if="row.managed_by === 'auto'"
+                content="由渠道模型同步托管：自动跟随上游模型列表增删；手动编辑请先关闭该渠道的自动跟随"
+                placement="top"
+              >
+                <el-tag size="small" type="primary" effect="plain">自动</el-tag>
+              </el-tooltip>
+              <el-tag v-if="isRowDirty(row)" size="small" type="warning" effect="plain">未保存</el-tag>
+            </div>
           </template>
         </el-table-column>
 
-        <el-table-column label="上游" min-width="160" show-overflow-tooltip>
+        <el-table-column label="上游" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <span>{{ row.upstreamName }}</span>
+            <CopyText :text="row.upstreamName" :truncate="24" />
           </template>
         </el-table-column>
 
@@ -124,9 +118,10 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="640px"
+      class="dlg"
       :close-on-click-modal="false"
       destroy-on-close
+      :before-close="(done: () => void) => dirtyGuard.confirmClose(done)"
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" @submit.prevent>
         <el-divider content-position="left">基础</el-divider>
@@ -188,6 +183,7 @@
             v-model="form.retry_status_codes"
             placeholder="逗号分隔，留空=默认 429,500,502,503,504"
             clearable
+            @blur="warnIgnoredStatusCodes"
           />
         </el-form-item>
 
@@ -198,7 +194,7 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button @click="onCancelDialog">取消</el-button>
         <el-button type="primary" :loading="saving" @click="submitDialog">保存</el-button>
       </template>
     </el-dialog>
@@ -212,6 +208,8 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 import { routeApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
+import CopyText from '@/components/common/CopyText.vue'
+import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import type { RouteItem, RouteOut, UpstreamOut } from '@/api/types'
 
 /** 默认重试状态码（可空=默认此列表） */
@@ -276,7 +274,7 @@ const rules: FormRules = {
   weight: [
     {
       validator: (_r, v: number, cb) => {
-        if (v == null || !(v > 0)) cb(new Error('权重需大于 0'))
+        if (v == null || !(v >= 1)) cb(new Error('权重需 ≥ 1'))
         else cb()
       },
       trigger: 'change',
@@ -285,6 +283,9 @@ const rules: FormRules = {
 }
 
 const dialogTitle = computed(() => (isEdit.value ? '编辑规则' : '新增规则'))
+
+/** 脏表单守卫：弹窗内有未保存修改时关闭前二次确认 */
+const dirtyGuard = useDirtyGuard(() => form)
 
 const dirtyCount = computed(() => drafts.value.filter((r) => isRowDirty(r)).length)
 
@@ -328,6 +329,7 @@ function openCreate() {
   isEdit.value = false
   dialogIndex.value = -1
   Object.assign(form, defaultForm())
+  dirtyGuard.snapshot()
   dialogVisible.value = true
 }
 
@@ -348,6 +350,7 @@ function openEdit(index: number) {
     lock_upstream: row.lock_upstream ?? false,
     sort_order: row.sort_order ?? 0,
   })
+  dirtyGuard.snapshot()
   dialogVisible.value = true
 }
 
@@ -362,6 +365,24 @@ function parseCodes(text: string): number[] {
     .filter((s) => s.length > 0)
   if (!parts.length) return [...DEFAULT_RETRY_CODES]
   return parts.map((s) => Number(s)).filter((n) => !Number.isNaN(n))
+}
+
+/** 提取输入中会被 parseCodes 静默丢弃的非数字项（用于失焦即时提示，不阻断合法项） */
+function ignoredStatusCodes(text: string): string[] {
+  const parts = text
+    .split(/[,，\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  if (!parts.length) return []
+  return parts.filter((s) => Number.isNaN(Number(s)))
+}
+
+/** 输入框失焦时：把被丢弃的非法状态码项提示出来 */
+function warnIgnoredStatusCodes() {
+  const bad = ignoredStatusCodes(form.retry_status_codes)
+  if (bad.length) {
+    ElMessage.warning(`已忽略非法状态码：${bad.join('、')}`)
+  }
 }
 
 function upstreamNameOf(id: string): string {
@@ -412,7 +433,16 @@ async function submitDialog() {
       updatedAt: null,
     })
   }
+  dirtyGuard.disarm()
   dialogVisible.value = false
+  ElMessage.info('已加入草稿，需点击顶部「保存全部」生效')
+}
+
+/** 弹窗取消按钮：脏表单先二次确认再关闭 */
+function onCancelDialog() {
+  dirtyGuard.confirmThen(() => {
+    dialogVisible.value = false
+  })
 }
 
 // —— 删除 ——
@@ -444,8 +474,8 @@ function validateAll(): boolean {
       ElMessage.warning(`第 ${i + 1} 条：请选择上游`)
       return false
     }
-    if (r.weight == null || !(r.weight > 0)) {
-      ElMessage.warning(`第 ${i + 1} 条：权重需大于 0`)
+    if (r.weight == null || !(r.weight >= 1)) {
+      ElMessage.warning(`第 ${i + 1} 条：权重需 ≥ 1`)
       return false
     }
   }
@@ -470,11 +500,28 @@ function toRouteItem(row: RouteRow): RouteItem {
 async function saveAll() {
   if (saving.value) return
   if (!validateAll()) return
+  // 保存前对比本地草稿与最近一次后端快照，向用户展示 diff 摘要
+  const diff = computeDiff()
+  if (diff.added + diff.modified + diff.deleted === 0) {
+    ElMessage.info('无任何改动')
+    return
+  }
   if (drafts.value.length === 0) {
+    // 0 条清空沿用原确认文案
     try {
       await ElMessageBox.confirm('当前无任何规则，保存将清空全部模型路由。确定继续？', '保存确认', {
         type: 'warning',
       })
+    } catch {
+      return
+    }
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        `检测到改动：新增 ${diff.added} · 修改 ${diff.modified} · 删除 ${diff.deleted}。点击确定将整体替换后端路由表。`,
+        '保存全部',
+        { type: 'warning' },
+      )
     } catch {
       return
     }
@@ -546,10 +593,37 @@ function isRowDirty(row: RouteRow): boolean {
   if (!c) return true
   return !sameFields(row, c)
 }
+
+/** 本地草稿相对最近一次后端快照的 diff 摘要：新增 / 修改 / 删除 */
+function computeDiff(): { added: number; modified: number; deleted: number } {
+  const commitMap = new Map(serverCommit.value.map((c) => [c.id, c]))
+  let added = 0
+  let modified = 0
+  for (const d of drafts.value) {
+    const c = d.id ? commitMap.get(d.id) : undefined
+    if (!c) {
+      // 无 id（本会话新建）或后端快照中已不存在 → 新增
+      added++
+      continue
+    }
+    if (!sameFields(d, c)) modified++
+  }
+  const draftIds = new Set<string>()
+  for (const d of drafts.value) {
+    if (d.id != null) draftIds.add(d.id)
+  }
+  const deleted = serverCommit.value.filter((c) => !draftIds.has(c.id)).length
+  return { added, modified, deleted }
+}
 </script>
 
 <style scoped>
 .muted {
   color: #c0c4cc;
+}
+.cell-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 </style>

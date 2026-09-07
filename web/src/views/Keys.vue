@@ -3,6 +3,11 @@
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建密钥</el-button>
       <el-button :icon="Refresh" @click="loadKeys">刷新</el-button>
+      <el-input v-model="searchText" class="search-input" clearable placeholder="按名称 / 前缀搜索">
+        <template #prefix>
+          <el-icon><Search /></el-icon>
+        </template>
+      </el-input>
       <div class="spacer" />
       <div class="hint" style="max-width: 560px">
         网关 Key 格式为 <span class="mono">sk-nx-...</span>。完整 Key 仅在创建/轮换时展示一次，请立即保存；数据库只存储哈希，之后任何页面均无法再次查看明文。
@@ -10,9 +15,15 @@
     </div>
 
     <el-card shadow="never">
-      <el-table :data="keys" :row-key="(row: ApiKeyRow) => row.id" border>
+      <el-table :data="pagedKeys" :row-key="(row: ApiKeyRow) => row.id" border>
         <template #empty>
-          <el-empty description="暂无密钥，点击右上角「新建密钥」创建" />
+          <el-empty
+            :description="
+              searchText.trim()
+                ? '未找到与搜索条件匹配的密钥'
+                : '暂无密钥，点击右上角「新建密钥」创建'
+            "
+          />
         </template>
 
         <el-table-column label="名称" min-width="140">
@@ -106,18 +117,39 @@
             <el-tooltip content="完整 Key 仅创建/轮换时展示一次，此处仅复制前缀用于识别" placement="top">
               <el-button size="small" @click="copyPrefix(row)">复制前缀</el-button>
             </el-tooltip>
-            <el-button size="small" type="danger" @click="removeKey(row)">删除</el-button>
+            <el-button
+              size="small"
+              type="danger"
+              :loading="deletingSet.has(row.id)"
+              :disabled="deletingSet.has(row.id)"
+              @click="removeKey(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
+      <div class="pager">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="filteredKeys.length"
+          :page-sizes="[10, 20, 50]"
+          :layout="pagerLayout"
+          background
+        />
+      </div>
     </el-card>
 
     <!-- 新建 / 编辑弹窗 -->
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="860px"
+      class="dlg-wide long-form"
       :close-on-click-modal="false"
+      :close-on-press-escape="!showingSecret"
+      :show-close="!showingSecret"
+      :before-close="handleBeforeClose"
       destroy-on-close
       @closed="onDialogClosed"
     >
@@ -137,7 +169,7 @@
       </template>
 
       <!-- 表单（新建 / 编辑） -->
-      <el-form v-else label-width="130px" @submit.prevent>
+      <el-form v-else ref="formRef" :model="form" :rules="rules" label-width="130px" @submit.prevent>
         <el-divider content-position="left">基本信息</el-divider>
 
         <el-form-item label="名称">
@@ -178,7 +210,7 @@
 
         <el-divider content-position="left">配额与时效</el-divider>
 
-        <el-form-item label="用量上限">
+        <el-form-item label="用量上限" prop="quota_limit">
           <div v-if="form.quotaClear" class="hint">已清除（不限），如需重新设置请取消勾选「清除配额」。</div>
           <template v-else>
             <div class="rate-row">
@@ -201,6 +233,7 @@
             type="datetime"
             value-format="YYYY-MM-DD HH:mm:ss"
             :disabled="form.expiresClear"
+            :disabled-date="disablePastDate"
             placeholder="留空 = 永不过期"
             style="width: 320px"
           />
@@ -235,6 +268,7 @@
             v-model="form.debug_expires_at"
             type="datetime"
             value-format="YYYY-MM-DD HH:mm:ss"
+            :disabled-date="disablePastDate"
             placeholder="可清空；到期自动关闭"
             style="width: 320px"
           />
@@ -249,7 +283,7 @@
           <el-button type="primary" @click="closeSecret">我已保存</el-button>
         </template>
         <template v-else>
-          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button @click="handleCancel">取消</el-button>
           <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
         </template>
       </template>
@@ -258,12 +292,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Plus, Refresh } from '@element-plus/icons-vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { CopyDocument, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { keyApi } from '@/api'
 import { errMsg } from '@/api/http'
+import { useDirtyGuard } from '@/composables/useDirtyGuard'
+import { copyText } from '@/utils/clipboard'
 import { QUOTA_UNIT_LABELS, QUOTA_WINDOW_LABELS } from '@/utils/consts'
 import { fmtInt, fmtTime } from '@/utils/format'
 import type { ApiKeyRow, KeyCreateReq, QuotaUnit, QuotaWindow } from '@/api/types'
@@ -274,7 +310,51 @@ type KeyWriteReq = KeyCreateReq & { enabled?: boolean }
 const keys = ref<ApiKeyRow[]>([])
 const pageLoading = ref(false)
 const togglingSet = reactive(new Set<string>())
+const deletingSet = reactive(new Set<string>())
 const rotatingId = ref('')
+
+// —— 搜索 + 客户端分页 ——
+const searchText = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+/** 窄屏（移动端）分页简化：不带每页条数选择 */
+const narrowViewport = ref(window.innerWidth < 768)
+function onViewportResize() {
+  narrowViewport.value = window.innerWidth < 768
+}
+onMounted(() => window.addEventListener('resize', onViewportResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
+
+const pagerLayout = computed(() =>
+  narrowViewport.value ? 'total, prev, pager, next' : 'total, sizes, prev, pager, next',
+)
+
+const filteredKeys = computed<ApiKeyRow[]>(() => {
+  const q = searchText.value.trim().toLowerCase()
+  if (!q) return keys.value
+  return keys.value.filter((r) => {
+    const name = (r.name || '').toLowerCase()
+    const prefix = (r.prefix || '').toLowerCase()
+    return name.includes(q) || prefix.includes(q)
+  })
+})
+
+const pagedKeys = computed<ApiKeyRow[]>(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredKeys.value.slice(start, start + pageSize.value)
+})
+
+watch(searchText, () => {
+  currentPage.value = 1
+})
+watch(pageSize, () => {
+  currentPage.value = 1
+})
+// 删除 / 刷新后数据变少时回退页码
+watch(filteredKeys, (list) => {
+  const maxPage = Math.max(1, Math.ceil(list.length / pageSize.value))
+  if (currentPage.value > maxPage) currentPage.value = maxPage
+})
 
 // —— 弹窗状态 ——
 const dialogVisible = ref(false)
@@ -335,6 +415,31 @@ function defaultForm(): FormState {
 }
 
 const form = reactive<FormState>(defaultForm())
+const formRef = ref<FormInstance>()
+
+// 用量上限：限值存在时必须同时选择单位与窗口（内联报错定位于该字段）
+const rules: FormRules = {
+  quota_limit: [
+    {
+      validator: (_rule, _value, callback) => {
+        if (form.quotaClear) {
+          callback()
+          return
+        }
+        const limit = form.quota_limit
+        if (limit != null && !Number.isNaN(limit) && (!form.quota_unit || !form.quota_window)) {
+          callback(new Error('设置用量上限时必须同时选择单位与窗口'))
+          return
+        }
+        callback()
+      },
+      trigger: 'change',
+    },
+  ],
+}
+
+// —— 脏表单防丢（仅新建/编辑表单态参与；secretKey 展示态通过 props 禁用关闭）——
+const { snapshot, disarm, confirmClose, confirmThen } = useDirtyGuard(() => form)
 
 watch(
   () => form.modelsClear,
@@ -370,6 +475,9 @@ const dialogTitle = computed(() => {
   return isEdit.value ? '编辑密钥' : '新建密钥'
 })
 
+/** 展示完整 Key（创建/轮换成功）时禁止 X / Esc 关闭，只能点「我已保存」 */
+const showingSecret = computed(() => !!secretKey.value)
+
 async function loadKeys() {
   pageLoading.value = true
   try {
@@ -391,6 +499,13 @@ function rowName(row: ApiKeyRow): string {
 function isExpired(iso: string): boolean {
   const d = dayjs(iso)
   return d.isValid() && d.isBefore(dayjs())
+}
+
+/** 禁止选择今天之前的日期（编辑回填的既有过去值不受影响，仅限制新选择） */
+function disablePastDate(date: Date): boolean {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date.getTime() < today.getTime()
 }
 
 function rateText(row: ApiKeyRow): string {
@@ -429,16 +544,12 @@ function parseLines(text: string): string[] {
     .filter((s) => s.length > 0)
 }
 
-async function copyPrefix(row: ApiKeyRow) {
-  try {
-    await navigator.clipboard.writeText(row.prefix)
-    ElMessage.success('已复制前缀')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+function copyPrefix(row: ApiKeyRow) {
+  copyText(row.prefix, '已复制前缀')
 }
 
 async function removeKey(row: ApiKeyRow) {
+  if (deletingSet.has(row.id)) return
   try {
     await ElMessageBox.confirm(`确定删除密钥「${rowName(row)}」？删除后使用该 Key 的请求将失效。`, '删除密钥', {
       type: 'warning',
@@ -446,12 +557,15 @@ async function removeKey(row: ApiKeyRow) {
   } catch {
     return
   }
+  deletingSet.add(row.id)
   try {
     await keyApi.remove(row.id)
     ElMessage.success('已删除')
     loadKeys()
   } catch (e) {
     ElMessage.error(errMsg(e))
+  } finally {
+    deletingSet.delete(row.id)
   }
 }
 
@@ -486,6 +600,7 @@ function openCreate() {
   secretKey.value = ''
   Object.assign(form, defaultForm())
   dialogVisible.value = true
+  snapshot()
 }
 
 function openEdit(row: ApiKeyRow) {
@@ -508,10 +623,26 @@ function openEdit(row: ApiKeyRow) {
   base.expires_at = row.expires_at ? dayjs(row.expires_at).format('YYYY-MM-DD HH:mm:ss') : null
   Object.assign(form, base)
   dialogVisible.value = true
+  snapshot()
 }
 
 function onDialogClosed() {
   secretKey.value = ''
+}
+
+function handleBeforeClose(done: () => void) {
+  // 完整 Key 展示态由 props 禁关，此处兜底直接放行（不参与脏表单守卫）
+  if (showingSecret.value) {
+    done()
+    return
+  }
+  confirmClose(done)
+}
+
+async function handleCancel() {
+  await confirmThen(() => {
+    dialogVisible.value = false
+  })
 }
 
 function closeSecret() {
@@ -589,8 +720,9 @@ function buildBody(): KeyWriteReq {
 
 async function submit() {
   if (saving.value) return
-  if (form.quota_limit != null && (!form.quota_unit || !form.quota_window)) {
-    ElMessage.warning('设置用量上限时必须同时选择单位与窗口')
+  try {
+    await formRef.value?.validate()
+  } catch {
     return
   }
   saving.value = true
@@ -599,6 +731,7 @@ async function submit() {
     if (isEdit.value && editingRow.value) {
       await keyApi.update(editingRow.value.id, body)
       ElMessage.success('密钥已更新')
+      disarm()
       dialogVisible.value = false
     } else {
       const resp = await keyApi.create(body)
@@ -613,19 +746,22 @@ async function submit() {
   }
 }
 
-async function copySecret() {
-  try {
-    await navigator.clipboard.writeText(secretKey.value)
-    ElMessage.success('已复制完整 Key')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+function copySecret() {
+  copyText(secretKey.value, '已复制完整 Key')
 }
 </script>
 
 <style scoped>
 .muted {
   color: #c0c4cc;
+}
+.search-input {
+  width: 240px;
+}
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 .rate-row {
   display: flex;

@@ -1,8 +1,8 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="导入报告"
-    width="640px"
+    :title="titleText"
+    class="dlg"
     :close-on-click-modal="false"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
@@ -46,6 +46,9 @@
       </div>
 
       <template v-if="report.failed.length">
+        <!-- 注：ImportReport.failed 项后端仅返回 index/reason，
+            未返回 model/unit/upstream 等关键字段，故无法逐条附加模型/单位摘要，
+            只能以「序号 + 原因」呈现，字段摘要待后端补充后再接入。 -->
         <el-divider content-position="left">失败明细</el-divider>
         <el-table :data="report.failed" size="small" max-height="280">
           <el-table-column prop="index" label="序号" width="80" align="right" />
@@ -70,9 +73,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { ImportReport } from '@/api/types'
 
-defineProps<{
+const props = defineProps<{
   modelValue: boolean
   report: ImportReport | null
   confirmLoading?: boolean
@@ -81,6 +85,12 @@ const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'confirm'): void
 }>()
+
+/** 标题区分 dry-run 预览（未写入）与正式导入（已写入）两种语义 */
+const titleText = computed(() => {
+  if (!props.report) return '导入报告'
+  return props.report.dry_run ? '导入预览（未写入）' : '导入结果（已写入）'
+})
 </script>
 
 <style scoped>
