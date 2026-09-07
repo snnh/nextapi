@@ -519,8 +519,24 @@ async fn test_upstream(
 
     let url = format!("{}/models", up.base_url.trim_end_matches('/'));
     let mut headers = reqwest::header::HeaderMap::new();
-    // api_key_plain 仅在内存快照中持有；此处加鉴权头（绝不回传）
-    upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+    if up.kind == "codex" {
+        // Codex 渠道用 OAuth 凭证（临期自动刷新），无 api_key
+        match upstream::codex::ensure_token(&state, &up).await {
+            Ok((token, account)) => {
+                upstream::codex::apply_headers(&mut headers, &token, &account);
+                headers.insert(
+                    reqwest::header::ACCEPT,
+                    reqwest::header::HeaderValue::from_static("application/json"),
+                );
+            }
+            Err(e) => {
+                return Ok(Json(serde_json::json!({ "ok": false, "error": e })));
+            }
+        }
+    } else {
+        // api_key_plain 仅在内存快照中持有；此处加鉴权头（绝不回传）
+        upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+    }
 
     let started = std::time::Instant::now();
     let resp = client
