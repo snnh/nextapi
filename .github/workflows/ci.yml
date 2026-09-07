@@ -2,8 +2,9 @@ name: CI
 
 # 单工作流双形态：
 # - push / pull_request：跑 Rust 检查 + 前端构建 + Docker 单架构试构建（不推送）
-# - release published：打 tag 的提交已在 main 上通过 CI，跳过重复检查，
-#   直接构建并推送多架构镜像到 GHCR（不发布其他构建产物）
+# - release published：打 tag 的提交已在 main 上通过 CI，跳过重复检查；
+#   多架构镜像走原生 runner 分布式构建（amd64/arm64 各自原生编译，免 QEMU 模拟），
+#   按 digest 推送后合并 manifest 打版本标签（不发布其他构建产物）
 on:
   push:
   pull_request:
@@ -51,56 +52,102 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo build --release
 
+  # push/PR：单架构试构建（不推送），验证 Dockerfile 可用
   docker:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     needs: rust
-    # release 事件时 rust 被跳过（result=skipped），故放行；其余事件要求 rust 成功
-    if: always() && (github.event_name == 'release' || needs.rust.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: nextapi:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # release：原生 runner 分布式构建——amd64/arm64 各自原生编译（免 QEMU），
+  # 按 digest 推送，随后由 merge job 合并 manifest
+  docker-release:
+    if: github.event_name == 'release'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      # 多架构（arm64）需要 QEMU，仅 release 推送时启用
-      - uses: docker/setup-qemu-action@v3
-        if: github.event_name == 'release'
       - uses: docker/setup-buildx-action@v3
-
       - uses: docker/login-action@v3
-        if: github.event_name == 'release'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 计算镜像标签
-        id: meta
-        run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            TAG="${{ github.event.release.tag_name }}"
-            VER="${TAG#v}"
-            {
-              echo "tags<<EOF"
-              echo "$IMAGE:$VER"
-              echo "$IMAGE:latest"
-              # 语义化版本追加 major.minor 浮动标签
-              if [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                MAJOR="${VER%%.*}"; REST="${VER#*.}"; MINOR="${REST%%.*}"
-                echo "$IMAGE:$MAJOR.$MINOR"
-              fi
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=nextapi:ci" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 构建（CI 单架构试构建 / Release 多架构推送）
+      - name: 构建并推送（${{ matrix.platform }}，按 digest）
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: ${{ github.event_name == 'release' && 'linux/amd64,linux/arm64' || '' }}
-          push: ${{ github.event_name == 'release' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          # push-by-digest：先不带标签按 digest 落库，manifest 合并时再打版本标签
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ strategy.job-index }}
+          cache-to: type=gha,mode=max,scope=${{ strategy.job-index }}
+
+      - name: 导出 digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/digest-${{ strategy.job-index }}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/
+          if-no-files-found: error
+
+  # release：合并各架构 digest 为多架构 manifest，打版本标签
+  merge:
+    if: github.event_name == 'release'
+    needs: docker-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 合并 manifest 并推送标签
+        run: |
+          VER="${{ github.event.release.tag_name }}"; VER="${VER#v}"
+          TAGS="-t $IMAGE:$VER -t $IMAGE:latest"
+          # 语义化版本追加 major.minor 浮动标签
+          if [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            MAJOR="${VER%%.*}"; REST="${VER#*.}"; MINOR="${REST%%.*}"
+            TAGS="$TAGS -t $IMAGE:$MAJOR.$MINOR"
+          fi
+          REFS=""
+          for f in /tmp/digests/digest-*.txt; do
+            REFS="$REFS $IMAGE@$(cat "$f")"
+          done
+          echo "合并架构：$REFS"
+          docker buildx imagetools create $TAGS $REFS
