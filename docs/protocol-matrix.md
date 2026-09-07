@@ -1,8 +1,8 @@
-# 协议转换矩阵与不可映射能力清单（M2 交付物）
+# 协议转换矩阵与不可映射能力清单
 
-> 对应 PLAN.md §4。实现见 `src/protocol/`（IR 枢轴 + 四适配器 + SSE + 错误翻译）。
+> 实现见 `src/protocol/`（IR 枢轴 + 四适配器 + SSE + 错误翻译）。
 > 双向转换一律走 IR（N→1→N），降级项在转换时收集进 `ConvCtx`，由网关写入
-> warning 日志与 `X-NextAPI-Degraded` 响应头（M3 接线）。
+> warning 日志与 `X-NextAPI-Degraded` 响应头。
 
 ## 1. 字段映射矩阵
 
@@ -28,7 +28,7 @@ finish_reason 归一化为 OpenAI 词汇（`stop/length/tool_calls/content_filte
 
 ## 2. 不可映射能力清单（降级项）
 
-转换时按字段逐一判定（PLAN §4.3 三级策略：直接映射 → 降级 + 记录 → 扩展透传）。
+转换时按字段逐一判定，三级策略：直接映射 → 降级 + 记录 → 扩展透传。
 以下为当前实现会记录降级的字段（`ConvCtx.degrade`）：
 
 ### 2.1 转入 OpenAI Chat（出口）
@@ -61,11 +61,11 @@ finish_reason 归一化为 OpenAI 词汇（`stop/length/tool_calls/content_filte
 
 | 字段 | 原因 |
 |------|------|
-| `image_url` | Gemini 需内联数据；以 `file_data{file_uri}` 携带并降级（受控下载转内联由 `media_download` 开关在 M3/M6 接线） |
+| `image_url` | Gemini 需内联数据；以 `file_data{file_uri}` 携带并降级（受控下载转内联由 `media_download` 开关控制） |
 | `tool_response_name` | `functionResponse` 需要函数名，缺失时用 `tool_call_id` 代替 |
 | `tool_choice` / `seed` / `n` / `user` | Gemini 无对应字段 |
 | `usage.cache_write_tokens` | Gemini 无对应 |
-| `input_audio` | Gemini 不支持（M2 范围；音频模型后续扩展） |
+| `input_audio` | Gemini 不支持（音频模型后续扩展） |
 
 ### 2.5 从 OpenAI Responses 转出（入口降级）
 
@@ -81,9 +81,9 @@ finish_reason 归一化为 OpenAI 词汇（`stop/length/tool_calls/content_filte
 - 工具调用增量按 index 对齐累积（`ir::ToolCallAggregator`）；Gemini 的 `functionCall` 需完整 `args`，聚合到合法 JSON 才发送，`finish_reason` 到达时强制冲刷；
 - Anthropic 事件序列保证 `message_start → content_block_start/delta*/stop → message_delta → message_stop`；
 - OpenAI 流终止载荷 `[DONE]`；Responses 补发 `response.completed`；Gemini 无终止事件；
-- 转换失败可回退透传（`convert_mode=passthrough_fallback`，M3 网关核心实现决策逻辑）。
+- 转换失败可回退透传（`convert_mode=passthrough_fallback`）。
 
 ## 4. 错误体翻译
 
 `protocol::errors`：上游错误 JSON → `IrError{status,message,type,code}` → 入口协议错误结构。
-message 尽量保留上游原文；`usage_logs.error` 仅存 ≤2000 字符摘要（M4 落库时截断）。
+message 尽量保留上游原文；`usage_logs.error` 仅存 ≤2000 字符摘要。

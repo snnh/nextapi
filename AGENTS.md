@@ -6,13 +6,12 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 管理后台 API，定位为「面向团队/应用的工具型网关」。
 
-仓库为 Rust + axum 工程，**后端功能已全部完成**（2026-09）：工程骨架（配置热加载/设置优先级/种子）、协议层（4 协议互转）、网关核心（鉴权/限流/路由/熔断/透传与转换决策）、日志统计（分区/WAL/聚合）、计价引擎（分段计价/双币种/导入导出）、图片通道（4 种上游形状适配 + 异步任务计费闭环）、供应商预设（8 个内置 + 一键接入）、更新检查（GitHub 手动/定时）。**管理后台前端（web/，Vue 3）已完成**（2026-09）：登录/仪表盘/密钥/上游/路由/价格/日志/统计/系统设置 9 页面，构建产物经 rust-embed 内嵌进二进制（Docker 多阶段自动构建）。
+仓库为 Rust + axum 工程：工程骨架（配置热加载/设置优先级/种子）、协议层（4 协议互转）、网关核心（鉴权/限流/路由/熔断/透传与转换决策）、日志统计（分区/WAL/聚合）、计价引擎（分段计价/双币种/导入导出）、图片通道（4 种上游形状适配 + 异步任务计费闭环）、Codex OAuth 渠道、渠道模型自动同步、供应商预设（8 个内置 + 一键接入）、更新检查（GitHub 手动/定时）。管理后台前端在 `web/`（Vue 3，登录/仪表盘/密钥/上游/路由/价格/日志/统计/系统设置 9 页面），构建产物经 rust-embed 内嵌进二进制（Docker 多阶段自动构建）。
 
 其他文件说明：
 
 - `.owc/memory.md` — AI 代理的会话记忆（非项目文档）。
 - `.owc/venv/` — AI 代理工具链的 Python venv，与项目无关，勿动。
-- 根目录有一个 0 字节的乱码文件名（`:\x1a@=...`），疑似误建，与本项目无关。
 
 ### 明确不做（硬约束）
 
@@ -44,10 +43,10 @@
 - **前端（web/ 已存在）**：`cd web && npm install && npm run build`（产物 `web/dist`，经 rust-embed 编译进二进制）。**注意：`cargo build/test` 编译期读取 `web/dist`，目录缺失会编译失败**——本地改完前端后先 `npm run build` 再 cargo；Docker 多阶段已自动保证顺序（rust-embed 内嵌，运行期无需 dist）。
 - 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试在 `tests/`，需 docker-compose 起 PG + mock 上游）
 - 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:3220，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
-- 部署：`docker-compose up -d`（`nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`）
-- 发布前加入 `cargo audit` / `cargo deny` 依赖审计
+- 部署：`docker-compose up -d`（默认拉 GHCR 发布镜像 `ghcr.io/snnh/nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`；本地构建见 compose 内注释）
+- 发布：打 `v*` 标签并创建 GitHub Release，`.github/workflows/release.yml` 自动构建多架构镜像推 GHCR；发布前宜跑 `cargo audit` / `cargo deny` 依赖审计
 
-**注意**：所有 SQL 用 sqlx **运行时校验**（`sqlx::query`，禁用 `query!` 宏），保证无数据库环境也能 `cargo check`。沙盒无 docker 守护进程时，DB 相关逻辑只能编译验证，无法集成测试。
+**注意**：所有 SQL 用 sqlx **运行时校验**（`sqlx::query`，禁用 `query!` 宏），保证无数据库环境也能 `cargo check`。
 
 ## 代码组织
 
@@ -68,11 +67,15 @@ src/
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
+├── upstream/codex.rs # Codex OAuth 渠道：auth.json 解析、ensure_token 临期刷新（single-flight
+│                     # + 轮换回写）、请求头注入、请求整形（恒流式）、流聚合回非流式
+├── netguard.rs      # SSRF 防护：私网段拦截 + DNS 钉住（URL 导入/媒体下载/代理探测）
+├── idempotency.rs   # 计费幂等键（quota_usage 与日志写库的 request_id 去重）
 ├── media/           # 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
 ├── presets.rs       # 供应商预设（8 个内置预设 + 一键接入 provision + media_base_url 处理）
-├── embed.rs         # M8：前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
+├── embed.rs         # 前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/images/* + 视频 501 占位）
 │                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
@@ -89,7 +92,10 @@ src/
 └── admin/
     ├── mod.rs       # /api 路由聚合
     ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
-    ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持）
+    ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持；
+                     # codex 渠道 auth_json 创建 + /{id}/oauth/refresh 手动刷新）
+    ├── model_sync.rs # /api/upstreams/{id}/models 拉取（协议/codex 适配）+ 同步引擎
+                     #（auto 全量对账仅动 managed_by='auto' 托管路由；manual 勾选创建）+ 周期任务
     ├── routes.rs    # /api/model-routes 批量替换
     ├── proxies.rs   # /api/proxies CRUD（密码加密、掩码回传=保持原值、连通性测试）
     ├── settings_api.rs # /api/settings + /api/config(+reload)
@@ -100,13 +106,10 @@ src/
     ├── presets.rs   # /api/presets 列表 + /{name}/provision 一键接入
     ├── system.rs    # /api/system/version + check-update（GitHub Releases，代理矩阵）+ 定时检查任务
     └── audit.rs     # /api/audit 分页查询
-migrations/          # 0001_init + 0002_gateway + 0003_logging + 0004_pricing + 0005_media
-                     # + 0006_hardening + 0007_aliases + 0008_idempotency + 0009_totp
-                     # + 0010_totp_replay（last_totp_step 防重放）
-                     # + 0004_pricing.sql（price_rules）+ 0005_media.sql（media_tasks）
-contracts/           # 里程碑实现契约（多子代理并行时的冻结接口；仅本地参考，不进版本库）
-tests/               # 集成测试
-web/                 # Vue3 管理后台（M8 完成）：src/views 9 页面 + components/{pricing,settings,upstreams,stats}/
+migrations/          # 0001_init ~ 0012_codex_oauth（sqlx::migrate! 启动自动执行；
+                     # 含分区/计价/媒体/加固/别名/幂等/TOTP/模型同步/Codex OAuth）
+tests/               # 集成测试（待补充，需 PG + mock 上游）
+web/                 # Vue3 管理后台：src/views 9 页面 + components/{pricing,settings,upstreams,stats}/
                      # 页面私有组件 + api/（types.ts 接口类型唯一事实源、index.ts 分组函数、http.ts 401 拦截）
                      # dist/ 构建产物 rust-embed 内嵌（gitignore，先 npm run build 再 cargo）
 ```
