@@ -44,7 +44,7 @@
 - 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试在 `tests/`，需 docker-compose 起 PG + mock 上游）
 - 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:3220，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
 - 部署：`docker-compose up -d`（默认拉 GHCR 发布镜像 `ghcr.io/snnh/nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`；本地构建见 compose 内注释）
-- 发布：打 `v*` 标签并创建 GitHub Release，`.github/workflows/release.yml` 自动构建多架构镜像推 GHCR；发布前宜跑 `cargo audit` / `cargo deny` 依赖审计
+- 发布：推送 `v*` 标签即触发 `.github/workflows/ci.yml` 发布流程（rust 检查兜底 + 原生 runner 分布式构建 amd64/arm64 多架构镜像推 GHCR）；GitHub Release 用 `gh release create` 另行创建（不触发构建）；发布前宜跑 `cargo audit` / `cargo deny` 依赖审计
 
 **注意**：所有 SQL 用 sqlx **运行时校验**（`sqlx::query`，禁用 `query!` 宏），保证无数据库环境也能 `cargo check`。
 

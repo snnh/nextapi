@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-07
+
 ### Fixed
 - **协议转换（Responses 入口）容错**：省略 `type:"message"` 的输入项、纯字符串
   content、客户端回显 assistant 历史的 `output_text`/`refusal` part 不再被整条丢弃
@@ -14,6 +16,12 @@
 - **调试模式覆盖失败路径**：转换错误 / 上游拒绝（含 4xx）现在也记录 debug_payload，
   内容为入口请求 + 实际发往上游的转换后请求体 + 上游错误原文（此前失败日志无任何
   调试载荷，开启调试也抓不到）。
+
+### CI
+- CI 与 Release 工作流合并为单文件：分支 push 不再触发；PR 保留检查；**打 v\* 标签
+  push 即触发发布构建**（GitHub Release 用 gh 另行创建，不触发构建）；
+- 多架构镜像改原生 ARM runner 分布式构建（amd64/arm64 各自原生编译，去除 QEMU
+  模拟），发布耗时约 49 分钟 → 11 分钟。
 
 ## [0.2.0] - 2026-09-07
 
@@ -77,5 +85,6 @@
 - 敏感字段（上游 Key / OAuth token / 代理密码 / JWT secret）AES-256-GCM 落库，展示一律掩码；
 - SSRF 防护（私网段拦截 + DNS 钉住）、请求体 100MiB 上限、受控下载流式限长。
 
+[0.2.1]: https://github.com/snnh/nextapi/releases/tag/v0.2.1
 [0.2.0]: https://github.com/snnh/nextapi/releases/tag/v0.2.0
 [0.1.0]: https://github.com/snnh/nextapi/releases/tag/v0.1.0

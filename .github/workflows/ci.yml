@@ -1,14 +1,14 @@
 name: CI
 
-# 单工作流双形态（push 不触发，避免每次提交都跑全量检查）：
+# 单工作流双形态（分支 push 不触发，避免每次提交都跑全量检查）：
 # - pull_request：跑 Rust 检查 + 前端构建 + Docker 单架构试构建（不推送）
-# - release published：因 push 不再触发 CI，release 时重跑 Rust 检查兜底；
-#   多架构镜像走原生 runner 分布式构建（amd64/arm64 各自原生编译，免 QEMU 模拟），
-#   按 digest 推送后合并 manifest 打版本标签（不发布其他构建产物）
+# - 打 v* 标签 push 即发布：跑 Rust 检查兜底 + 多架构镜像原生 runner 分布式构建
+#   （amd64/arm64 各自原生编译，免 QEMU 模拟），按 digest 推送后合并 manifest
+#   打版本标签（不发布其他构建产物；GitHub Release 用 gh 另行创建，不触发本流程）
 on:
   pull_request:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
@@ -66,10 +66,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # release：原生 runner 分布式构建——amd64/arm64 各自原生编译（免 QEMU），
+  # tag 发布：原生 runner 分布式构建——amd64/arm64 各自原生编译（免 QEMU），
   # 按 digest 推送，随后由 merge job 合并 manifest
   docker-release:
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
@@ -113,10 +113,10 @@ jobs:
           path: /tmp/digests/
           if-no-files-found: error
 
-  # release：合并各架构 digest 为多架构 manifest，打版本标签；
-  # 同时等待 rust 检查通过（push 不触发 CI，此处是唯一兜底门禁）
+  # tag 发布：合并各架构 digest 为多架构 manifest，打版本标签；
+  # 同时等待 rust 检查通过（分支 push 不触发 CI，此处是唯一兜底门禁）
   merge:
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [docker-release, rust]
     runs-on: ubuntu-latest
     permissions:
@@ -137,7 +137,7 @@ jobs:
 
       - name: 合并 manifest 并推送标签
         run: |
-          VER="${{ github.event.release.tag_name }}"; VER="${VER#v}"
+          VER="${GITHUB_REF_NAME#v}"
           TAGS="-t $IMAGE:$VER -t $IMAGE:latest"
           # 语义化版本追加 major.minor 浮动标签
           if [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
