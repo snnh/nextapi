@@ -20,9 +20,14 @@ pub async fn download_b64(state: &AppState, url: &str) -> ApiResult<(String, Str
     if !cfg.enabled {
         return Err(crate::error::ApiError::Forbidden);
     }
-    crate::netguard::check_outbound_url(url).await?;
-    let client =
-        crate::netguard::onetime_client_via_matrix(state, cfg.use_proxy, &cfg.proxy_id, url);
+    let pinned = crate::netguard::check_outbound_url(url).await?;
+    let client = crate::netguard::onetime_client_via_matrix(
+        state,
+        cfg.use_proxy,
+        &cfg.proxy_id,
+        url,
+        &pinned,
+    );
     let out =
         crate::netguard::fetch_limited(&client, url, cfg.timeout_secs, cfg.max_size_mb).await?;
     let mime = smart_image_mime(out.content_type.as_deref(), url, &out.bytes);
@@ -43,9 +48,14 @@ pub async fn download_image_for_request(
     let hot = state.hot.load();
     let cfg = hot.media_download.clone();
     drop(hot);
-    crate::netguard::check_outbound_url(url).await?;
-    let client =
-        crate::netguard::onetime_client_via_matrix(state, cfg.use_proxy, &cfg.proxy_id, url);
+    let pinned = crate::netguard::check_outbound_url(url).await?;
+    let client = crate::netguard::onetime_client_via_matrix(
+        state,
+        cfg.use_proxy,
+        &cfg.proxy_id,
+        url,
+        &pinned,
+    );
     let out =
         crate::netguard::fetch_limited(&client, url, cfg.timeout_secs, cfg.max_size_mb).await?;
     let mime = smart_image_mime(out.content_type.as_deref(), url, &out.bytes);

@@ -11,7 +11,9 @@ use std::time::Duration;
 use crate::error::{ApiError, ApiResult};
 
 /// SSRF 校验：URL 合法性 + 协议 + 内网地址/域名 + DNS 复核。
-pub async fn check_outbound_url(url: &str) -> ApiResult<()> {
+/// 返回复核通过的 IP 列表——调用方应据此钉住连接解析（resolve_to），
+/// 否则复核与实际建连两次解析结果可不同（DNS rebinding TOCTOU，发布审阅 M1）。
+pub async fn check_outbound_url(url: &str) -> ApiResult<Vec<std::net::IpAddr>> {
     let parsed =
         reqwest::Url::parse(url).map_err(|e| ApiError::bad_request(format!("URL 非法: {e}")))?;
     if parsed.scheme() != "https" {
@@ -25,7 +27,7 @@ pub async fn check_outbound_url(url: &str) -> ApiResult<()> {
         if is_internal_ip(ip) {
             return Err(ApiError::bad_request("禁止访问内网地址"));
         }
-        return Ok(());
+        return Ok(vec![ip]);
     }
     let lower = host.to_ascii_lowercase();
     if lower == "localhost"
@@ -48,7 +50,7 @@ pub async fn check_outbound_url(url: &str) -> ApiResult<()> {
     if ips.iter().any(|sa| is_internal_ip(sa.ip())) {
         return Err(ApiError::bad_request("域名解析到内网地址，禁止访问"));
     }
-    Ok(())
+    Ok(ips.into_iter().map(|sa| sa.ip()).collect())
 }
 
 /// 内网/保留地址判定（IPv4 段 + IPv6 回环/链路本地/ULA/NAT64/映射地址）。
@@ -77,10 +79,12 @@ pub fn is_internal_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
-/// 一次性出站 client（禁重定向；低频操作不共享连接池）。调用方再按业务挂代理。
+/// 一次性出站 client（禁重定向、禁 gzip 自动解压——受控下载按原始字节计量，
+/// 防压缩炸弹；低频操作不共享连接池）。调用方再按业务挂代理。
 pub fn onetime_client(timeout_secs: u64) -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .no_gzip()
         .connect_timeout(Duration::from_secs(timeout_secs.max(1).min(30)))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
@@ -94,6 +98,7 @@ pub fn onetime_client_via_matrix(
     use_proxy: bool,
     proxy_id: &str,
     url: &str,
+    pinned_ips: &[std::net::IpAddr],
 ) -> reqwest::Client {
     let hot = state.hot.load();
     let snap = state.cache.snapshot();
@@ -119,12 +124,32 @@ pub fn onetime_client_via_matrix(
                     if let Ok(client) = reqwest::Client::builder()
                         .proxy(proxy)
                         .redirect(reqwest::redirect::Policy::none())
+                        .no_gzip()
                         .build()
                     {
                         return client;
                     }
                 }
             }
+        }
+    }
+    // 直连：钉住 DNS 复核结果（TLS SNI/Host 仍用原域名；仅 https，端口 443）。
+    let host = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()));
+    if let (Some(host), false) = (host, pinned_ips.is_empty()) {
+        let addrs: Vec<std::net::SocketAddr> = pinned_ips
+            .iter()
+            .map(|ip| std::net::SocketAddr::new(*ip, 443))
+            .collect();
+        if let Ok(client) = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_gzip()
+            .resolve_to_addrs(&host, &addrs)
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+        {
+            return client;
         }
     }
     onetime_client(10)
@@ -170,17 +195,25 @@ pub async fn fetch_limited(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.split(';').next().unwrap_or("").trim().to_string())
         .filter(|s| !s.is_empty());
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| ApiError::internal(format!("读取响应失败: {e}")))?;
-    if bytes.len() > max_bytes as usize {
-        return Err(ApiError::bad_request(format!(
-            "文件超过大小限制 {max_size_mb}MB"
-        )));
+    // 流式读取逐 chunk 计量，超限即中断——不能 bytes() 全量入内存后再判
+    // （content-length 可伪造/缺失，全量缓冲 + 解压炸弹会打爆内存，发布审阅 H2）。
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::new();
+    loop {
+        let chunk = futures::StreamExt::next(&mut stream)
+            .await
+            .transpose()
+            .map_err(|e| ApiError::internal(format!("读取响应失败: {e}")))?;
+        let Some(chunk) = chunk else { break };
+        if buf.len() + chunk.len() > max_bytes as usize {
+            return Err(ApiError::bad_request(format!(
+                "文件超过大小限制 {max_size_mb}MB"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
     }
     Ok(FetchOut {
-        bytes: bytes.to_vec(),
+        bytes: buf,
         content_type,
     })
 }

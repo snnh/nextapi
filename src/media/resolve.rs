@@ -26,6 +26,10 @@ const GEMINI_IMAGE_MIMES: &[&str] = &[
     "image/heif",
 ];
 
+/// 单请求 URL 图片数量上限（防外连放大：16MB body 可容纳数千 URL，
+/// 每个都触发一次受控下载——发布审阅 M2）。
+pub const MAX_URL_IMAGES_PER_REQUEST: usize = 10;
+
 /// 下载结果缓存：url → 成功 (b64, mime) 或失败原因（失败也缓存，避免候选间重复外连）。
 pub type ResolveCache = HashMap<String, Arc<Result<(String, String), String>>>;
 
@@ -100,8 +104,13 @@ pub fn rewrite_with_cache(ir: &mut IrRequest, cache: &ResolveCache, ctx: &mut Co
                             ctx.degrade("image_url", format!("图片下载失败（{url}）: {e}，丢弃"));
                         }
                     },
-                    // 未下载（不应发生：collect+fetch 先行）→ 保留原样由协议层 degrade
-                    None => out.push(IrPart::ImageUrl { url }),
+                    // 未下载 = 超出单请求上限（fetch 列表被截断）→ degrade 丢弃
+                    None => {
+                        ctx.degrade(
+                            "image_url",
+                            format!("单请求 URL 图片超过上限 {MAX_URL_IMAGES_PER_REQUEST}，丢弃（{url}）"),
+                        );
+                    }
                 },
                 other => out.push(other),
             }
@@ -121,7 +130,9 @@ pub async fn resolve_url_images(
     if urls.is_empty() {
         return;
     }
-    fetch_all(state, &urls, cache).await;
+    // 超出上限的 URL 不下载，rewrite 时按「超过上限」degrade 丢弃
+    let (fetch_list, _excess) = urls.split_at(urls.len().min(MAX_URL_IMAGES_PER_REQUEST));
+    fetch_all(state, fetch_list, cache).await;
     rewrite_with_cache(ir, cache, ctx);
 }
 
@@ -186,18 +197,15 @@ mod tests {
         let Some(IrContent::Parts(parts)) = &ir.messages[0].content else {
             panic!();
         };
-        // ok → inline；bad/gif → 丢弃；missed → 保留原样
-        assert_eq!(parts.len(), 2);
+        // ok → inline；bad/gif/missed → 丢弃
+        assert_eq!(parts.len(), 1);
         assert!(matches!(
             &parts[0],
             IrPart::ImageInline { media_type, data } if media_type == "image/png" && data == "QUJD"
         ));
-        assert!(matches!(
-            &parts[1],
-            IrPart::ImageUrl { url } if url == "https://a.com/missed.png"
-        ));
-        assert_eq!(ctx.degraded.len(), 2);
+        assert_eq!(ctx.degraded.len(), 3);
         assert!(ctx.degraded.iter().any(|d| d.reason.contains("下载失败")));
         assert!(ctx.degraded.iter().any(|d| d.reason.contains("不支持")));
+        assert!(ctx.degraded.iter().any(|d| d.reason.contains("超过上限")));
     }
 }

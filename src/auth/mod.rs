@@ -180,12 +180,10 @@ async fn login(
         .clone();
     let ip = client_ip(&headers, &trusted);
     let limit = state.hot.load().gateway.admin_login_rate_limit_per_min;
-    let rate_key = format!(
-        "{}:{}",
-        body.username.trim().to_ascii_lowercase(),
-        ip.map(|v| v.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
-    );
+    // 限速键只取 username：X-Forwarded-For 可被客户端伪造（client_ip 不校验对端
+    // 是否可信代理），掺入 IP 会使限速可被随机 XFF 完全绕过（发布审阅 H1）。
+    // 单管理员场景下 username 维度已足够防爆破；IP 仍记录进审计。
+    let rate_key = body.username.trim().to_ascii_lowercase();
     if !login_rate_limiter().check(&rate_key, limit) {
         return Err(ApiError::RateLimited);
     }
@@ -194,7 +192,7 @@ async fn login(
     //    用户不存在不写审计（防随机用户名刷爆审计表）；仅密码错误写失败审计，
     //    写入速率受 per-username 限速约束。
     let row = sqlx::query(
-        "SELECT password_hash, session_version, totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1",
+        "SELECT password_hash, session_version, totp_enabled, totp_secret_enc, last_totp_step FROM admin_users WHERE username = $1",
     )
     .bind(&body.username)
     .fetch_optional(&state.db)
@@ -235,11 +233,23 @@ async fn login(
             .and_then(|enc| state.crypto.decrypt(&enc).ok())
             .and_then(|b32| totp::secret_from_base32(&b32));
         let now = Utc::now().timestamp().max(0) as u64;
-        let ok = secret
-            .as_deref()
-            .map(|s| totp::verify(s, &code, now))
-            .unwrap_or(false);
-        if !ok {
+        let step = secret.as_deref().and_then(|s| totp::verify(s, &code, now));
+        // 防重放（RFC 6238 §5.2）：命中步必须大于上次消费步，且原子占用——
+        // 并发/重放同码只会有一个请求把 last_totp_step 推进成功。
+        let consumed = match step {
+            Some(st) => {
+                let r = sqlx::query(
+                    "UPDATE admin_users SET last_totp_step = $2                      WHERE username = $1 AND (last_totp_step IS NULL OR last_totp_step < $2)",
+                )
+                .bind(&body.username)
+                .bind(st)
+                .execute(&state.db)
+                .await?;
+                r.rows_affected() == 1
+            }
+            None => false,
+        };
+        if !consumed {
             let _ = audit(
                 &state,
                 &body.username,
@@ -290,6 +300,7 @@ async fn change_password(
     Json(body): Json<ChangePasswordReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
+    sensitive_rate_check(&state, &username)?;
     let trusted = state
         .file_config
         .read()
@@ -375,17 +386,30 @@ async fn totp_status(
 
 /// POST /totp/setup：生成新机密（pending 态），返回 base32 机密与 otpauth URL。
 /// 机密仅本次展示；已启用时须先禁用才能重新设置。
+#[derive(Debug, Deserialize)]
+struct TotpSetupReq {
+    /// 当前密码——setup 可覆盖 pending 机密，必须验密防持会话者锁死管理员（发布审阅 M5）。
+    password: String,
+}
+
 async fn totp_setup(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Json(body): Json<TotpSetupReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
+    sensitive_rate_check(&state, &username)?;
     let ip = current_client_ip(&state, &headers);
-    let row = sqlx::query("SELECT totp_enabled FROM admin_users WHERE username = $1")
-        .bind(&username)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::Unauthorized)?;
+    let row =
+        sqlx::query("SELECT password_hash, totp_enabled FROM admin_users WHERE username = $1")
+            .bind(&username)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(ApiError::Unauthorized)?;
+    let hash: String = row.get("password_hash");
+    if !verify_password(&hash, &body.password) {
+        return Err(ApiError::bad_request("密码不正确"));
+    }
     if row.try_get::<bool, _>("totp_enabled").unwrap_or(false) {
         return Err(ApiError::Conflict(
             "TOTP 已启用，请先禁用后再重新设置".into(),
@@ -429,32 +453,35 @@ async fn totp_enable(
     Json(body): Json<TotpCodeReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
+    sensitive_rate_check(&state, &username)?;
     let ip = current_client_ip(&state, &headers);
-    let row =
-        sqlx::query("SELECT totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1")
-            .bind(&username)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(ApiError::Unauthorized)?;
+    let row = sqlx::query(
+        "SELECT totp_enabled, totp_secret_enc, last_totp_step FROM admin_users WHERE username = $1",
+    )
+    .bind(&username)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
     if row.try_get::<bool, _>("totp_enabled").unwrap_or(false) {
         return Err(ApiError::bad_request("TOTP 已启用"));
     }
-    let secret = row
-        .try_get::<Option<String>, _>("totp_secret_enc")
-        .ok()
-        .flatten()
-        .ok_or_else(|| ApiError::bad_request("请先生成 TOTP 机密（setup）"))?;
-    let secret =
-        totp::secret_from_base32(&state.crypto.decrypt(&secret).map_err(ApiError::internal)?)
-            .ok_or_else(|| ApiError::internal("TOTP 机密损坏"))?;
+    let secret = decode_totp_secret(
+        &state,
+        row.try_get::<Option<String>, _>("totp_secret_enc")
+            .ok()
+            .flatten(),
+    )?;
     let now = Utc::now().timestamp().max(0) as u64;
-    if !totp::verify(&secret, &body.code, now) {
-        return Err(ApiError::TotpInvalid);
-    }
-    sqlx::query("UPDATE admin_users SET totp_enabled = true WHERE username = $1")
-        .bind(&username)
-        .execute(&state.db)
-        .await?;
+    let step = totp::verify(&secret, &body.code, now).ok_or(ApiError::TotpInvalid)?;
+    // 启用即吊销全部会话（session_version+1，与改密一致，发布审阅 M4）——
+    // 当前会话的旧 token 也失效，前端启用成功后跳回登录页重新登录。
+    sqlx::query(
+        "UPDATE admin_users SET totp_enabled = true, last_totp_step = $2,          session_version = session_version + 1 WHERE username = $1",
+    )
+    .bind(&username)
+    .bind(step)
+    .execute(&state.db)
+    .await?;
     audit(
         &state,
         &username,
@@ -482,9 +509,10 @@ async fn totp_disable(
     Json(body): Json<TotpDisableReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
+    sensitive_rate_check(&state, &username)?;
     let ip = current_client_ip(&state, &headers);
     let row = sqlx::query(
-        "SELECT password_hash, totp_enabled, totp_secret_enc FROM admin_users WHERE username = $1",
+        "SELECT password_hash, totp_enabled, totp_secret_enc, last_totp_step FROM admin_users WHERE username = $1",
     )
     .bind(&username)
     .fetch_optional(&state.db)
@@ -497,19 +525,24 @@ async fn totp_disable(
     if !verify_password(&hash, &body.password) {
         return Err(ApiError::bad_request("密码不正确"));
     }
-    let enc = row
-        .try_get::<Option<String>, _>("totp_secret_enc")
-        .ok()
-        .flatten()
-        .ok_or_else(|| ApiError::internal("TOTP 机密缺失"))?;
-    let secret = totp::secret_from_base32(&state.crypto.decrypt(&enc).map_err(ApiError::internal)?)
-        .ok_or_else(|| ApiError::internal("TOTP 机密损坏"))?;
+    let secret = decode_totp_secret(
+        &state,
+        row.try_get::<Option<String>, _>("totp_secret_enc")
+            .ok()
+            .flatten(),
+    )?;
     let now = Utc::now().timestamp().max(0) as u64;
-    if !totp::verify(&secret, &body.code, now) {
+    // 防重放：命中步必须大于上次消费步（登录/enable 已消费的码不可再用于 disable）
+    let last: Option<i64> = row.try_get("last_totp_step").ok().flatten();
+    if totp::verify(&secret, &body.code, now)
+        .filter(|st| last.is_none_or(|l| *st > l))
+        .is_none()
+    {
         return Err(ApiError::TotpInvalid);
     }
+    // 禁用即吊销全部会话（含当前）；机密与防重放游标一并清除。
     sqlx::query(
-        "UPDATE admin_users SET totp_enabled = false, totp_secret_enc = NULL WHERE username = $1",
+        "UPDATE admin_users SET totp_enabled = false, totp_secret_enc = NULL,          last_totp_step = NULL, session_version = session_version + 1 WHERE username = $1",
     )
     .bind(&username)
     .execute(&state.db)
@@ -525,6 +558,23 @@ async fn totp_disable(
     )
     .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 敏感端点（改密/TOTP 管理）限速：与登录共用滑窗限速器，
+/// 键加 `sens:` 前缀隔离——防持会话者爆破旧密码/验证码（发布审阅 M5）。
+fn sensitive_rate_check(state: &AppState, username: &str) -> ApiResult<()> {
+    let limit = state.hot.load().gateway.admin_login_rate_limit_per_min;
+    if !login_rate_limiter().check(&format!("sens:{username}"), limit) {
+        return Err(ApiError::RateLimited);
+    }
+    Ok(())
+}
+
+/// 解密并解析 TOTP 机密（enc 为 DB 中的 AES-GCM 密文）。
+fn decode_totp_secret(state: &AppState, enc: Option<String>) -> ApiResult<Vec<u8>> {
+    let enc = enc.ok_or_else(|| ApiError::bad_request("请先生成 TOTP 机密（setup）"))?;
+    let b32 = state.crypto.decrypt(&enc).map_err(ApiError::internal)?;
+    totp::secret_from_base32(&b32).ok_or_else(|| ApiError::internal("TOTP 机密损坏"))
 }
 
 /// 审计用客户端 IP（复用 trusted_proxies 配置的解析逻辑）。

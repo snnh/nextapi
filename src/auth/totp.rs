@@ -52,10 +52,12 @@ pub fn code_at(secret: &[u8], step: u64) -> String {
 }
 
 /// 校验用户输入的 TOTP 码（容忍 ±WINDOW 步；空/非数字直接失败）。
-pub fn verify(secret: &[u8], code: &str, now_unix: u64) -> bool {
+/// 通过时返回命中的时间步——调用方应持久化并拒绝 step ≤ 上次的码（防重放，
+/// RFC 6238 §5.2：同一 OTP 不得被接受第二次）。
+pub fn verify(secret: &[u8], code: &str, now_unix: u64) -> Option<i64> {
     let code = code.trim();
     if code.len() != CODE_DIGITS as usize || !code.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
+        return None;
     }
     let step = now_unix / STEP_SECS;
     for w in -WINDOW..=WINDOW {
@@ -71,10 +73,10 @@ pub fn verify(secret: &[u8], code: &str, now_unix: u64) -> bool {
             .fold(0u8, |acc, (a, b)| acc | (a ^ b))
             == 0
         {
-            return true;
+            return Some(s);
         }
     }
-    false
+    None
 }
 
 /// 生成 otpauth:// URI（issuer 展示在认证器条目名前）。
@@ -138,13 +140,17 @@ mod tests {
         let s = generate_secret();
         let now = 1_700_000_000u64;
         let step = now / STEP_SECS;
-        assert!(verify(&s, &code_at(&s, step), now));
-        assert!(verify(&s, &code_at(&s, step - 1), now)); // 前一步容忍
-        assert!(verify(&s, &code_at(&s, step + 1), now)); // 后一步容忍
-        assert!(!verify(&s, &code_at(&s, step + 3), now)); // 超窗拒绝
-        assert!(!verify(&s, "12345", now)); // 位数不足
-        assert!(!verify(&s, "abcdef", now)); // 非数字
-        assert!(!verify(&s, "", now));
+        assert_eq!(verify(&s, &code_at(&s, step), now), Some(step as i64));
+        // 前一步容忍，返回命中步供防重放记录
+        assert_eq!(
+            verify(&s, &code_at(&s, step - 1), now),
+            Some(step as i64 - 1)
+        );
+        assert!(verify(&s, &code_at(&s, step + 1), now).is_some()); // 后一步容忍
+        assert!(verify(&s, &code_at(&s, step + 3), now).is_none()); // 超窗拒绝
+        assert!(verify(&s, "12345", now).is_none()); // 位数不足
+        assert!(verify(&s, "abcdef", now).is_none()); // 非数字
+        assert!(verify(&s, "", now).is_none());
     }
 
     #[test]

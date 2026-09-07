@@ -866,11 +866,16 @@ async fn fetch_url(state: &AppState, url: &str) -> ApiResult<Vec<u8>> {
     if !cfg.allow_url {
         return Err(ApiError::Forbidden);
     }
-    crate::netguard::check_outbound_url(url).await?;
+    let pinned = crate::netguard::check_outbound_url(url).await?;
 
     // 一次性 client：禁重定向（重定向目标不复查会绕过 SSRF 校验，review P2-5）。
-    let client =
-        crate::netguard::onetime_client_via_matrix(state, cfg.use_proxy, &cfg.proxy_id, url);
+    let client = crate::netguard::onetime_client_via_matrix(
+        state,
+        cfg.use_proxy,
+        &cfg.proxy_id,
+        url,
+        &pinned,
+    );
     crate::netguard::fetch_limited(&client, url, timeout_secs, max_size_mb)
         .await
         .map(|o| o.bytes)

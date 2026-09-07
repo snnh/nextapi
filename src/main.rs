@@ -100,10 +100,9 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     // 已知占位值（docker-compose.yml / config.example.yaml 中的 CHANGE_ME）一律拒绝——
     // 公开仓库的固定占位串等同公开密钥，不可用于签名/加密。
-    const KNOWN_PLACEHOLDERS: &[&str] = &["__CHANGE_ME__请替换为随机密钥__", "CHANGE_ME", "changeme"];
-    let is_placeholder = |v: &str| {
-        KNOWN_PLACEHOLDERS.iter().any(|p| v.contains(p))
-    };
+    const KNOWN_PLACEHOLDERS: &[&str] =
+        &["__CHANGE_ME__请替换为随机密钥__", "CHANGE_ME", "changeme"];
+    let is_placeholder = |v: &str| KNOWN_PLACEHOLDERS.iter().any(|p| v.contains(p));
     let mut jwt_secret = jwt_secret;
     if is_placeholder(&jwt_secret) {
         anyhow::bail!("JWT 密钥仍是占位值，请替换为随机密钥（openssl rand -base64 48）");
@@ -123,7 +122,9 @@ async fn main() -> anyhow::Result<()> {
     {
         let sk = std::env::var("NEXTAPI_SECRET_KEY").unwrap_or_default();
         if is_placeholder(&sk) {
-            anyhow::bail!("NEXTAPI_SECRET_KEY 仍是占位值，请替换为随机密钥（openssl rand -base64 48）");
+            anyhow::bail!(
+                "NEXTAPI_SECRET_KEY 仍是占位值，请替换为随机密钥（openssl rand -base64 48）"
+            );
         }
     }
     info!(%listen, listen_src, jwt_src, "启动类参数解析完成");

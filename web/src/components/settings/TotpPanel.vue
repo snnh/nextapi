@@ -21,7 +21,24 @@
 
       <!-- 未启用：设置流程 -->
       <template v-if="!status?.enabled">
-        <el-button v-if="!setup" type="primary" @click="doSetup">生成 TOTP 机密</el-button>
+        <template v-if="!setup">
+          <el-form inline @submit.prevent>
+            <el-form-item label="当前密码">
+              <el-input
+                v-model="setupPassword"
+                type="password"
+                show-password
+                style="width: 200px"
+                placeholder="设置 TOTP 需验证密码"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="busy" :disabled="!setupPassword" @click="doSetup">
+                生成 TOTP 机密
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </template>
         <div v-else class="setup-box">
           <div class="qr-row">
             <img v-if="qrDataUrl" :src="qrDataUrl" class="qr" alt="TOTP 二维码" />
@@ -85,6 +102,7 @@ import type { TotpSetupResp, TotpStatusResp } from '@/api/types'
 
 const loading = ref(false)
 const busy = ref(false)
+const setupPassword = ref("")
 const status = ref<TotpStatusResp | null>(null)
 const setup = ref<TotpSetupResp | null>(null)
 const qrDataUrl = ref('')
@@ -106,7 +124,8 @@ async function load() {
 async function doSetup() {
   busy.value = true
   try {
-    setup.value = await authApi.totpSetup()
+    setup.value = await authApi.totpSetup(setupPassword.value)
+    setupPassword.value = ""
     qrDataUrl.value = await QRCode.toDataURL(setup.value.otpauth_url, { width: 180, margin: 1 })
     enableCode.value = ''
   } catch (e) {
@@ -120,9 +139,9 @@ async function doEnable() {
   busy.value = true
   try {
     await authApi.totpEnable(enableCode.value)
-    ElMessage.success('TOTP 已启用，下次登录需输入验证码')
-    cancelSetup()
-    await load()
+    ElMessage.success('TOTP 已启用，所有会话已注销，请重新登录')
+    relogin()
+    return
   } catch (e) {
     ElMessage.error(errMsg(e))
   } finally {
@@ -134,16 +153,21 @@ async function doDisable() {
   busy.value = true
   try {
     await authApi.totpDisable(disableForm.password, disableForm.code)
-    ElMessage.success('TOTP 已禁用')
-    disabling.value = false
-    disableForm.password = ''
-    disableForm.code = ''
-    await load()
+    ElMessage.success('TOTP 已禁用，所有会话已注销，请重新登录')
+    relogin()
+    return
   } catch (e) {
     ElMessage.error(errMsg(e))
+    disableForm.password = ''
   } finally {
     busy.value = false
   }
+}
+
+/** enable/disable 成功后服务端已吊销全部会话：清 token 回登录页 */
+function relogin() {
+  localStorage.removeItem('nextapi_token')
+  window.location.href = '/login'
 }
 
 function cancelSetup() {
