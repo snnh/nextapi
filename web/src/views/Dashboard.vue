@@ -161,8 +161,8 @@ const lineOption = computed<EChartsOption>(() => {
     grid: { left: 10, right: 24, top: 36, bottom: 10, containLabel: true },
     xAxis: { type: 'category', boundaryGap: false, data: labels },
     yAxis: [
-      { type: 'value', name: '请求数' },
-      { type: 'value', name: `成本(${currency.value})` },
+      { type: 'value' },
+      { type: 'value', splitLine: { show: false } },
     ],
     series: [
       { name: '请求数', type: 'line', smooth: true, connectNulls: true, yAxisIndex: 0, data: requests },
