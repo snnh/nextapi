@@ -58,13 +58,13 @@ docker compose up -d
 docker compose logs nextapi | grep 初始密码
 ```
 
-浏览器打开 `http://<主机IP>:8080` 登录管理后台。
+浏览器打开 `http://<主机IP>:3220` 登录管理后台。
 
 不用 compose 时（需自备 PostgreSQL 15+）：
 
 ```sh
 docker run -d --name nextapi --restart unless-stopped \
-  -p 8080:8080 -v nextapi-data:/data \
+  -p 3220:3220 -v nextapi-data:/data \
   -e DATABASE_URL=postgres://user:pass@host:5432/nextapi \
   -e NEXTAPI_SECRET_KEY=$(openssl rand -base64 48) \
   -e NEXTAPI_ADMIN_JWT_SECRET=$(openssl rand -base64 48) \
@@ -84,7 +84,7 @@ docker run -d --name nextapi --restart unless-stopped \
 
 ## 网关调用示例
 
-网关默认监听 `0.0.0.0:8080`，四协议端点共用网关 Key 鉴权：
+网关默认监听 `0.0.0.0:3220`，四协议端点共用网关 Key 鉴权：
 
 | 协议 | 端点 | 鉴权头 |
 |---|---|---|
@@ -97,19 +97,19 @@ docker run -d --name nextapi --restart unless-stopped \
 
 ```bash
 # OpenAI 风格
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:3220/v1/chat/completions \
   -H "Authorization: Bearer sk-网关Key" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"你好"}]}'
 
 # Anthropic 风格（同一网关 Key）
-curl http://localhost:8080/v1/messages \
+curl http://localhost:3220/v1/messages \
   -H "x-api-key: sk-网关Key" -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-3-5-sonnet","max_tokens":1024,"messages":[{"role":"user","content":"你好"}]}'
 
 # Gemini 风格
-curl http://localhost:8080/v1beta/models/gemini-1.5-pro:generateContent \
+curl http://localhost:3220/v1beta/models/gemini-1.5-pro:generateContent \
   -H "x-goog-api-key: sk-网关Key" \
   -H "Content-Type: application/json" \
   -d '{"contents":[{"parts":[{"text":"你好"}]}]}'

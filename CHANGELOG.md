@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### ⚠️ Breaking
+- 默认监听端口 8080 → **3220**（`server.listen` 默认值、Dockerfile EXPOSE/healthcheck、
+  compose 映射、vite 开发代理、文档同步更新）。**Docker 用户升级时须把端口映射改为
+  `3220:3220`**；如需保持旧端口，设 `NEXTAPI_LISTEN=0.0.0.0:8080` 或在 config.yaml
+  显式写 `server.listen`（启动类参数 YAML 优先于代码默认值，显式配置者不受影响）。
+
+### Added
+- 定价页改版：默认按「供应商+模型」分组显示；新增「按模型定价」对话框，一屏配置
+  同一模型的输入/输出/缓存写/缓存读四种价格（各自可含分段），提交自动 diff
+  创建/更新/删除；参考定价一键填充；
+- Codex 渠道模型拉取与连通测试适配 OAuth（ensure_token 临期刷新 + 目录解析，
+  过滤不可见/不支持 API 的模型）。
+
 ## [0.1.0] - 2026-09-07
 
 首个公开发布版本。

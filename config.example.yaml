@@ -26,7 +26,7 @@
 # 启动类参数（需重启才生效；优先级 env > UI > YAML）
 # -----------------------------------------------------------------------------
 server:
-  listen: "0.0.0.0:8080"          # 监听地址。环境变量 NEXTAPI_LISTEN 可覆盖。
+  listen: "0.0.0.0:3220"          # 监听地址。环境变量 NEXTAPI_LISTEN 可覆盖。
   admin_jwt_secret: ""            # 管理端 JWT 签名密钥。生产必填；为空且非 debug 模式拒绝启动。
                                   # 环境变量 NEXTAPI_ADMIN_JWT_SECRET 可覆盖。
                                   # ⚠️ 敏感字段：用足够长的随机串；/api/config 导出时掩码。
