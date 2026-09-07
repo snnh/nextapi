@@ -578,9 +578,9 @@ pub async fn insert_batch(
     }
     for ((key_id, window, period_start), value) in quota_tokens {
         sqlx::query(
-            "INSERT INTO quota_usage (key_id, unit, window, period_start, value, updated_at) \
+            "INSERT INTO quota_usage (key_id, unit, window_kind, period_start, value, updated_at) \
              VALUES ($1,'tokens',$2,$3,$4, now()) \
-             ON CONFLICT (key_id, unit, window, period_start) DO UPDATE \
+             ON CONFLICT (key_id, unit, window_kind, period_start) DO UPDATE \
              SET value = quota_usage.value + EXCLUDED.value, updated_at = now()",
         )
         .bind(key_id)
@@ -627,9 +627,9 @@ pub async fn insert_batch(
     }
     for ((key_id, window, period_start), value) in quota_cost_cny {
         sqlx::query(
-            "INSERT INTO quota_usage (key_id, unit, window, period_start, value, updated_at) \
+            "INSERT INTO quota_usage (key_id, unit, window_kind, period_start, value, updated_at) \
              VALUES ($1,'cost_cny',$2,$3,$4, now()) \
-             ON CONFLICT (key_id, unit, window, period_start) DO UPDATE \
+             ON CONFLICT (key_id, unit, window_kind, period_start) DO UPDATE \
              SET value = quota_usage.value + EXCLUDED.value, updated_at = now()",
         )
         .bind(key_id)
@@ -641,9 +641,9 @@ pub async fn insert_batch(
     }
     for ((key_id, window, period_start), value) in quota_cost_usd {
         sqlx::query(
-            "INSERT INTO quota_usage (key_id, unit, window, period_start, value, updated_at) \
+            "INSERT INTO quota_usage (key_id, unit, window_kind, period_start, value, updated_at) \
              VALUES ($1,'cost_usd',$2,$3,$4, now()) \
-             ON CONFLICT (key_id, unit, window, period_start) DO UPDATE \
+             ON CONFLICT (key_id, unit, window_kind, period_start) DO UPDATE \
              SET value = quota_usage.value + EXCLUDED.value, updated_at = now()",
         )
         .bind(key_id)

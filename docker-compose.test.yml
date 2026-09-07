@@ -1,0 +1,5 @@
+# 集成测试覆盖：仅改宿主机端口映射（8080 被 1panel 占用），其余继承主 compose。
+services:
+  nextapi:
+    ports: !override
+      - "18080:8080"

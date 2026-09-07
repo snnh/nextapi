@@ -190,7 +190,7 @@ pub async fn check_quota(
 
     // 查询该窗口的累计用量；无行 = 0
     let usage: Option<Decimal> = match sqlx::query_scalar::<_, Decimal>(
-        "SELECT value FROM quota_usage WHERE key_id = $1 AND unit = $2 AND window = $3 AND period_start = $4",
+        "SELECT value FROM quota_usage WHERE key_id = $1 AND unit = $2 AND window_kind = $3 AND period_start = $4",
     )
     .bind(key.id)
     .bind(unit.as_str())

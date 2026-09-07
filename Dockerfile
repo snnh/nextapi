@@ -33,7 +33,12 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
 COPY src ./src
 COPY migrations ./migrations
 COPY --from=fe /fe/dist ./web/dist
-RUN cargo build --release
+# BuildKit 的 COPY 保留源文件 mtime：真实源码若旧于哑构建产物时间戳，cargo 指纹比对
+# 会误判 fresh 而跳过主 crate 重编，把 374KB 的哑构建空壳打进镜像。此处刷新 mtime 强制
+# 全量重编，并用体积下限做硬校验（真实 release 二进制 >> 1MB，哑构建约 0.4MB）。
+RUN find src migrations -type f -exec touch {} + \
+    && cargo build --release \
+    && test "$(stat -c%s target/release/nextapi)" -gt 1048576
 
 # ---------- runtime ----------
 FROM debian:bookworm-slim AS runtime
