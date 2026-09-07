@@ -423,9 +423,13 @@ mod tests {
 
     #[test]
     fn request_params_meta_gemini_max_output_tokens() {
-        let v = json!({ "model": "gemini-pro", "maxOutputTokens": 100 });
+        // Gemini 规范位置在 generationConfig.maxOutputTokens（嵌套）
+        let v = json!({ "model": "gemini-pro", "generationConfig": { "maxOutputTokens": 100 } });
         let meta = request_params_meta(Protocol::Gemini, &v);
         assert_eq!(meta["max_tokens"], json!(100));
+        // 顶层写法不识别（此前误读）
+        let v2 = json!({ "model": "gemini-pro", "maxOutputTokens": 100 });
+        assert!(request_params_meta(Protocol::Gemini, &v2).get("max_tokens").is_none());
     }
 
     #[test]
