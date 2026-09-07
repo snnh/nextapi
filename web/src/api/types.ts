@@ -217,6 +217,17 @@ export interface TestResp {
   error?: string
 }
 
+/** 查看上游明文 API Key（管理员二次验证后，仅本次展示） */
+export interface UpstreamRevealReq {
+  password: string
+  /** 已启用 TOTP 时必填（6 位数字） */
+  totp_code?: string
+}
+
+export interface UpstreamRevealResp {
+  api_key: string
+}
+
 /** 渠道模型列表项（实时拉取 + 路由状态标注） */
 export interface UpstreamModelItem {
   name: string

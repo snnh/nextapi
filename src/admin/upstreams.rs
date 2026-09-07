@@ -1,6 +1,7 @@
 //! 上游渠道管理 API（/api/upstreams，PLAN.md §5.3 / §7.2）。
 //!
 //! - `api_key_enc` / `api_key_plain` 绝不对外输出，响应改用 `has_api_key: bool`；
+//!   POST /{id}/reveal-key 例外：管理员密码（+ TOTP）安全验证通过后才解密返回明文，仅本次展示；
 //! - api_key 语义（更新）：未传或掩码回传（`"***"`）→ 保持；空串 `""` → 清除；其他 → 加密更新；
 //!   创建时非空即加密，`NEXTAPI_SECRET_KEY` 未设置则拒绝保存（BadRequest）；
 //! - protocols 元素须可 parse 为 `Protocol`（openai_chat/openai_responses/anthropic/gemini）；
@@ -19,7 +20,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, Row};
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -36,6 +37,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/{id}", put(update_upstream).delete(delete_upstream))
         .route("/{id}/test", post(test_upstream))
         .route("/{id}/oauth/refresh", post(refresh_oauth))
+        .route("/{id}/reveal-key", post(reveal_upstream_key))
 }
 
 /// upstreams 表行（含加密列；对外绝不输出 api_key_enc）。
@@ -732,6 +734,57 @@ async fn refresh_oauth(
     Ok(Json(
         serde_json::json!({ "ok": true, "account_id": account }),
     ))
+}
+
+/// 查看明文 API Key 请求体：管理员密码二次验证（已启用 TOTP 时还需动态码）。
+#[derive(Debug, Deserialize)]
+struct RevealKeyReq {
+    password: String,
+    /// 已启用 TOTP 时必填（6 位数字）。
+    #[serde(default)]
+    totp_code: Option<String>,
+}
+
+/// POST /{id}/reveal-key：管理员密码（+ TOTP）安全验证通过后返回明文 API Key。
+///
+/// - 先验证凭据再取上游密文：错误信息与资源状态无关，未授权/弱口令请求无法探测上游；
+/// - 明文仅本次响应展示，不做缓存/放行，每次查看都须重新验证；
+/// - 每次成功查看写审计（action: upstream.key_reveal）；
+/// - 未设置 API Key 的上游（如 codex OAuth 渠道）返回 400 不可查看。
+async fn reveal_upstream_key(
+    State(state): State<Arc<AppState>>,
+    admin: AdminUsername,
+    Path(id): Path<Uuid>,
+    Json(body): Json<RevealKeyReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    auth::sensitive_verify(&state, &admin.0, &body.password, body.totp_code.as_deref()).await?;
+
+    let row = sqlx::query("SELECT name, api_key_enc FROM upstreams WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let name: String = row.get("name");
+    let enc: Option<String> = row.try_get("api_key_enc").unwrap_or(None);
+    let enc = enc.ok_or_else(|| ApiError::bad_request("该上游未设置 API Key，无需查看"))?;
+
+    let api_key = state.crypto.decrypt(&enc).map_err(|e| {
+        tracing::error!("解密上游 {id} 的 API Key 失败: {e}");
+        ApiError::internal("API Key 解密失败")
+    })?;
+
+    auth::audit(
+        &state,
+        &admin.0,
+        "upstream.key_reveal",
+        "upstream",
+        Some(&id.to_string()),
+        serde_json::json!({ "name": name }),
+        None,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({ "api_key": api_key })))
 }
 
 /// api_key 更新语义：未传或掩码 → Keep；空串 → Clear；其他 → Set(新明文)。
