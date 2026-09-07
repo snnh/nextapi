@@ -1,12 +1,11 @@
 name: CI
 
-# 单工作流双形态：
-# - push / pull_request：跑 Rust 检查 + 前端构建 + Docker 单架构试构建（不推送）
-# - release published：打 tag 的提交已在 main 上通过 CI，跳过重复检查；
+# 单工作流双形态（push 不触发，避免每次提交都跑全量检查）：
+# - pull_request：跑 Rust 检查 + 前端构建 + Docker 单架构试构建（不推送）
+# - release published：因 push 不再触发 CI，release 时重跑 Rust 检查兜底；
 #   多架构镜像走原生 runner 分布式构建（amd64/arm64 各自原生编译，免 QEMU 模拟），
 #   按 digest 推送后合并 manifest 打版本标签（不发布其他构建产物）
 on:
-  push:
   pull_request:
   release:
     types: [published]
@@ -16,8 +15,7 @@ env:
 
 jobs:
   rust:
-    # Release 发布时跳过：tag 指向的 main 提交已经过本 job 检查
-    if: github.event_name != 'release'
+    # push 不触发 CI，release 时必须重跑检查兜底（不能假设 tag 提交已过 CI）
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -52,9 +50,9 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo build --release
 
-  # push/PR：单架构试构建（不推送），验证 Dockerfile 可用
+  # PR：单架构试构建（不推送），验证 Dockerfile 可用
   docker:
-    if: github.event_name != 'release'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     needs: rust
     steps:
@@ -115,10 +113,11 @@ jobs:
           path: /tmp/digests/
           if-no-files-found: error
 
-  # release：合并各架构 digest 为多架构 manifest，打版本标签
+  # release：合并各架构 digest 为多架构 manifest，打版本标签；
+  # 同时等待 rust 检查通过（push 不触发 CI，此处是唯一兜底门禁）
   merge:
     if: github.event_name == 'release'
-    needs: docker-release
+    needs: [docker-release, rust]
     runs-on: ubuntu-latest
     permissions:
       contents: read
