@@ -20,11 +20,14 @@ pub struct Preset {
     pub protocols: &'static [&'static str],
     /// 图像原生接口根（仅阿里系：文本兼容根与图像原生根不同）
     pub media_base_url: Option<&'static str>,
+    /// 分协议 base_url 覆盖（多根供应商：如 DeepSeek 的 Anthropic 根独立于 OpenAI 根），
+    /// provision 时写入 upstreams.extra.protocol_base_urls
+    pub protocol_base_urls: Option<&'static [(&'static str, &'static str)]>,
     pub description: &'static str,
 }
 
-/// 全部预设（8 个，见契约 §2）
-static PRESETS: [Preset; 8] = [
+/// 全部预设（9 个）
+static PRESETS: [Preset; 9] = [
     Preset {
         name: "dashscope",
         display_name: "阿里云百炼 DashScope",
@@ -37,6 +40,7 @@ static PRESETS: [Preset; 8] = [
             "images_dashscope_async",
         ],
         media_base_url: Some("https://dashscope.aliyuncs.com"),
+        protocol_base_urls: None,
         description:
             "阿里云百炼：文本走 OpenAI 兼容；图像走 DashScope 原生（Qwen-Image 同步 + 万相异步）。",
     },
@@ -47,6 +51,7 @@ static PRESETS: [Preset; 8] = [
         base_url: "https://qianfan.baidubce.com/v2",
         protocols: &["openai_chat"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "百度千帆：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -56,6 +61,7 @@ static PRESETS: [Preset; 8] = [
         base_url: "https://api.moonshot.cn/v1",
         protocols: &["openai_chat"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "月之暗面 Kimi：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -65,6 +71,7 @@ static PRESETS: [Preset; 8] = [
         base_url: "https://api.hunyuan.cloud.tencent.com/v1",
         protocols: &["openai_chat"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "腾讯混元 TokenHub：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -74,6 +81,7 @@ static PRESETS: [Preset; 8] = [
         base_url: "https://open.bigmodel.cn/api/paas/v4",
         protocols: &["openai_chat"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "智谱 GLM：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -83,6 +91,7 @@ static PRESETS: [Preset; 8] = [
         base_url: "https://ark.cn-beijing.volces.com/api/v3",
         protocols: &["openai_chat"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "字节火山方舟：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -92,6 +101,7 @@ static PRESETS: [Preset; 8] = [
         base_url: "https://openrouter.ai/api/v1",
         protocols: &["openai_chat", "openai_responses"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "OpenRouter：OpenAI Chat/Responses 兼容聚合站，模型路由 + 联网搜索透传。",
     },
     Preset {
@@ -102,11 +112,24 @@ static PRESETS: [Preset; 8] = [
         // 四协议兼容：OpenAI Chat / Responses / Anthropic / Gemini
         protocols: &["openai_chat", "openai_responses", "anthropic", "gemini"],
         media_base_url: None,
+        protocol_base_urls: None,
         description: "Zenmux：四协议兼容聚合站，zenmux/auto 自动路由、跨协议调用。",
+    },
+    Preset {
+        name: "deepseek",
+        display_name: "DeepSeek",
+        kind: "deepseek",
+        base_url: "https://api.deepseek.com/v1",
+        // 官网原生三协议：OpenAI Chat + Responses（/v1 根）+ Anthropic（/anthropic 独立根）
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
+        media_base_url: None,
+        protocol_base_urls: Some(&[("anthropic", "https://api.deepseek.com/anthropic/v1")]),
+        description:
+            "DeepSeek 官方：原生支持 OpenAI Chat/Responses 与 Anthropic 三协议（Anthropic 走独立 /anthropic 根，已内置映射）。",
     },
 ];
 
-/// 全部预设（8 个，见契约 §2）。
+/// 全部预设（9 个）。
 pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
@@ -162,6 +185,16 @@ pub async fn provision(
         extra.insert(
             "media_base_url".to_string(),
             serde_json::Value::String(m.to_string()),
+        );
+    }
+    if let Some(pbu) = preset.protocol_base_urls {
+        let map: serde_json::Map<String, serde_json::Value> = pbu
+            .iter()
+            .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
+            .collect();
+        extra.insert(
+            "protocol_base_urls".to_string(),
+            serde_json::Value::Object(map),
         );
     }
     let extra = serde_json::Value::Object(extra);
@@ -299,13 +332,13 @@ mod tests {
     #[test]
     fn presets_complete() {
         let ps = presets();
-        assert_eq!(ps.len(), 8, "应有 8 个预设");
+        assert_eq!(ps.len(), 9, "应有 9 个预设");
 
         // name 唯一
         let mut names: Vec<&str> = ps.iter().map(|p| p.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 8, "预设 name 必须唯一");
+        assert_eq!(names.len(), 9, "预设 name 必须唯一");
 
         // protocols 全在白名单内
         const WHITELIST: &[&str] = &[

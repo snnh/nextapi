@@ -462,6 +462,9 @@ async function addSelected() {
 }
 
 const form = reactive<FormState>(defaultForm())
+/** 编辑时的原始 extra 快照：buildExtra 在其上合并表单管辖区字段，其余键（如
+ *  protocol_base_urls）原样保留，避免保存即丢键 */
+const extraSnapshot = ref<UpstreamExtra>({})
 
 const standardSelected = computed<ProtocolName[]>(() =>
   STANDARD_PROTOCOLS.filter((p) => form.protocols.includes(p)),
@@ -534,13 +537,19 @@ function open(upstream?: UpstreamOut) {
     base.model_exclude = [...(upstream.model_exclude ?? [])]
   }
   Object.assign(form, base)
+  extraSnapshot.value = upstream?.extra
+    ? JSON.parse(JSON.stringify(upstream.extra))
+    : {}
   resetModels(upstream)
   visible.value = true
 }
 
 function buildExtra(): UpstreamExtra {
-  const extra: UpstreamExtra = {}
+  // 以快照为底（保留 protocol_base_urls 等表单未覆盖的键）；表单管辖区以表单为准：
+  // overrides / protocol_priority / media_base_url / capabilities 覆盖或清除
+  const extra: UpstreamExtra = JSON.parse(JSON.stringify(extraSnapshot.value ?? {}))
   if (Object.keys(form.overrides).length) extra.overrides = form.overrides
+  else delete extra.overrides
   extra.protocol_priority = [...form.protocolPriority]
   extra.media_base_url = form.media_base_url.trim() || null
   const tri = (v: 'unset' | 'on' | 'off') => (v === 'unset' ? null : v === 'on')
@@ -553,6 +562,8 @@ function buildExtra(): UpstreamExtra {
   // 全部未设置则不写 capabilities 键（保持 extra 干净）
   if (caps.stream !== null || caps.tools !== null || caps.vision !== null || caps.max_context) {
     extra.capabilities = caps
+  } else {
+    delete extra.capabilities
   }
   return extra
 }

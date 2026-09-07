@@ -94,6 +94,8 @@ export const UPSTREAM_KINDS = [
   'volcano',
   'openrouter',
   'zenmux',
+  'deepseek',
+  'codex',
   'custom',
 ]
 

@@ -1380,7 +1380,9 @@ async fn run_gateway(
 
         let url = format!(
             "{}{}",
-            upstream.base_url.trim_end_matches('/'),
+            upstream
+                .base_url_for(outbound.protocol)
+                .trim_end_matches('/'),
             upstream::endpoint_path(outbound.protocol, &up_model, stream)
         );
         let mut req_headers = reqwest::header::HeaderMap::new();
