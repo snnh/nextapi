@@ -15,7 +15,7 @@
       <el-button type="warning" plain :icon="Delete" @click="openCleanup">分区清理</el-button>
     </div>
 
-    <!-- 筛选工具栏 -->
+    <!-- 筛选工具栏：默认保留 时间/模型/request_id，Key/上游/状态码/流式/降级 归入「高级筛选」（默认折叠） -->
     <el-card shadow="never" class="page-card">
       <div class="filter-grid">
         <div class="f-item">
@@ -32,24 +32,6 @@
           />
         </div>
         <div class="f-item">
-          <span class="f-label">Key</span>
-          <el-select v-model="keyId" filterable clearable placeholder="全部 Key" style="width: 200px">
-            <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
-          </el-select>
-        </div>
-        <div class="f-item">
-          <span class="f-label">上游</span>
-          <el-select
-            v-model="upstreamId"
-            filterable
-            clearable
-            placeholder="全部上游"
-            style="width: 180px"
-          >
-            <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
-          </el-select>
-        </div>
-        <div class="f-item">
           <span class="f-label">模型</span>
           <el-input v-model="model" placeholder="模型" clearable style="width: 160px" @keyup.enter="onQuery" />
         </div>
@@ -63,37 +45,72 @@
             @keyup.enter="onQuery"
           />
         </div>
-        <div class="f-item">
-          <span class="f-label">状态码</span>
-          <el-input
-            v-model="statusStr"
-            type="number"
-            placeholder="如 429"
-            clearable
-            style="width: 110px"
-            @keyup.enter="onQuery"
-          />
-        </div>
-        <div class="f-item">
-          <span class="f-label">流式</span>
-          <el-select v-model="streamOpt" style="width: 90px">
-            <el-option label="全部" value="" />
-            <el-option label="是" value="true" />
-            <el-option label="否" value="false" />
-          </el-select>
-        </div>
-        <div class="f-item">
-          <span class="f-label">降级</span>
-          <el-select v-model="degradedOpt" style="width: 90px">
-            <el-option label="全部" value="" />
-            <el-option label="是" value="true" />
-            <el-option label="否" value="false" />
-          </el-select>
-        </div>
       </div>
+
+      <!-- 高级筛选（Key/上游/状态码/流式/降级）：可折叠，避免默认平铺 -->
+      <el-collapse-transition>
+        <div v-show="advancedOpen" class="filter-grid advanced-grid">
+          <div class="f-item">
+            <span class="f-label">Key</span>
+            <el-select v-model="keyId" filterable clearable placeholder="全部 Key" style="width: 200px">
+              <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
+            </el-select>
+          </div>
+          <div class="f-item">
+            <span class="f-label">上游</span>
+            <el-select
+              v-model="upstreamId"
+              filterable
+              clearable
+              placeholder="全部上游"
+              style="width: 180px"
+            >
+              <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
+            </el-select>
+          </div>
+          <div class="f-item">
+            <span class="f-label">状态码</span>
+            <el-input
+              v-model="statusStr"
+              type="number"
+              placeholder="如 429"
+              clearable
+              style="width: 110px"
+              @keyup.enter="onQuery"
+            />
+          </div>
+          <div class="f-item">
+            <span class="f-label">流式</span>
+            <el-select v-model="streamOpt" style="width: 90px">
+              <el-option label="全部" value="" />
+              <el-option label="是" value="true" />
+              <el-option label="否" value="false" />
+            </el-select>
+          </div>
+          <div class="f-item">
+            <span class="f-label">降级</span>
+            <el-select v-model="degradedOpt" style="width: 90px">
+              <el-option label="全部" value="" />
+              <el-option label="是" value="true" />
+              <el-option label="否" value="false" />
+            </el-select>
+          </div>
+        </div>
+      </el-collapse-transition>
+
       <div class="filter-actions">
         <el-button type="primary" :icon="Search" @click="onQuery">查询</el-button>
         <el-button :icon="Refresh" @click="onReset">重置</el-button>
+        <div class="spacer" />
+        <el-tooltip
+          content="Key、上游、精确状态码、流式、降级等诊断条件"
+          placement="top"
+        >
+          <el-button link class="adv-toggle" :type="hasAdvancedFilter() ? 'primary' : 'info'" @click="advancedOpen = !advancedOpen">
+            高级筛选
+            <el-icon :class="{ 'is-open': advancedOpen }"><ArrowDown /></el-icon>
+          </el-button>
+        </el-tooltip>
       </div>
     </el-card>
 
@@ -322,7 +339,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Download, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Download, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { useRoute, useRouter } from 'vue-router'
 import { keyApi, logApi, upstreamApi, type LogListQuery } from '@/api'
@@ -376,6 +393,19 @@ const requestId = ref('')
 const statusStr = ref('')
 const streamOpt = ref<TriState>('')
 const degradedOpt = ref<TriState>('')
+/** 高级筛选（Key/上游/状态码/流式/降级）是否展开；默认收起，URL 带高级条件时自动展开 */
+const advancedOpen = ref(false)
+
+/** 是否存在任意高级筛选条件（用于 URL 恢复自动展开与按钮态提示） */
+function hasAdvancedFilter(): boolean {
+  return (
+    keyId.value !== '' ||
+    upstreamId.value !== '' ||
+    statusStr.value !== '' ||
+    streamOpt.value !== '' ||
+    degradedOpt.value !== ''
+  )
+}
 
 // —— 列表状态 ——
 const rows = ref<LogItem[]>([])

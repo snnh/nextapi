@@ -43,6 +43,9 @@ pub const HDR_VERSION: &str = "x-nextapi-version";
 /// 限流上限/剩余头（M10.5，可选）
 pub const HDR_RL_LIMIT: &str = "x-ratelimit-limit";
 pub const HDR_RL_REMAINING: &str = "x-ratelimit-remaining";
+/// 反代缓冲旁路头（M15）：SSE/流式响应置 `no`，通知 Nginx 等反向代理关闭**该响应**的缓冲，
+/// 避免代理缓冲推迟首 token 与增量帧。仅由 stream_rsp 在流式响应上写入，普通 JSON 响应不受影响。
+pub const HDR_ACCEL_BUFFERING: &str = "x-accel-buffering";
 
 /// 网关版本（编译期确定）。
 pub const GATEWAY_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -743,6 +746,10 @@ fn merge_degraded(a: Option<&str>, b: Option<&str>) -> Option<String> {
 }
 
 /// 构造 SSE 流式响应（degraded 可选：请求侧降级头，发布审阅 L9）。
+///
+/// M15：统一在此写入 `X-Accel-Buffering: no`（网关所有流式/SSE 出口均经由本函数），
+/// 由后端声明该响应不可缓冲；Nginx 见到即对此响应禁用缓冲（与代理层
+/// `proxy_buffering off` 双保险），普通 JSON 响应走 json_rsp 不受影响。
 fn stream_rsp(request_id: &str, body: Body, degraded: Option<&str>) -> Response {
     let mut h = HeaderMap::new();
     h.insert(
@@ -759,6 +766,7 @@ fn stream_rsp(request_id: &str, body: Body, degraded: Option<&str>) -> Response 
         HDR_VERSION,
         header::HeaderValue::from_static(GATEWAY_VERSION),
     );
+    h.insert(HDR_ACCEL_BUFFERING, HeaderValue::from_static("no"));
     if let Some(d) = degraded {
         if let Ok(v) = d.parse::<header::HeaderValue>() {
             h.insert(HDR_DEGRADED, v);
@@ -2929,6 +2937,23 @@ mod tests {
         assert_eq!(merge_degraded(Some("a"), None).as_deref(), Some("a"));
         assert_eq!(merge_degraded(None, Some("b")).as_deref(), Some("b"));
         assert_eq!(merge_degraded(None, None), None);
+    }
+
+    /// M15：SSE 流式响应必须带 X-Accel-Buffering: no；普通 JSON 响应（json_rsp）不写该头。
+    #[test]
+    fn stream_rsp_sets_accel_buffering_no() {
+        let body = serde_json::json!({}).to_string();
+        let stream = stream_rsp("rid", Body::from(body), None);
+        assert_eq!(
+            stream
+                .headers()
+                .get(HDR_ACCEL_BUFFERING)
+                .and_then(|v| v.to_str().ok()),
+            Some("no")
+        );
+        // 普通 JSON 响应不受影响
+        let json = json_rsp(StatusCode::OK, "rid", None, serde_json::json!({}));
+        assert!(json.headers().get(HDR_ACCEL_BUFFERING).is_none());
     }
 
     #[test]
