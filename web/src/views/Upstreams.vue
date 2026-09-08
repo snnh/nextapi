@@ -1,15 +1,21 @@
 <template>
   <div class="page" v-loading="pageLoading">
+    <!-- 页面标题与用途说明 -->
+    <div class="page-intro">
+      <h2>上游供应商</h2>
+      <p>接入并管理实际提供模型的供应商（上游）。接入完成后，到「模型路由」页把这些上游绑定给对外模型。</p>
+    </div>
+
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建上游</el-button>
       <div class="spacer" />
     </div>
 
     <!-- 预设一键接入 -->
-    <el-collapse v-model="presetOpen" class="page-card">
+    <el-collapse v-model="presetOpen" id="presets-panel" class="page-card">
       <el-collapse-item name="presets" title="预设一键接入">
         <div class="hint" style="margin-bottom: 12px">
-          从内置预设快速接入主流上游（阿里百炼 / OpenAI 等）。接入时仅需填写 API Key，其余配置自动填充，接入后可进入列表配置模型路由。
+          从内置预设快速接入主流上游（阿里百炼 / OpenAI 等）。接入时仅需填写 API Key，其余配置自动填充，接入后可到「模型路由」页为模型绑定该上游。
         </div>
         <el-row :gutter="16">
           <el-col v-for="p in presets" :key="p.name" :xs="24" :sm="12" :md="8" :lg="6" class="preset-col">
@@ -43,11 +49,25 @@
     <el-card shadow="never">
       <template #header>
         <div class="table-head">
-          <span>上游供应商</span>
+          <span>接入的上游列表</span>
           <el-button size="small" :icon="Refresh" @click="loadUpstreams">刷新</el-button>
         </div>
       </template>
-      <el-table :data="upstreams" empty-text="暂无上游，可点击右上角「新建上游」或在上方预设一键接入">
+      <el-table :data="upstreams">
+        <template #empty>
+          <div class="empty-guide">
+            <el-empty :image-size="110">
+              <template #description>
+                <div class="empty-title">还没有接入任何上游</div>
+                <div class="empty-sub hint">接入上游后，才能在「模型路由」页把模型请求转发到对应的上游。</div>
+              </template>
+              <div class="empty-actions">
+                <el-button type="primary" :icon="Plus" @click="openCreate">新建上游</el-button>
+                <el-button :icon="MagicStick" @click="openPresetPanel">用预设一键接入</el-button>
+              </div>
+            </el-empty>
+          </div>
+        </template>
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
 
         <el-table-column label="类型" width="140">
@@ -216,7 +236,9 @@
           show-icon
           :title="provisionResult.test.error || '连通测试失败'"
         />
-        <div class="hint" style="margin-top: 8px">上游已创建，可在列表中配置模型路由。</div>
+        <div class="hint" style="margin-top: 8px">
+          上游已创建，可继续到「模型路由」页为对外模型绑定该上游。
+        </div>
       </div>
       <div v-if="provisionConflict" class="hint" style="margin-top: 12px">
         名称「{{ provisionName }}」已存在，请修改名称后重试。
@@ -224,7 +246,8 @@
 
       <template #footer>
         <template v-if="provisionResult">
-          <el-button type="primary" @click="finishProvision">完成</el-button>
+          <el-button @click="finishProvision">完成</el-button>
+          <el-button type="primary" @click="goConfigureRoutes">下一步：配置模型路由</el-button>
         </template>
         <template v-else>
           <el-button @click="provisionVisible = false">取消</el-button>
@@ -299,9 +322,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Plus, Refresh } from '@element-plus/icons-vue'
+import { CopyDocument, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { authApi, presetApi, proxyApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { copyText } from '@/utils/clipboard'
@@ -320,6 +344,7 @@ const presets = ref<Preset[]>([])
 const upstreams = ref<UpstreamOut[]>([])
 const proxies = ref<ProxyOut[]>([])
 const pageLoading = ref(false)
+const router = useRouter()
 /** 预设区折叠态；初始空，首次加载上游成功后按数量决定（有上游默认收起，空库展开引导） */
 const presetOpen = ref<string[]>([])
 /** 预设折叠态是否已按首次加载结果决定过 */
@@ -485,6 +510,20 @@ function openEdit(row: UpstreamOut) {
   formDialogRef.value?.open(row)
 }
 
+/** 空态引导：展开「预设一键接入」区并滚动到可见位置 */
+function openPresetPanel() {
+  presetOpen.value = ['presets']
+  nextTick(() => {
+    document.getElementById('presets-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+/** 预设接入成功后「下一步」：关闭弹窗并跳转模型路由配置页 */
+function goConfigureRoutes() {
+  finishProvision()
+  router.push({ name: 'routes' })
+}
+
 // —— 查看明文 API Key（安全验证） ——
 const revealVisible = ref(false)
 const revealRow = ref<UpstreamOut | null>(null)
@@ -623,6 +662,37 @@ function finishProvision() {
 </script>
 
 <style scoped>
+.page-intro {
+  margin-bottom: 16px;
+}
+.page-intro h2 {
+  margin: 0;
+  color: #1f2329;
+  font-size: 20px;
+}
+.page-intro p {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.empty-guide {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 6px 0 12px;
+}
+.empty-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1f2329;
+}
+.empty-sub {
+  margin-top: 4px;
+}
+.empty-actions {
+  margin-top: 14px;
+}
 .table-head {
   display: flex;
   align-items: center;
