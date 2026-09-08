@@ -1121,6 +1121,9 @@ async fn run_gateway(
         video_seconds: None,
         video_resolution: None,
         video_task_type: None,
+        // M14.3：白名单请求头摘要（鉴权通过后 headers 仍在作用域内；
+        // 仅 user-agent 等调试头，绝不含 Authorization/Cookie/x-api-key）。
+        request_headers: crate::logging::headers::summarize_request_headers(&headers),
     };
     let debug_active = key.debug_active();
     // params_meta 在 body 解析后计算（早退路径不引用，故延迟初始化）。
@@ -1890,6 +1893,9 @@ async fn images_generations(
         video_seconds: None,
         video_resolution: None,
         video_task_type: None,
+        // M14.3：白名单请求头摘要（鉴权通过后 headers 仍在作用域内；
+        // 仅 user-agent 等调试头，绝不含 Authorization/Cookie/x-api-key）。
+        request_headers: crate::logging::headers::summarize_request_headers(&headers),
     };
     let mut debug_req: Option<(serde_json::Value, bool)> = None;
 
