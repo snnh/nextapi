@@ -385,6 +385,8 @@ async fn finalize_succeeded(
         video_seconds: None,
         video_resolution: None,
         video_task_type: None,
+        // 媒体任务终态补记由轮询触发，无原始请求头上下文 → None（不入库）。
+        request_headers: None,
     };
     state.log_sink.log(ev);
     Ok(())
@@ -445,6 +447,8 @@ async fn finalize_failed(state: &AppState, task: &MediaTaskRow, st: &TaskStatus)
         video_seconds: None,
         video_resolution: None,
         video_task_type: None,
+        // 媒体任务终态补记由轮询触发，无原始请求头上下文 → None（不入库）。
+        request_headers: None,
     };
     state.log_sink.log(ev);
     Ok(())

@@ -269,6 +269,10 @@
             <el-collapse-item title="fx_snapshot" name="fx_snapshot">
               <pre class="mono">{{ jsonText(detail?.fx_snapshot) || '-' }}</pre>
             </el-collapse-item>
+            <el-collapse-item title="request_headers（白名单）" name="request_headers">
+              <pre v-if="!isEmptyJson(detail?.request_headers)" class="mono">{{ jsonText(detail?.request_headers) }}</pre>
+              <span v-else class="hint">无记录（仅记录 user-agent 等白名单调试头，不含敏感头）</span>
+            </el-collapse-item>
             <el-collapse-item title="debug_payload" name="debug_payload">
               <pre v-if="!isEmptyJson(detail?.debug_payload)" class="mono">{{ jsonText(detail?.debug_payload) }}</pre>
               <span v-else class="hint">无完整记录（该 Key 未开 debug 或已过期）</span>

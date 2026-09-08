@@ -357,6 +357,8 @@ mod tests {
             video_seconds: None,
             video_resolution: None,
             video_task_type: None,
+            // M14.3 白名单请求头摘要（测试里恒 None）。
+            request_headers: None,
         }
     }
 

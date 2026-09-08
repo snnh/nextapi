@@ -1,6 +1,7 @@
 //! 日志队列与记账（PLAN §5.5/§7：有界异步队列 + 批量写库 + WAL 兜底 + request_id 幂等）。
 //! 契约见 contracts/m4-logging.md（M4-A 实现）。
 
+pub mod headers;
 pub mod partition;
 pub mod redact;
 pub mod wal;
@@ -77,6 +78,11 @@ pub struct LogEvent {
     /// 本次计价实际用到的汇率快照（[{from,to,rate,source,at,inverse}]）。
     #[serde(default)]
     pub fx_snapshot: Option<serde_json::Value>,
+    /// 白名单请求头摘要（M14.3；{\"user-agent\":...}，键小写、值截断）。
+    /// 仅含 headers::ALLOWED_HEADERS 白名单，绝不含 Authorization/Cookie/x-api-key。
+    /// 无白名单头 = None（入库 NULL）。旧 WAL 行缺此字段 → serde(default) → None。
+    #[serde(default)]
+    pub request_headers: Option<serde_json::Value>,
 }
 
 pub const BATCH_MAX: usize = 500;
@@ -216,7 +222,7 @@ impl LogSink {
 // ---------------------------------------------------------------------------
 
 /// 直接来自 LogEvent 的列（顺序固定，与数组类型一一对应）。
-const LOG_COLS: [&str; 32] = [
+const LOG_COLS: [&str; 33] = [
     "request_id",
     "ts",
     "key_id",
@@ -249,10 +255,11 @@ const LOG_COLS: [&str; 32] = [
     "pricing_source",
     "price_used",
     "fx_snapshot",
+    "request_headers",
 ];
 
 /// 对应列的 Postgres 数组类型（与 LOG_COLS 同序）。
-const LOG_ARRAY_TYPES: [&str; 32] = [
+const LOG_ARRAY_TYPES: [&str; 33] = [
     "text[]",
     "timestamptz[]",
     "uuid[]",
@@ -283,6 +290,7 @@ const LOG_ARRAY_TYPES: [&str; 32] = [
     "numeric[]",
     "numeric[]",
     "text[]",
+    "jsonb[]",
     "jsonb[]",
     "jsonb[]",
 ];
@@ -396,6 +404,7 @@ pub async fn insert_batch(
     let mut pricing_source = Vec::with_capacity(n);
     let mut price_used = Vec::with_capacity(n);
     let mut fx_snapshot = Vec::with_capacity(n);
+    let mut request_headers_col = Vec::with_capacity(n);
 
     for ev in &priced {
         request_ids.push(ev.request_id.clone());
@@ -431,6 +440,7 @@ pub async fn insert_batch(
         pricing_source.push(ev.pricing_source.clone());
         price_used.push(ev.price_used.clone());
         fx_snapshot.push(ev.fx_snapshot.clone());
+        request_headers_col.push(ev.request_headers.clone());
     }
 
     let insert_sql = usage_logs_insert_sql();
@@ -467,6 +477,7 @@ pub async fn insert_batch(
         .bind(&pricing_source)
         .bind(&price_used)
         .bind(&fx_snapshot)
+        .bind(&request_headers_col)
         .fetch_all(&mut *tx)
         .await?;
     let mut inserted_ids: HashSet<String> = HashSet::with_capacity(rows.len());
@@ -720,6 +731,9 @@ mod tests {
         assert!(sql.contains("$26::jsonb[]"));
         assert!(sql.contains("$28::numeric[]"));
         assert!(sql.contains("$32::jsonb[]"));
+        // M14.3：request_headers 追加在末尾（$33::jsonb[]），不改变既有列位次
+        assert!(sql.contains("fx_snapshot, request_headers"));
+        assert!(sql.contains("$33::jsonb[]"));
         assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
         // review P4：RETURNING request_id 供聚合侧精确区分新插入行
         assert!(sql.trim_end().ends_with("RETURNING request_id"));
@@ -766,6 +780,30 @@ mod tests {
         assert_eq!(ev.video_seconds, None);
         assert_eq!(ev.video_resolution, None);
         assert_eq!(ev.video_task_type, None);
+        // M14.3：旧 WAL 行不含 request_headers，靠 #[serde(default)] 兼容 → None
+        assert_eq!(ev.request_headers, None);
+    }
+
+    #[test]
+    fn wal_line_with_request_headers_roundtrip() {
+        // M14.3：新 WAL 行携带白名单请求头摘要，序列化/反序列化无损往返。
+        let json = r#"{
+            "request_id":"r4","ts":"2024-01-01T00:00:00Z","key_id":null,
+            "model":"gpt-4","upstream_id":null,"protocol_in":"openai_chat","protocol_out":"openai_chat",
+            "convert_mode":"passthrough","stream":false,"status":200,"error":null,
+            "prompt_tokens":null,"completion_tokens":null,"cache_write_tokens":null,"cache_read_tokens":null,
+            "latency_ms":null,"retry_count":0,"ttfb_ms":null,"degraded":false,
+            "usage_raw":null,"debug_payload":null,
+            "request_headers":{"user-agent":"TestAgent/1.0","content-type":"application/json"}
+        }"#;
+        let ev: LogEvent = serde_json::from_str(json).expect("含 request_headers 应可反序列化");
+        assert_eq!(
+            ev.request_headers.as_ref().unwrap()["user-agent"],
+            "TestAgent/1.0"
+        );
+        let line = serde_json::to_string(&ev).expect("应可序列化");
+        let back: LogEvent = serde_json::from_str(&line).expect("应可反序列化");
+        assert_eq!(back.request_headers, ev.request_headers);
     }
 
     #[test]
