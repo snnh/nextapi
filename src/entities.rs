@@ -346,6 +346,8 @@ pub struct UsageLogRow {
     pub fx_snapshot: Option<serde_json::Value>,
     pub usage_raw: Option<serde_json::Value>,
     pub debug_payload: Option<serde_json::Value>,
+    /// 白名单请求头摘要（M14.3；仅 user-agent 等调试头，绝不含敏感头；旧行为 NULL）
+    pub request_headers: Option<serde_json::Value>,
 }
 
 /// price_rules 行（M5；PLAN §6。dimension_key 为 dimensions 归一化串，参与唯一键）。

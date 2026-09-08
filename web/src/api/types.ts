@@ -480,6 +480,8 @@ export interface UsageLogRow {
   fx_snapshot: unknown
   usage_raw: unknown
   debug_payload: unknown
+  /** 白名单请求头摘要（user-agent 等调试头，键为小写；绝不含 Authorization/Cookie 等敏感头；旧数据为 null） */
+  request_headers: Record<string, string> | null
 }
 
 export interface LogItem extends UsageLogRow {
