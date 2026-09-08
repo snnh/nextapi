@@ -19,15 +19,19 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
-/** 提取后端统一错误体 message；无则回退状态文案 */
+/** 提取后端统一错误体 message；无则回退状态文案。响应带 x-request-id 时追加 request_id 便于与后端日志关联 */
 export function errMsg(e: unknown): string {
   if (axios.isAxiosError(e)) {
     const ax = e as AxiosError<ApiErrorBody>
-    const msg = ax.response?.data?.error?.message
-    if (msg) return msg
-    if (ax.code === 'ECONNABORTED') return '请求超时'
-    if (!ax.response) return '网络错误，无法连接服务器'
-    return `请求失败（HTTP ${ax.response.status}）`
+    let msg: string
+    const bodyMsg = ax.response?.data?.error?.message
+    if (bodyMsg) msg = bodyMsg
+    else if (ax.code === 'ECONNABORTED') msg = '请求超时'
+    else if (!ax.response) msg = '网络错误，无法连接服务器'
+    else msg = `请求失败（HTTP ${ax.response.status}）`
+    const requestId = ax.response?.headers?.['x-request-id']
+    if (typeof requestId === 'string' && requestId) msg += `（request_id: ${requestId}）`
+    return msg
   }
   return e instanceof Error ? e.message : String(e)
 }
@@ -50,8 +54,10 @@ http.interceptors.response.use(
     if (error.response?.status === 401 && !error.config?.url?.includes('/auth/login')) {
       clearToken()
       localStorage.removeItem(USER_KEY)
+      // 跳转登录时保留当前 path+search 作为 redirect，登录成功后跳回
       if (window.location.pathname !== '/login') {
-        window.location.href = '/login'
+        const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+        window.location.href = `/login?redirect=${redirect}`
       }
     }
     return Promise.reject(error)

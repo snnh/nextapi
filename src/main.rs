@@ -377,12 +377,20 @@ async fn main() -> anyhow::Result<()> {
     // 信号到达即先 close 日志队列（此后新事件按「队列关闭」语义处理），
     // drain 设 25s 上限（与 docker/K8s 默认 10-30s 宽限对齐），超时放弃残留连接。
     let drain_notify = Arc::new(tokio::sync::Notify::new());
-    // WithGracefulShutdown 实现的是 IntoFuture，需显式转换
-    let serve =
-        std::future::IntoFuture::into_future(axum::serve(listener, app).with_graceful_shutdown({
+    // WithGracefulShutdown 实现的是 IntoFuture，需显式转换。
+    // M15：into_make_service_with_connect_info 把 TCP 对端地址以
+    // ConnectInfo<SocketAddr> 注入每个请求的扩展，auth::resolve_client_ip
+    // 据此判断对端是否命中 server.trusted_proxies，决定是否采信转发头。
+    let serve = std::future::IntoFuture::into_future(
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown({
             let n = drain_notify.clone();
             async move { n.notified().await }
-        }));
+        }),
+    );
     tokio::pin!(serve);
     tokio::select! {
         res = &mut serve => { res?; }

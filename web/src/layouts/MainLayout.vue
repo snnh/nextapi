@@ -11,11 +11,18 @@
       </div>
       <el-menu :default-active="active" router :collapse="collapsed && !isMobile" :collapse-transition="false"
         background-color="transparent" text-color="#9aa7ae" active-text-color="#ffffff" class="menu"
-        @select="onMenuSelect">
-        <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
-          <el-icon><component :is="m.icon" /></el-icon>
-          <template #title><span>{{ m.title }}</span></template>
-        </el-menu-item>
+        popper-class="aside-menu-popup" @select="onMenuSelect">
+        <!-- 菜单按「概览 / 接入 / 监控 / 高级」分组展示（index 仍为路由 path，兼容旧书签） -->
+        <el-sub-menu v-for="g in menus" :key="g.label" :index="g.label">
+          <template #title>
+            <el-icon><component :is="g.icon" /></el-icon>
+            <span>{{ g.label }}</span>
+          </template>
+          <el-menu-item v-for="m in g.items" :key="m.path" :index="m.path">
+            <el-icon><component :is="m.icon" /></el-icon>
+            <template #title><span>{{ m.title }}</span></template>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
       <div v-show="!collapsed || isMobile" class="aside-version">v{{ version }}</div>
     </el-aside>
@@ -67,16 +74,47 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-// 菜单从路由表派生（单源：router/index.ts 的 meta.title/meta.icon，review P3）
-const menus = computed(() => {
+// 侧栏菜单分组（低风险 IA 优化：仅调整展示结构，不新增/删除/改名任何路由）
+// 单源：router/index.ts 的 meta.title/meta.icon 仍负责标题与图标（review P3）。
+type MenuGroupItem = { path: string; title: string; icon: string }
+interface MenuGroupDef {
+  label: string
+  icon: string
+  /** 组内路由 path（相对根路径），顺序即组内展示顺序 */
+  paths: string[]
+}
+interface MenuGroup extends MenuGroupDef {
+  items: MenuGroupItem[]
+}
+
+// 分组顺序即侧栏展示顺序；路由表顺序与组内顺序解耦
+const MENU_GROUPS: MenuGroupDef[] = [
+  { label: '概览', icon: 'Monitor', paths: ['/dashboard'] },
+  { label: '接入', icon: 'Connection', paths: ['/upstreams', '/routes', '/aliases', '/keys'] },
+  { label: '监控', icon: 'TrendCharts', paths: ['/logs', '/stats'] },
+  { label: '高级', icon: 'Setting', paths: ['/pricing', '/settings'] },
+]
+
+const menus = computed<MenuGroup[]>(() => {
   const root = router.options.routes.find((r) => r.path === '/')
-  return (root?.children ?? [])
+  const flat = (root?.children ?? [])
     .filter((c) => typeof c.path === 'string' && c.meta?.title)
-    .map((c) => ({
-      path: `/${c.path}`,
-      title: c.meta!.title as string,
-      icon: (c.meta!.icon as string) ?? 'Menu',
-    }))
+    .map(
+      (c): MenuGroupItem => ({
+        path: `/${c.path}`,
+        title: c.meta!.title as string,
+        icon: (c.meta!.icon as string) ?? 'Menu',
+      }),
+    )
+  const known = new Set(MENU_GROUPS.flatMap((g) => g.paths))
+  // 兜底：未纳入分组的菜单项挂到「其他」，避免将来路由新增后被静默隐藏
+  const rest = flat.filter((m) => !known.has(m.path))
+  const groups = MENU_GROUPS.map((g) => ({
+    ...g,
+    items: flat.filter((m) => g.paths.includes(m.path)),
+  })).filter((g) => g.items.length > 0)
+  if (rest.length) groups.push({ label: '其他', icon: 'Menu', paths: [], items: rest })
+  return groups
 })
 
 const active = computed(() => route.path)
@@ -208,6 +246,15 @@ async function onCommand(cmd: string) {
   color: #fff;
 
 }
+/* 分组标题（el-sub-menu）与菜单项一致的圆角/悬停反馈 */
+.menu :deep(.el-sub-menu__title) {
+  border-radius: 8px;
+  margin: 2px 0;
+}
+.menu :deep(.el-sub-menu__title:hover) {
+  background-color: rgba(255, 255, 255, .07);
+  color: #e8edef;
+}
 
 /* ---------- 移动端：侧栏变滑出抽屉 ---------- */
 .aside-mobile {
@@ -291,5 +338,37 @@ async function onCommand(cmd: string) {
 }
 @media (max-width: 400px) {
   .username { display: none; }
+}
+</style>
+
+<!-- 收起态（仅图标 64px）分组弹出面板由 el-sub-menu 渲染到 body，需非 scoped 才能命中 -->
+<style>
+.aside-menu-popup.el-popper {
+  border: none;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+}
+.aside-menu-popup .el-menu--popup {
+  background-color: #1d2731;
+  min-width: 160px;
+  padding: 0;
+}
+.aside-menu-popup .el-menu-item {
+  border-radius: 6px;
+  margin: 2px 4px;
+  color: #9aa7ae;
+}
+.aside-menu-popup .el-menu-item:hover {
+  background-color: rgba(255, 255, 255, .07);
+  color: #e8edef;
+}
+.aside-menu-popup .el-menu-item.is-active {
+  background-color: rgba(255, 255, 255, .12);
+  color: #fff;
+}
+.aside-menu-popup .el-popper__arrow::before {
+  background-color: #1d2731 !important;
+  border-color: #1d2731 !important;
 }
 </style>

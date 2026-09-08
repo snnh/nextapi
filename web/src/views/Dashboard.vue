@@ -10,7 +10,7 @@
         <el-radio-button value="CNY">CNY</el-radio-button>
         <el-radio-button value="USD">USD</el-radio-button>
       </el-radio-group>
-      <el-button :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
+      <el-button :icon="Refresh" :loading="loading || statusLoading" @click="refreshAll">刷新</el-button>
       <span v-if="updatedAt" class="hint updated-at">更新于 {{ updatedAt }}</span>
     </div>
 
@@ -24,6 +24,109 @@
         </el-button>
       </div>
     </el-alert>
+
+    <!-- 系统状态 / 待处理事项：仅复用现有 systemApi.status 数据（M13 §4.3 低风险改造，
+         不新增后端接口；拉取失败时仅提示文案，不伪造任何状态） -->
+    <el-card class="status-card" shadow="never">
+      <template #header>
+        <div class="status-head">
+          <span class="status-title">系统状态 · 待处理事项</span>
+          <div class="spacer" />
+          <el-tag v-if="systemStatus" :type="healthTag" size="small" effect="light">{{ healthText }}</el-tag>
+          <span v-if="statusUpdatedAt" class="hint status-updated">更新于 {{ statusUpdatedAt }}</span>
+        </div>
+      </template>
+
+      <div v-loading="statusLoading" class="status-body">
+        <!-- 拉取失败：保留上次成功结果（若有）并明确提示，不猜测当前状态 -->
+        <el-alert
+          v-if="statusError"
+          :type="systemStatus ? 'warning' : 'info'"
+          show-icon
+          :closable="false"
+          class="status-alert"
+        >
+          <template #title>
+            {{ systemStatus ? '系统状态刷新失败，当前展示为上次成功结果' : `系统状态获取失败：${statusError}` }}
+          </template>
+          <div v-if="!systemStatus" class="status-err-sub">
+            状态与待办摘要暂不可展示，请求日志等统计内容不受影响。
+            <el-button link type="primary" size="small" :loading="statusLoading" @click="loadSystemStatus">重试</el-button>
+          </div>
+        </el-alert>
+
+        <template v-else-if="systemStatus">
+          <!-- 子系统速览 -->
+          <div class="status-kv-grid">
+            <div class="kv-item">
+              <div class="kv-label">数据库</div>
+              <div class="kv-value" :class="{ 'is-warn': !systemStatus.database.ok }">
+                {{ systemStatus.database.ok ? '正常' : '异常' }}
+                <span class="hint">{{ systemStatus.database.latency_ms }}ms</span>
+              </div>
+            </div>
+            <div class="kv-item">
+              <div class="kv-label">运行时长</div>
+              <div class="kv-value">{{ fmtUptime(systemStatus.uptime_secs) }}</div>
+            </div>
+            <div class="kv-item">
+              <div class="kv-label">熔断/禁用上游</div>
+              <div class="kv-value" :class="{ 'is-warn': systemStatus.breakers.length > 0 }">
+                {{ systemStatus.breakers.length ? `${systemStatus.breakers.length} 个` : '无' }}
+              </div>
+            </div>
+            <div class="kv-item">
+              <div class="kv-label">日志队列</div>
+              <div class="kv-value">
+                <template v-if="systemStatus.logging.queue_capacity != null">
+                  {{ systemStatus.logging.queue_used }} / {{ systemStatus.logging.queue_capacity }}
+                </template>
+                <template v-else>同步直写</template>
+                <span v-if="systemStatus.logging.overflow_total > 0" class="kv-note is-warn">
+                  溢出 {{ systemStatus.logging.overflow_total }}
+                </span>
+              </div>
+            </div>
+            <div class="kv-item">
+              <div class="kv-label">WAL 兜底</div>
+              <div class="kv-value">
+                {{ systemStatus.logging.wal_files }} 文件
+                <span class="hint">{{ fmtBytes(systemStatus.logging.wal_bytes) }}</span>
+              </div>
+            </div>
+            <div class="kv-item">
+              <div class="kv-label">媒体轮询</div>
+              <div class="kv-value">
+                <template v-if="systemStatus.media_poller.interval_secs > 0">
+                  每 {{ systemStatus.media_poller.interval_secs }}s
+                </template>
+                <template v-else>已停用</template>
+                <span v-if="systemStatus.media_poller.pending_tasks > 0" class="kv-note is-warn">
+                  待回联 {{ systemStatus.media_poller.pending_tasks }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 待处理事项：完全由 status 数据推导，命中异常才列出 -->
+          <el-divider content-position="left">待处理事项</el-divider>
+          <div v-if="pendingItems.length" class="todo-list">
+            <div v-for="(it, i) in pendingItems" :key="i" class="todo-item">
+              <span class="todo-dot" :class="`dot-${it.level}`" />
+              <span class="todo-text">{{ it.text }}</span>
+              <div class="spacer" />
+              <el-button v-if="it.to" link type="primary" size="small" @click="router.push(it.to)">
+                {{ it.action }}
+              </el-button>
+            </div>
+          </div>
+          <div v-else class="todo-empty">
+            <span class="todo-dot dot-ok" />
+            <span>系统各项状态正常，暂无待处理事项。</span>
+          </div>
+        </template>
+      </div>
+    </el-card>
 
     <div v-loading="loading">
       <!-- 统计指标卡：CSS grid 自适应列数（含延迟卡），大数字溢出省略 -->
@@ -115,14 +218,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import dayjs from 'dayjs'
+import { useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import EChart from '@/components/EChart.vue'
 import type { EChartsOption } from 'echarts'
-import { statsApi } from '@/api'
+import { statsApi, systemApi } from '@/api'
 import { errMsg } from '@/api/http'
-import type { SeriesDimension, SeriesGranularity, SeriesPoint, StatsCurrency, StatsQuery, StatsSummary } from '@/api/types'
-import { fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
+import type {
+  SeriesDimension,
+  SeriesGranularity,
+  SeriesPoint,
+  StatsCurrency,
+  StatsQuery,
+  StatsSummary,
+  SystemStatusResp,
+} from '@/api/types'
+import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
 
 type Range = 'today' | '7d'
 
@@ -147,6 +259,115 @@ const upstreamSeries = ref<SeriesPoint[]>([])
 const errorMsg = ref<string | null>(null)
 // 最近一次成功加载完成时间，格式 HH:mm:ss
 const updatedAt = ref<string | null>(null)
+
+// —— 系统状态 / 待处理事项（复用 systemApi.status，独立于统计加载，失败不影响主内容）——
+const router = useRouter()
+const systemStatus = ref<SystemStatusResp | null>(null)
+const statusLoading = ref(false)
+// 状态拉取失败文案（成功后清空；已成功过则保留上次数据并提示快照）
+const statusError = ref<string | null>(null)
+const statusUpdatedAt = ref<string | null>(null)
+
+type Health = 'ok' | 'warn' | 'danger'
+const health = computed<Health>(() => {
+  const s = systemStatus.value
+  if (!s) return 'ok'
+  if (!s.database.ok || s.breakers.length > 0) return 'danger'
+  if (
+    s.logging.overflow_total > 0 ||
+    s.media_poller.pending_tasks > 0 ||
+    s.recent_errors.length > 0
+  ) {
+    return 'warn'
+  }
+  return 'ok'
+})
+const healthText = computed(() => (({ ok: '正常', warn: '需关注', danger: '异常' }) as const)[health.value])
+const healthTag = computed(() => (({ ok: 'success', warn: 'warning', danger: 'danger' }) as const)[health.value])
+
+interface PendingItem {
+  level: 'warn' | 'danger'
+  text: string
+  to?: string
+  action: string
+}
+
+/** 待处理事项由 status 现有字段推导：数据库、熔断/禁用上游、日志溢出、媒体待回联、最近错误 */
+const pendingItems = computed<PendingItem[]>(() => {
+  const s = systemStatus.value
+  if (!s) return []
+  const items: PendingItem[] = []
+  if (!s.database.ok) {
+    items.push({
+      level: 'danger',
+      text: `数据库连接异常（延迟 ${s.database.latency_ms}ms），请检查数据库可用性`,
+      to: '/logs',
+      action: '查看日志',
+    })
+  }
+  for (const b of s.breakers) {
+    items.push({
+      level: 'danger',
+      text: `上游「${b.name}」${b.disabled_by === 'manual' ? '被手动禁用' : '触发熔断'}（连续失败 ${b.consecutive_failures} 次）`,
+      to: '/upstreams',
+      action: '处理上游',
+    })
+  }
+  if (s.logging.overflow_total > 0) {
+    items.push({
+      level: 'warn',
+      text: `日志队列累计溢出 ${s.logging.overflow_total} 条，已由 WAL 兜底落盘`,
+      to: '/settings?tab=system',
+      action: '查看详情',
+    })
+  }
+  if (s.media_poller.pending_tasks > 0) {
+    items.push({
+      level: 'warn',
+      text: `媒体轮询存在 ${s.media_poller.pending_tasks} 个待回联任务`,
+      to: '/settings?tab=system',
+      action: '查看配置',
+    })
+  }
+  if (s.recent_errors.length > 0) {
+    items.push({
+      level: 'warn',
+      text: `最近有 ${s.recent_errors.length} 条请求错误（HTTP ≥ 400）`,
+      to: '/logs',
+      action: '查看日志',
+    })
+  }
+  return items
+})
+
+/** 秒级运行时长人性化（与 SystemInfoPanel 同口径，@/utils/format 无等价函数） */
+function fmtUptime(secs: number): string {
+  if (secs < 60) return `${Math.floor(secs)} 秒`
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
+  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
+  return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
+}
+
+async function loadSystemStatus() {
+  if (statusLoading.value) return // 防连点
+  statusLoading.value = true
+  statusError.value = null
+  try {
+    systemStatus.value = await systemApi.status()
+    statusUpdatedAt.value = dayjs().format('HH:mm:ss')
+  } catch (e) {
+    // 保留上次成功结果（若有）；失败仅展示提示文案，不伪造当前状态
+    statusError.value = errMsg(e)
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+/** 手动刷新：统计 + 系统状态 并行（系统状态独立失败，不影响统计数据） */
+function refreshAll() {
+  loadAll()
+  loadSystemStatus()
+}
 
 const rangeLabel = computed(() => (range.value === '7d' ? '近 7 天' : '今天'))
 
@@ -270,7 +491,7 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll)
+onMounted(refreshAll)
 watch([range, currency], () => loadAll())
 </script>
 
@@ -290,6 +511,126 @@ watch([range, currency], () => loadAll())
 
 .error-alert {
   margin-bottom: 16px;
+}
+
+/* —— 系统状态 / 待处理事项（M13 §4.3 低风险区块） —— */
+.status-card {
+  margin-bottom: 16px;
+}
+.status-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.status-head .spacer {
+  flex: 1;
+}
+.status-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.status-updated {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.status-body {
+  min-height: 60px;
+}
+.status-alert {
+  margin-bottom: 0;
+}
+.status-err-sub {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.7;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.status-kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+.kv-item {
+  min-width: 0;
+}
+.kv-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 4px;
+}
+.kv-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2329;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kv-value .hint {
+  font-weight: 400;
+  margin-left: 6px;
+}
+.kv-note {
+  display: inline-block;
+  margin-left: 8px;
+  font-weight: 600;
+}
+.is-warn {
+  color: #d4380d;
+}
+.status-body :deep(.el-divider) {
+  margin: 16px 0 12px;
+}
+.todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #fafafa;
+  border: 1px solid #f0f2f5;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.todo-item .spacer {
+  flex: 1;
+}
+.todo-text {
+  color: #303133;
+  word-break: break-all;
+}
+.todo-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #6b7280;
+  font-size: 13px;
+}
+.todo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-warn {
+  background: #e6a23c;
+}
+.dot-danger {
+  background: #f56c6c;
+}
+.dot-ok {
+  background: #67c23a;
 }
 
 .error-body {

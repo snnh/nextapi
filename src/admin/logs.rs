@@ -205,16 +205,24 @@ async fn get_log(
     _admin: AdminUsername,
     Path(request_id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    // 与列表/导出一致（M14.1）：事务内 SET LOCAL statement_timeout，
+    // 客户端 30s 超时触发时服务端查询同步取消，不再占用连接。
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '31s'")
+        .execute(&mut *tx)
+        .await?;
+
     let row = with_log_timeout(
         sqlx::query_as::<_, UsageLogRow>(&format!(
             "SELECT {LOG_COLS} FROM usage_logs WHERE request_id = $1 \
              ORDER BY ts DESC, id DESC LIMIT 1"
         ))
         .bind(&request_id)
-        .fetch_optional(&state.db),
+        .fetch_optional(&mut *tx),
     )
-    .await??
-    .ok_or(ApiError::NotFound)?;
+    .await??;
+    let _ = tx.rollback().await;
+    let row = row.ok_or(ApiError::NotFound)?;
 
     let snap = state.cache.snapshot();
     let item = attach_names(row, &snap);

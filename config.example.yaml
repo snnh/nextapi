@@ -31,7 +31,8 @@ server:
                                   # 环境变量 NEXTAPI_ADMIN_JWT_SECRET 可覆盖。
                                   # ⚠️ 敏感字段：用足够长的随机串；/api/config 导出时掩码。
   debug: false                    # 调试模式：放宽启动检查。仅本地开发使用。
-  trusted_proxies: []              # 可信反向代理 CIDR；为空时不信任转发 IP 请求头。
+  trusted_proxies: []              # 可信反向代理 CIDR/裸 IP；为空或 TCP 对端不在列表内时
+                                   # 不信任 X-Forwarded-For/X-Real-IP，审计直接用对端 IP。
 
 database:
   # 数据库连接串。启动类参数，env DATABASE_URL > UI > YAML。
