@@ -1,5 +1,16 @@
 <template>
   <div class="page" v-loading="pageLoading">
+    <div class="page-intro">
+      <div>
+        <h2>模型</h2>
+        <p>管理对外模型名称、实际模型和请求转发策略。</p>
+      </div>
+      <div class="intro-summary">
+        <span><b>{{ drafts.length }}</b> 条路由</span>
+        <span><b>{{ enabledCount }}</b> 条启用</span>
+        <span><b>{{ uniqueModelCount }}</b> 个模型</span>
+      </div>
+    </div>
     <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
       <template #title>模型 → 上游绑定（模型名支持 <span class="mono">*</span> 通配）</template>
       <div class="hint">
@@ -231,6 +242,9 @@ const upstreams = ref<UpstreamOut[]>([])
 const serverCommit = ref<RouteOut[]>([])
 /** 本地草稿（可编辑工作副本） */
 const drafts = ref<RouteRow[]>([])
+
+const enabledCount = computed(() => drafts.value.filter((r) => r.enabled).length)
+const uniqueModelCount = computed(() => new Set(drafts.value.map((r) => r.model_pattern)).size)
 
 // —— 弹窗状态 ——
 const dialogVisible = ref(false)
@@ -618,6 +632,21 @@ function computeDiff(): { added: number; modified: number; deleted: number } {
 </script>
 
 <style scoped>
+.page-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+.page-intro h2 { margin: 0; color: #1f2329; font-size: 20px; }
+.page-intro p { margin: 6px 0 0; color: #6b7280; font-size: 13px; }
+.intro-summary { display: flex; gap: 18px; color: #6b7280; font-size: 13px; white-space: nowrap; }
+.intro-summary b { color: #1f2329; font-size: 16px; margin-right: 3px; }
+@media (max-width: 768px) {
+  .page-intro { flex-direction: column; }
+  .intro-summary { white-space: normal; }
+}
 .muted {
   color: #c0c4cc;
 }
