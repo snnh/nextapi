@@ -15,19 +15,20 @@ pub mod totp;
 use argon2::password_hash::{PasswordHash, PasswordVerifier};
 use argon2::Argon2;
 use axum::{
-    extract::{FromRequestParts, Request, State},
+    extract::{ConnectInfo, FromRequestParts, Request, State},
     http::request::Parts,
     http::HeaderMap,
     middleware::Next,
     response::Response,
     routing::{get, post, put},
-    Json, Router,
+    Extension, Json, Router,
 };
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -167,21 +168,17 @@ struct ChangePasswordReq {
 /// POST /login：校验用户名/密码，签发 JWT。
 async fn login(
     State(state): State<Arc<AppState>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<LoginReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     // 1. 防爆破：按 username 的 1 分钟滑动窗口限速
-    let trusted = state
-        .file_config
-        .read()
-        .unwrap()
-        .server
-        .trusted_proxies
-        .clone();
-    let ip = client_ip(&headers, &trusted);
+    // M15：审计 IP 结合 TCP 对端（ConnectInfo）判定——仅对端命中 trusted_proxies
+    // 时才解析转发头，否则一律使用对端 IP（转发头视为可伪造，直接忽略）。
+    let ip = client_ip(&state, &headers, peer.map(|Extension(c)| c.0.ip()));
     let limit = state.hot.load().gateway.admin_login_rate_limit_per_min;
-    // 限速键只取 username：X-Forwarded-For 可被客户端伪造（client_ip 不校验对端
-    // 是否可信代理），掺入 IP 会使限速可被随机 XFF 完全绕过（发布审阅 H1）。
+    // 限速键只取 username：即使 M15 已校验对端可信性，XFF 链中不可信段的内容
+    // 仍由客户端控制，掺入 IP 会使限速可被随机 XFF 绕过（发布审阅 H1）。
     // 单管理员场景下 username 维度已足够防爆破；IP 仍记录进审计。
     let rate_key = body.username.trim().to_ascii_lowercase();
     if !login_rate_limiter().check(&rate_key, limit) {
@@ -296,19 +293,13 @@ async fn me(
 /// PUT /password：校验旧密码后更新为新密码，并写审计。
 async fn change_password(
     State(state): State<Arc<AppState>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<ChangePasswordReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
     sensitive_rate_check(&state, &username)?;
-    let trusted = state
-        .file_config
-        .read()
-        .unwrap()
-        .server
-        .trusted_proxies
-        .clone();
-    let ip = client_ip(&headers, &trusted);
+    let ip = client_ip(&state, &headers, peer.map(|Extension(c)| c.0.ip()));
 
     // 强度校验（review P4）：≥8 字符且不得与旧密码相同（避免误操作/弱口令）
     if body.new_password.chars().count() < 8 {
@@ -394,12 +385,13 @@ struct TotpSetupReq {
 
 async fn totp_setup(
     State(state): State<Arc<AppState>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<TotpSetupReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
     sensitive_rate_check(&state, &username)?;
-    let ip = current_client_ip(&state, &headers);
+    let ip = client_ip(&state, &headers, peer.map(|Extension(c)| c.0.ip()));
     let row =
         sqlx::query("SELECT password_hash, totp_enabled FROM admin_users WHERE username = $1")
             .bind(&username)
@@ -449,12 +441,13 @@ struct TotpCodeReq {
 /// POST /totp/enable {code}：验证 pending 机密的验证码后启用。
 async fn totp_enable(
     State(state): State<Arc<AppState>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<TotpCodeReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
     sensitive_rate_check(&state, &username)?;
-    let ip = current_client_ip(&state, &headers);
+    let ip = client_ip(&state, &headers, peer.map(|Extension(c)| c.0.ip()));
     let row = sqlx::query(
         "SELECT totp_enabled, totp_secret_enc, last_totp_step FROM admin_users WHERE username = $1",
     )
@@ -506,12 +499,13 @@ struct TotpDisableReq {
 /// `totp_enabled` / `totp_secret_enc` / `last_totp_step` 三列（README 记载）。
 async fn totp_disable(
     State(state): State<Arc<AppState>>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<TotpDisableReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = current_username(&state, &headers).await?;
     sensitive_rate_check(&state, &username)?;
-    let ip = current_client_ip(&state, &headers);
+    let ip = client_ip(&state, &headers, peer.map(|Extension(c)| c.0.ip()));
     let row = sqlx::query(
         "SELECT password_hash, totp_enabled, totp_secret_enc, last_totp_step FROM admin_users WHERE username = $1",
     )
@@ -637,8 +631,10 @@ pub(crate) async fn sensitive_verify(
     Ok(())
 }
 
-/// 审计用客户端 IP（复用 trusted_proxies 配置的解析逻辑）。
-fn current_client_ip(state: &AppState, headers: &HeaderMap) -> Option<std::net::IpAddr> {
+/// 审计用客户端 IP：读取 trusted_proxies 配置并结合 TCP 对端解析（M15）。
+/// `peer` 来自 `ConnectInfo<SocketAddr>`（由 main.rs 的
+/// `into_make_service_with_connect_info` 注入每个请求的扩展）。
+fn client_ip(state: &AppState, headers: &HeaderMap, peer: Option<IpAddr>) -> Option<IpAddr> {
     let trusted = state
         .file_config
         .read()
@@ -646,7 +642,7 @@ fn current_client_ip(state: &AppState, headers: &HeaderMap) -> Option<std::net::
         .server
         .trusted_proxies
         .clone();
-    client_ip(headers, &trusted)
+    resolve_client_ip(headers, peer, &trusted)
 }
 
 /// JWT 保护中间件：校验 Authorization: Bearer，失败返回 401。
@@ -658,39 +654,134 @@ pub async fn require_admin(
     next: Next,
 ) -> Result<Response, ApiError> {
     let username = current_username(&state, req.headers()).await?;
-    let trusted = state
-        .file_config
-        .read()
-        .unwrap()
-        .server
-        .trusted_proxies
-        .clone();
-    let ip = client_ip(req.headers(), &trusted);
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    let ip = client_ip(&state, req.headers(), peer);
     req.extensions_mut().insert(AdminUsername(username));
     Ok(CURRENT_CLIENT_IP.scope(ip, next.run(req)).await)
 }
 
-/// 客户端 IP（最佳努力，审计展示用途）：X-Forwarded-For 首值 → X-Real-IP。
-/// 说明：XFF 可由客户端伪造，故不将其作为任何安全边界（限速仍以 username 为准）。
-fn client_ip(headers: &HeaderMap, trusted_proxies: &[String]) -> Option<std::net::IpAddr> {
-    if trusted_proxies.is_empty() {
-        return None;
+// ---------------------------------------------------------------------------
+// M15：可信代理核心修复——真实客户端 IP 解析
+// ---------------------------------------------------------------------------
+
+/// 解析后的可信代理网段。裸 IP 视为 /32（IPv4）或 /128（IPv6）。
+#[derive(Clone, Copy, Debug)]
+enum TrustedNet {
+    V4(Ipv4Addr, u8),
+    V6(Ipv6Addr, u8),
+}
+
+/// 解析 trusted_proxies 配置：支持 CIDR（如 "10.0.0.0/8"）与裸 IP；非法项忽略并告警
+/// （宁可不信任，也不因配置笔误把半个互联网当可信代理）。
+fn parse_trusted_nets(entries: &[String]) -> Vec<TrustedNet> {
+    let mut nets = Vec::with_capacity(entries.len());
+    for raw in entries {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let (ip_str, prefix_str) = match s.split_once('/') {
+            Some((ip, p)) => (ip.trim(), Some(p.trim())),
+            None => (s, None),
+        };
+        let parsed = ip_str.parse::<IpAddr>().ok().and_then(|ip| {
+            let max: u8 = if ip.is_ipv4() { 32 } else { 128 };
+            let prefix = match prefix_str {
+                Some(p) => p.parse::<u8>().ok().filter(|p| *p <= max)?,
+                None => max,
+            };
+            Some(match ip {
+                IpAddr::V4(a) => TrustedNet::V4(a, prefix),
+                IpAddr::V6(a) => TrustedNet::V6(a, prefix),
+            })
+        });
+        match parsed {
+            Some(net) => nets.push(net),
+            None => tracing::warn!("server.trusted_proxies 条目非法，已忽略: {s}"),
+        }
     }
-    // 仅接受可解析的地址；XFF 存在但首值非法时继续尝试 X-Real-IP，
-    // 避免恶意/异常头让审计 IP 无故丢失。
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next().map(str::trim))
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse().ok())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
+    nets
+}
+
+/// 判断 IP 是否落在可信代理网段内（IPv4/IPv6 之间互不匹配）。
+fn ip_in_trusted(ip: &IpAddr, nets: &[TrustedNet]) -> bool {
+    nets.iter().any(|net| match (net, ip) {
+        (TrustedNet::V4(base, prefix), IpAddr::V4(a)) => {
+            *prefix == 0 || (a.to_bits() ^ base.to_bits()) >> (32 - *prefix as u32) == 0
+        }
+        (TrustedNet::V6(base, prefix), IpAddr::V6(a)) => {
+            *prefix == 0 || (a.to_bits() ^ base.to_bits()) >> (128 - *prefix as u32) == 0
+        }
+        _ => false,
+    })
+}
+
+/// M15 核心：结合 TCP 对端（ConnectInfo）与 trusted_proxies 判定真实客户端 IP。
+///
+/// 安全语义（X-Forwarded-For/X-Real-IP 均可由直连客户端伪造）：
+/// - 无对端信息（不应发生：ConnectInfo 由 serve 注入）→ 不信任转发头，返回 None；
+/// - trusted_proxies 为空，或对端不在可信网段 → 转发头一律忽略，返回对端 IP；
+/// - 对端可信 → 沿 XFF 链**从右向左**跳过可信代理（最右条目由最外层可信代理追加），
+///   第一个不可信条目即真实客户端；全链可信则取最左条目（最佳努力）；
+///   链中出现无法解析的条目视为边界，不再信任其左侧任何内容（返回 None）；
+/// - 无 XFF（或全为空白）时回退 X-Real-IP（紧邻代理设置），仍无则返回对端 IP。
+fn resolve_client_ip(
+    headers: &HeaderMap,
+    peer: Option<IpAddr>,
+    trusted_proxies: &[String],
+) -> Option<IpAddr> {
+    let peer = peer?;
+    let nets = parse_trusted_nets(trusted_proxies);
+    if nets.is_empty() || !ip_in_trusted(&peer, &nets) {
+        // 直连客户端或不可信代理：转发头可伪造，只用真实 TCP 对端。
+        return Some(peer);
+    }
+    // XFF 格式：「client, proxy1, proxy2」，对端 peer 隐含在链尾（已确认可信）。
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        let mut saw_entry = false;
+        for part in xff.split(',').rev() {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            saw_entry = true;
+            match part.parse::<IpAddr>() {
+                // 可信代理追加/透传的地址，继续向左追溯
+                Ok(ip) if ip_in_trusted(&ip, &nets) => continue,
+                // 第一个不可信者 = 真实客户端（其右侧全为可信代理）
+                Ok(ip) => return Some(ip),
+                // 非法条目：链已不可信，不得继续消费其左侧内容
+                Err(_) => return None,
+            }
+        }
+        if saw_entry {
+            // 全链可信：取最左条目（最早代理声称的来源，最佳努力）。
+            // 循环中已确认每个条目可解析，此处 parse 必然成功。
+            if let Some(Ok(ip)) = xff
+                .split(',')
+                .next()
+                .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .and_then(|s| s.parse().ok())
-        })
+                .map(|s| s.parse::<IpAddr>())
+            {
+                return Some(ip);
+            }
+        }
+    }
+    // 无 XFF：回退 X-Real-IP（由紧邻的可信代理设置）
+    if let Some(ip) = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<IpAddr>().ok())
+    {
+        return Some(ip);
+    }
+    Some(peer)
 }
 
 /// 从请求头解析 Bearer 并校验 JWT，返回管理员用户名。
@@ -955,29 +1046,199 @@ mod tests {
         assert!(!map.contains_key("stale-user"));
     }
 
+    // ------------------------------------------------------------------
+    // M15：可信代理核心修复——客户端 IP 解析单测
+    // ------------------------------------------------------------------
+
+    /// 便捷构造：字符串切片 → Vec<String> 配置。
+    fn cfgs(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
     #[test]
-    fn client_ip_parses_proxy_headers() {
-        let mut h = axum::http::HeaderMap::new();
-        assert_eq!(client_ip(&h, &[]), None);
-        // XFF 取首个
+    fn trusted_nets_parse_cidr_and_bare_ip() {
+        // CIDR、裸 IP（视为 /32、/128）、空白与大小写混合
+        let nets = parse_trusted_nets(&cfgs(&[
+            "10.0.0.0/8",
+            "192.168.1.7",
+            "2001:db8::/32",
+            "  ::1  ",
+            "",
+        ]));
+        assert_eq!(nets.len(), 4);
+        assert!(ip_in_trusted(&ip("10.9.8.7"), &nets));
+        assert!(ip_in_trusted(&ip("192.168.1.7"), &nets));
+        assert!(!ip_in_trusted(&ip("192.168.1.8"), &nets));
+        assert!(ip_in_trusted(&ip("2001:db8::dead:beef"), &nets));
+        assert!(ip_in_trusted(&ip("::1"), &nets));
+        // v4/v6 互不匹配
+        assert!(!ip_in_trusted(&ip("8.8.8.8"), &nets));
+        assert!(!ip_in_trusted(&ip("2001:db9::1"), &nets));
+    }
+
+    #[test]
+    fn trusted_nets_ignore_invalid_entries() {
+        // 非法前缀、越界前缀、非 IP：全部忽略（宁可不信任）
+        let nets = parse_trusted_nets(&cfgs(&["10.0.0.0/33", "not-an-ip", "10.0.0.0/x", "/"]));
+        assert!(nets.is_empty());
+        assert!(!ip_in_trusted(&ip("10.0.0.1"), &nets));
+        // /0 合法：匹配全部 v4
+        let nets = parse_trusted_nets(&cfgs(&["0.0.0.0/0"]));
+        assert!(ip_in_trusted(&ip("1.2.3.4"), &nets));
+        assert!(!ip_in_trusted(&ip("::1"), &nets));
+    }
+
+    #[test]
+    fn resolve_ip_empty_trusted_uses_peer() {
+        // M15：trusted_proxies 为空 → 不信任转发头，审计 IP = TCP 对端
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        h.insert("x-real-ip", "5.6.7.8".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("203.0.113.9")), &[]),
+            Some(ip("203.0.113.9"))
+        );
+    }
+
+    #[test]
+    fn resolve_ip_untrusted_peer_ignores_forward_headers() {
+        // M15：对端不在可信网段（如客户端直连伪造 XFF）→ 一律用对端 IP
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        h.insert("x-real-ip", "5.6.7.8".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("203.0.113.9")), &trusted),
+            Some(ip("203.0.113.9"))
+        );
+        // 无转发头同样返回对端
+        let h2 = HeaderMap::new();
+        assert_eq!(
+            resolve_client_ip(&h2, Some(ip("203.0.113.9")), &trusted),
+            Some(ip("203.0.113.9"))
+        );
+    }
+
+    #[test]
+    fn resolve_ip_no_peer_returns_none() {
+        // 无 ConnectInfo（不应发生）：不信任任何转发头
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        assert_eq!(resolve_client_ip(&h, None, &cfgs(&["0.0.0.0/0"])), None);
+    }
+
+    #[test]
+    fn resolve_ip_trusted_peer_single_hop() {
+        // 单级代理：XFF 只有一个客户端地址
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("1.2.3.4"))
+        );
+    }
+
+    #[test]
+    fn resolve_ip_multihop_xff_right_to_left() {
+        // 多级代理链 client(1.2.3.4) → proxyA(10.0.0.1) → proxyB(10.0.0.2) → NextAPI
+        // XFF: "1.2.3.4, 10.0.0.1"，对端 10.0.0.2（可信）
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
         h.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
         assert_eq!(
-            client_ip(&h, &["0.0.0.0/0".into()]),
-            Some("1.2.3.4".parse().unwrap())
+            resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("1.2.3.4"))
         );
-        // 非法值继续回退到 X-Real-IP
+    }
+
+    #[test]
+    fn resolve_ip_multihop_stops_at_first_untrusted() {
+        // 客户端伪造 XFF 前缀：client 发送 "XFF: 9.9.9.9"，经可信代理追加后
+        // 链为 "9.9.9.9, 8.8.8.8, 10.0.0.1"（8.8.8.8 是外层 LB 看到的客户端）。
+        // 从右向左跳过可信的 10.0.0.1，停在第一个不可信者 8.8.8.8——
+        // 伪造的 9.9.9.9 在其左侧，不予采信。
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
+        h.insert(
+            "x-forwarded-for",
+            "9.9.9.9, 8.8.8.8, 10.0.0.1".parse().unwrap(),
+        );
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("8.8.8.8"))
+        );
+    }
+
+    #[test]
+    fn resolve_ip_all_trusted_takes_leftmost() {
+        // 全链可信（如多级内网代理）：取最左条目（最佳努力）
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "10.0.0.5, 10.0.0.1".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("10.0.0.5"))
+        );
+    }
+
+    #[test]
+    fn resolve_ip_invalid_xff_entry_is_boundary() {
+        // XFF 中混入无法解析的条目：视为链边界，不再信任其左侧
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4, garbage".parse().unwrap());
+        assert_eq!(resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted), None);
+    }
+
+    #[test]
+    fn resolve_ip_real_ip_fallback() {
+        // 无 XFF 时回退 X-Real-IP；两者皆无/非法时回退对端
+        let trusted = cfgs(&["10.0.0.0/8"]);
+        let mut h = HeaderMap::new();
+        h.insert("x-real-ip", "2001:db8::1".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("2001:db8::1"))
+        );
+        h.insert("x-real-ip", "not-an-ip".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("10.0.0.2"))
+        );
+        // 空白 XFF 视为缺失，走 X-Real-IP
+        let mut h2 = HeaderMap::new();
+        h2.insert("x-forwarded-for", "  ".parse().unwrap());
+        h2.insert("x-real-ip", "1.2.3.4".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h2, Some(ip("10.0.0.2")), &trusted),
+            Some(ip("1.2.3.4"))
+        );
+    }
+
+    #[test]
+    fn resolve_ip_wildcard_trusts_any_proxy() {
+        // 0.0.0.0/0：任意 IPv4 对端都视为可信代理（含 X-Real-IP 兜底路径）
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4, 10.0.0.1".parse().unwrap());
+        assert_eq!(
+            resolve_client_ip(&h, Some(ip("192.0.2.1")), &cfgs(&["0.0.0.0/0"])),
+            Some(ip("1.2.3.4"))
+        );
         h.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
         h.insert("x-real-ip", "10.0.0.8".parse().unwrap());
         assert_eq!(
-            client_ip(&h, &["0.0.0.0/0".into()]),
-            Some("10.0.0.8".parse().unwrap())
+            resolve_client_ip(&h, Some(ip("192.0.2.1")), &cfgs(&["0.0.0.0/0"])),
+            None // 非法 XFF 条目是链边界，不回退 X-Real-IP
         );
-        // x-real-ip 兜底
         h.remove("x-forwarded-for");
-        h.insert("x-real-ip", "2001:db8::1".parse().unwrap());
         assert_eq!(
-            client_ip(&h, &["::/0".into()]),
-            Some("2001:db8::1".parse().unwrap())
+            resolve_client_ip(&h, Some(ip("192.0.2.1")), &cfgs(&["0.0.0.0/0"])),
+            Some(ip("10.0.0.8"))
         );
     }
 

@@ -38,6 +38,7 @@
         <el-collapse-item v-for="g in displayGroups" :key="g.prefix" :name="g.prefix">
           <template #title>
             <span class="group-title">{{ g.title }}</span>
+            <span v-if="g.desc" class="group-desc">{{ g.desc }}</span>
             <span class="group-count">{{ g.items.length }} 项</span>
           </template>
 
@@ -177,7 +178,7 @@ import { Check, QuestionFilled, Search } from '@element-plus/icons-vue'
 import { settingsApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type { SettingItem } from '@/api/types'
-import { FALLBACK_GROUP_TITLE, SETTING_GROUPS, SETTING_FIELDS, shortKey } from './fields'
+import { FALLBACK_GROUP_TITLE, SETTING_GROUPS, SETTING_FIELDS, SETTING_SCENARIOS, shortKey } from './fields'
 import type { SettingField } from './fields'
 
 const props = defineProps<{ settings: SettingItem[] }>()
@@ -216,22 +217,40 @@ watch(() => props.settings, syncFromProps, { immediate: true, deep: false })
 interface GroupView {
   prefix: string
   title: string
+  desc?: string
   items: SettingItem[]
 }
 
+/**
+ * 分组渲染顺序（M13 §4.8 低风险 UI 优化，仅改展示结构，不影响保存/校验逻辑）：
+ * 1) 网关运行参数先按场景卡归纳（请求处理 / 流量控制 / 日志与审计 / 路由策略 /
+ *    计价展示），覆盖 fields.ts 中已收录的全部 gateway.* 键；
+ * 2) 其余参数仍按配置前缀分组（fx_auto_fetch / price_import / media_* / proxy /
+ *    update_check / server / database / 未来新增前缀），保留原折叠入口。
+ */
 const groups = computed<GroupView[]>(() => {
-  const map = new Map<string, SettingItem[]>()
-  for (const it of props.settings) {
-    const prefix = it.key.split('.')[0]
-    if (!map.has(prefix)) map.set(prefix, [])
-    map.get(prefix)!.push(it)
-  }
   const result: GroupView[] = []
+  const consumed = new Set<string>()
+
+  for (const s of SETTING_SCENARIOS) {
+    const items = props.settings.filter((it) => s.keys.includes(it.key))
+    if (!items.length) continue
+    for (const it of items) consumed.add(it.key)
+    result.push({ prefix: s.id, title: s.title, desc: s.desc, items })
+  }
+
+  const restBuckets = new Map<string, SettingItem[]>()
+  for (const it of props.settings) {
+    if (consumed.has(it.key)) continue
+    const prefix = it.key.split('.')[0]
+    if (!restBuckets.has(prefix)) restBuckets.set(prefix, [])
+    restBuckets.get(prefix)!.push(it)
+  }
   for (const g of SETTING_GROUPS) {
-    const items = map.get(g.prefix)
+    const items = restBuckets.get(g.prefix)
     if (items?.length) result.push({ prefix: g.prefix, title: g.title, items })
   }
-  for (const [prefix, items] of map) {
+  for (const [prefix, items] of restBuckets) {
     if (!SETTING_GROUPS.some((g) => g.prefix === prefix)) {
       result.push({ prefix, title: FALLBACK_GROUP_TITLE, items })
     }
@@ -601,6 +620,16 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 .group-title {
   display: inline-flex;
   align-items: center;
+}
+.group-desc {
+  font-size: 12px;
+  font-weight: 400;
+  color: #909399;
+  margin-left: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
 }
 .group-count {
   font-size: 12px;

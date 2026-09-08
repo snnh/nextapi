@@ -69,7 +69,8 @@ pub struct ServerCfg {
     pub admin_jwt_secret: String,
     /// 调试模式：放宽启动检查。仅本地开发使用。
     pub debug: bool,
-    /// 可信反向代理 CIDR；为空时不信任 X-Forwarded-For/X-Real-IP。
+    /// 可信反向代理 CIDR/裸 IP；为空或 TCP 对端不在列表内时不信任
+    /// X-Forwarded-For/X-Real-IP（M15：按 ConnectInfo 对端判定）。
     pub trusted_proxies: Vec<String>,
 }
 

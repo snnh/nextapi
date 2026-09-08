@@ -444,6 +444,72 @@ export const SETTING_GROUPS: { prefix: string; title: string }[] = [
   { prefix: 'database', title: '数据库（启动类）' },
 ]
 
+/**
+ * 网关运行参数的「场景分组」（M13 §4.8）：把 gateway.* 的日常运行参数按使用场景归纳
+ * 为 5 张场景卡，避免网关全部参数一次性平铺。渲染顺序即数组顺序；已收录的
+ * gateway.* 键必须全部落入其中（见下方 SETTING_FIELDS 统计：22 个全量覆盖）。
+ *
+ * - id   折叠展开的内部标识（不会与任何配置前缀冲突）；
+ * - desc 分组标题旁一句话说明（仅展示辅助，不参与保存/校验）。
+ */
+export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys: string[] }[] = [
+  {
+    id: 'scn-request',
+    title: '请求处理',
+    desc: '上游超时与补全参数',
+    keys: [
+      'gateway.default_timeout_secs',
+      'gateway.stream_timeout_secs',
+      'gateway.anthropic_default_max_tokens',
+    ],
+  },
+  {
+    id: 'scn-traffic',
+    title: '流量控制',
+    desc: '限流、配额与超限策略',
+    keys: [
+      'gateway.default_rate_limit_rpm',
+      'gateway.admin_login_rate_limit_per_min',
+      'gateway.quota_check_cache_secs',
+      'gateway.quota_exceed_action',
+    ],
+  },
+  {
+    id: 'scn-logging',
+    title: '日志与审计',
+    desc: '落库、队列、WAL 与保留',
+    keys: [
+      'gateway.log_async',
+      'gateway.log_queue_capacity',
+      'gateway.batch_insert_interval_ms',
+      'gateway.log_wal_dir',
+      'gateway.log_wal_file_max_mb',
+      'gateway.log_wal_archive_tail_mb',
+      'gateway.log_partition_days',
+      'gateway.log_detail_retention_days',
+      'gateway.log_aggregate_retention_days',
+      'gateway.log_debug_ttl_minutes',
+    ],
+  },
+  {
+    id: 'scn-routing',
+    title: '路由策略',
+    desc: '上游选择与粘性',
+    keys: ['gateway.sticky_routing'],
+  },
+  {
+    id: 'scn-pricing',
+    title: '计价展示',
+    desc: '币种、精度与汇率过期阈值',
+    keys: [
+      'gateway.billing_timezone',
+      'gateway.display_currency',
+      'gateway.display_precision',
+      'gateway.fx_stale_max_minutes',
+    ],
+  },
+]
+
 /** 未收录键的兜底分组标题 */
 export const FALLBACK_GROUP_TITLE = '其它（未分组）'
 
