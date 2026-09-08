@@ -192,6 +192,7 @@ export interface LogListQuery {
   model?: string
   stream?: boolean
   status?: number
+  status_group?: 'success' | '4xx' | '5xx' | '429' | 'degraded'
   request_id?: string
   degraded?: boolean
   page?: number

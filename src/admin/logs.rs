@@ -73,6 +73,7 @@ struct LogQuery {
     model: Option<String>,
     stream: Option<bool>,
     status: Option<i32>,
+    status_group: Option<String>,
     request_id: Option<String>,
     degraded: Option<bool>,
 }
@@ -87,6 +88,7 @@ struct LogFilter {
     model: Option<String>,
     stream: Option<bool>,
     status: Option<i32>,
+    status_group: Option<String>,
     request_id: Option<String>,
     degraded: Option<bool>,
 }
@@ -329,6 +331,10 @@ fn build_log_filter(q: &LogQuery, tz: &str) -> ApiResult<LogFilter> {
         model: q.model.clone().filter(|s| !s.is_empty()),
         stream: q.stream,
         status: q.status,
+        status_group: q
+            .status_group
+            .clone()
+            .filter(|s| matches!(s.as_str(), "success" | "4xx" | "5xx" | "429" | "degraded")),
         request_id: q.request_id.clone().filter(|s| !s.is_empty()),
         degraded: q.degraded,
     })
@@ -352,6 +358,16 @@ fn push_log_where(qb: &mut QueryBuilder<'_, Postgres>, f: &LogFilter) {
     }
     if let Some(s) = f.status {
         qb.push(" AND status = ").push_bind(s);
+    }
+    if let Some(group) = f.status_group.as_deref() {
+        match group {
+            "success" => qb.push(" AND status < 400"),
+            "4xx" => qb.push(" AND status >= 400 AND status < 500"),
+            "5xx" => qb.push(" AND status >= 500 AND status < 600"),
+            "429" => qb.push(" AND status = 429"),
+            "degraded" => qb.push(" AND degraded = TRUE"),
+            _ => qb,
+        };
     }
     if let Some(r) = f.request_id.as_deref() {
         qb.push(" AND request_id = ").push_bind(r.to_string());

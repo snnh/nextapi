@@ -32,6 +32,16 @@
           />
         </div>
         <div class="f-item">
+          <span class="f-label">结果</span>
+          <el-select v-model="statusGroup" clearable placeholder="全部结果" style="width: 130px" @change="onQuery">
+            <el-option label="成功" value="success" />
+            <el-option label="客户端错误" value="4xx" />
+            <el-option label="服务端错误" value="5xx" />
+            <el-option label="限流（429）" value="429" />
+            <el-option label="已降级" value="degraded" />
+          </el-select>
+        </div>
+        <div class="f-item">
           <span class="f-label">模型</span>
           <el-input v-model="model" placeholder="模型" clearable style="width: 160px" @keyup.enter="onQuery" />
         </div>
@@ -393,6 +403,7 @@ const range = ref<[Date, Date] | null>(defaultRange())
 const keyId = ref('')
 const upstreamId = ref('')
 const model = ref('')
+const statusGroup = ref('')
 const requestId = ref('')
 const statusStr = ref('')
 const streamOpt = ref<TriState>('')
@@ -444,6 +455,7 @@ function buildFilterQuery(): LogListQuery {
   if (upstreamId.value) q.upstream_id = upstreamId.value
   const m = model.value.trim()
   if (m) q.model = m
+  if (statusGroup.value) q.status_group = statusGroup.value as NonNullable<LogListQuery['status_group']>
   const rid = requestId.value.trim()
   if (rid) q.request_id = rid
   if (statusStr.value !== '') {
