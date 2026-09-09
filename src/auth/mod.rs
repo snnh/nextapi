@@ -719,6 +719,21 @@ fn ip_in_trusted(ip: &IpAddr, nets: &[TrustedNet]) -> bool {
     })
 }
 
+/// M15 §6.5 诊断：返回解析后的客户端 IP 与「TCP 对端是否命中 trusted_proxies」。
+/// 供 `/api/system/diagnostics` 展示转发头是否被采信（不返回任何敏感信息）。
+pub(crate) fn diagnose_client_ip(
+    headers: &HeaderMap,
+    peer: Option<IpAddr>,
+    trusted_proxies: &[String],
+) -> (Option<IpAddr>, bool) {
+    let nets = parse_trusted_nets(trusted_proxies);
+    let peer_trusted = peer.is_some_and(|p| ip_in_trusted(&p, &nets));
+    (
+        resolve_client_ip(headers, peer, trusted_proxies),
+        peer_trusted,
+    )
+}
+
 /// M15 核心：结合 TCP 对端（ConnectInfo）与 trusted_proxies 判定真实客户端 IP。
 ///
 /// 安全语义（X-Forwarded-For/X-Real-IP 均可由直连客户端伪造）：

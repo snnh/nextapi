@@ -172,7 +172,7 @@
           <el-divider content-position="left">调用信息</el-divider>
           <el-descriptions :column="1" border size="small" class="secret-desc">
             <el-descriptions-item label="网关地址">
-              <CopyText :text="gatewayBase" />
+              <CopyText :text="gatewayAddr" />
             </el-descriptions-item>
             <el-descriptions-item label="模型名">
               填写「模型」页中的对外模型名（如 <span class="mono">gpt-4o-mini</span>），别名同样可用
@@ -320,6 +320,7 @@ import { errMsg } from '@/api/http'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import { copyText } from '@/utils/clipboard'
 import { QUOTA_UNIT_LABELS, QUOTA_WINDOW_LABELS } from '@/utils/consts'
+import { gatewayBase } from '@/utils/base'
 import { fmtInt, fmtTime } from '@/utils/format'
 import CopyText from '@/components/common/CopyText.vue'
 import type { ApiKeyRow, KeyCreateReq, QuotaUnit, QuotaWindow } from '@/api/types'
@@ -772,11 +773,11 @@ function copySecret() {
 }
 
 // —— 一次性调用向导（创建/轮换成功后展示） ——
-/** 网关调用地址：以浏览器当前 origin 为准（反代/自定义域名场景下即用户访问地址） */
-const gatewayBase = computed(() => `${window.location.origin}/v1`)
+/** 网关调用地址：以浏览器当前 origin + 部署前缀为准（反代/子路径场景下即用户访问地址） */
+const gatewayAddr = computed(() => gatewayBase())
 const curlExample = computed(() =>
   [
-    `curl ${gatewayBase.value}/chat/completions \\`,
+    `curl ${gatewayAddr.value}/chat/completions \\`,
     `  -H "Authorization: Bearer ${secretKey.value}" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'`,

@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- 部署前缀占位：后端返回 index.html 时按 X-Forwarded-Prefix / 请求路径替换（M15 §6.4） -->
+    <base href="/" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>NextAPI 管理后台</title>
   </head>
   <body>

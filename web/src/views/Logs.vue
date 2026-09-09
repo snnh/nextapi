@@ -13,6 +13,19 @@
         </el-button>
       </el-tooltip>
       <el-button type="warning" plain :icon="Delete" @click="openCleanup">分区清理</el-button>
+      <el-tooltip
+        content="按 (时间, id) 顺序翻页，深页不退化（不统计总数）；适合连续排查，筛选变化时自动回到最新一页"
+        placement="top"
+      >
+        <el-button
+          :type="cursorMode ? 'primary' : 'default'"
+          plain
+          :icon="Sort"
+          @click="toggleCursorMode"
+        >
+          {{ cursorMode ? '游标浏览中' : '游标浏览' }}
+        </el-button>
+      </el-tooltip>
     </div>
 
     <!-- 筛选工具栏：默认保留 时间/模型/request_id，Key/上游/状态码/流式/降级 归入「高级筛选」（默认折叠） -->
@@ -144,7 +157,7 @@
         </div>
       </template>
       <template v-else>
-      <el-table :data="rows" v-loading="loading" stripe>
+      <el-table :data="cursorMode ? cursorRows : rows" v-loading="loading" stripe>
         <template #empty>
           <el-empty description="无匹配日志" :image-size="90" />
         </template>
@@ -228,7 +241,14 @@
           </template>
         </el-table-column>
       </el-table>
-        <div class="pagination">
+        <div v-if="cursorMode" class="cursor-foot">
+          <span class="hint">已加载 {{ cursorRows.length }} 条（游标模式不统计总数）</span>
+          <el-button v-if="cursorNext" type="primary" plain :loading="cursorLoading" @click="loadMoreCursor">
+            加载更多
+          </el-button>
+          <span v-else class="hint">没有更多了</span>
+        </div>
+        <div v-else class="pagination">
           <el-pagination
             v-model:current-page="currentPage"
             v-model:page-size="pageSize"
@@ -431,7 +451,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Delete, Download, QuestionFilled, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Download, QuestionFilled, Refresh, Search, Sort } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { useRoute, useRouter } from 'vue-router'
 import { keyApi, logApi, upstreamApi, type LogListQuery } from '@/api'
@@ -563,7 +583,7 @@ async function loadLogs() {
     const resp = await logApi.list(buildQuery())
     if (seq !== loadSeq) return
     rows.value = resp.items
-    total.value = resp.total
+    total.value = resp.total ?? 0
     listError.value = ''
     lastLoadedAt.value = new Date().toISOString()
   } catch (e) {
@@ -573,6 +593,61 @@ async function loadLogs() {
     listError.value = errMsg(e)
   } finally {
     if (seq === loadSeq) loading.value = false
+  }
+}
+
+/** 游标模式（M14 §5.2）：加载首页（不带 cursor），重置已加载列表 */
+async function loadCursorFirstPage() {
+  const seq = ++loadSeq
+  cursorLoading.value = true
+  try {
+    const resp = await logApi.list({ ...buildFilterQuery(), page_size: pageSize.value })
+    if (seq !== loadSeq) return
+    cursorRows.value = resp.items
+    cursorNext.value = resp.next_cursor ?? null
+    listError.value = ''
+    lastLoadedAt.value = new Date().toISOString()
+  } catch (e) {
+    if (seq !== loadSeq) return
+    cursorRows.value = []
+    cursorNext.value = null
+    listError.value = errMsg(e)
+  } finally {
+    if (seq === loadSeq) cursorLoading.value = false
+  }
+}
+
+/** 游标模式：追加下一页（keyset 续页，深页不退化） */
+async function loadMoreCursor() {
+  const cur = cursorNext.value
+  if (!cur || cursorLoading.value) return
+  const seq = loadSeq
+  cursorLoading.value = true
+  try {
+    const resp = await logApi.list({
+      ...buildFilterQuery(),
+      page_size: pageSize.value,
+      cursor: cur,
+    })
+    if (seq !== loadSeq) return
+    cursorRows.value = [...cursorRows.value, ...resp.items]
+    cursorNext.value = resp.next_cursor ?? null
+  } catch (e) {
+    if (seq !== loadSeq) return
+    ElMessage.error(errMsg(e))
+  } finally {
+    cursorLoading.value = false
+  }
+}
+
+/** 切换游标浏览 / 页码模式 */
+function toggleCursorMode() {
+  cursorMode.value = !cursorMode.value
+  if (cursorMode.value) {
+    syncQueryToUrl()
+    loadCursorFirstPage()
+  } else {
+    loadLogs()
   }
 }
 
@@ -606,7 +681,8 @@ function syncQueryToUrl() {
 function onQuery() {
   resetPage()
   syncQueryToUrl()
-  loadLogs()
+  if (cursorMode.value) loadCursorFirstPage()
+  else loadLogs()
 }
 
 function onReset() {
@@ -805,6 +881,11 @@ async function exportCsv() {
 // —— 分区清理 ——
 /** 最近一次列表加载完成时间（提示异步落库延迟） */
 const lastLoadedAt = ref('')
+/** 游标浏览模式（M14 §5.2 深页 keyset 分页）：与页码模式互斥 */
+const cursorMode = ref(false)
+const cursorRows = ref<LogItem[]>([])
+const cursorNext = ref<string | null>(null)
+const cursorLoading = ref(false)
 
 const cleanupVisible = ref(false)
 const cleanupBefore = ref<Date | null>(null)

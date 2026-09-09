@@ -179,6 +179,7 @@ import { copyText } from '@/utils/clipboard'
 import { fmtTime } from '@/utils/format'
 import type { RouteOut, UpstreamOut } from '@/api/types'
 import { effectiveModelId, upstreamHealth, type ModelOverviewRow } from '@/composables/useModelOverview'
+import { gatewayBase } from '@/utils/base'
 
 const props = defineProps<{
   visible: boolean
@@ -248,12 +249,12 @@ const priceRows = computed(() => {
   }))
 })
 
-/** 网关调用地址：以浏览器当前 origin 为准（反代/自定义域名场景下即用户访问地址） */
-const gatewayBase = computed(() => `${window.location.origin}/v1`)
+/** 网关调用地址：以浏览器当前 origin + 部署前缀为准（反代/子路径场景下即用户访问地址） */
+const gatewayBaseUrl = computed(() => gatewayBase())
 const curlExample = computed(() => {
   const model = props.row?.model ?? '<MODEL>'
   return [
-    `curl ${gatewayBase.value}/chat/completions \\`,
+    `curl ${gatewayBaseUrl.value}/chat/completions \\`,
     `  -H "Authorization: Bearer <API_KEY>" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d '{"model":"${model}","messages":[{"role":"user","content":"hi"}]}'`,

@@ -2,6 +2,7 @@
 // 页面代码禁止直接 import axios——一律走 api/index.ts 的分组函数。
 import axios, { AxiosError } from 'axios'
 import type { ApiErrorBody } from './types'
+import { apiBase, appBase, appPath } from '@/utils/base'
 
 export const TOKEN_KEY = 'nextapi_token'
 /** 登录用户名持久化键（auth store 与 401 清理共用，避免循环 import） */
@@ -37,7 +38,8 @@ export function errMsg(e: unknown): string {
 }
 
 const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE || undefined,
+  // 子路径部署（M15 §6.4）：API 前缀随部署前缀变化，不再写死 /api
+  baseURL: apiBase(),
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 })
@@ -54,10 +56,15 @@ http.interceptors.response.use(
     if (error.response?.status === 401 && !error.config?.url?.includes('/auth/login')) {
       clearToken()
       localStorage.removeItem(USER_KEY)
-      // 跳转登录时保留当前 path+search 作为 redirect，登录成功后跳回
-      if (window.location.pathname !== '/login') {
-        const redirect = encodeURIComponent(window.location.pathname + window.location.search)
-        window.location.href = `/login?redirect=${redirect}`
+      // 跳转登录时保留当前 path+search 作为 redirect（含部署前缀），登录成功后跳回
+      const base = appBase()
+      if (window.location.pathname !== appPath('login')) {
+        // redirect 存「去掉部署前缀」的路径，登录成功后由 router.push 还原
+        const rel = window.location.pathname.startsWith(base)
+          ? window.location.pathname.slice(base.length)
+          : window.location.pathname.replace(/^\//, '')
+        const redirect = encodeURIComponent(`/${rel}${window.location.search}`)
+        window.location.href = `${appPath('login')}?redirect=${redirect}`
       }
     }
     return Promise.reject(error)
