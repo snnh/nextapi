@@ -698,6 +698,8 @@ fn tool_to_json(t: &IrTool) -> Value {
 
 /// usage：input_tokens→prompt_tokens、output_tokens→completion_tokens、
 /// cache_read_input_tokens→cache_read_tokens、cache_creation_input_tokens→cache_write_tokens。
+/// 口径归一（P0 计价修复）：Anthropic input_tokens 本身「不含」cache_read（缓存命中
+/// 单列），与 IR「未命中缓存的输入 token」语义天然一致，进出站均不加减。
 fn parse_usage(u: &Value) -> IrUsage {
     let mut usage = IrUsage::default();
     usage.prompt_tokens = u["input_tokens"]
@@ -844,6 +846,8 @@ fn reverse_finish_reason(fr: &str) -> String {
 
 fn usage_to_anthropic(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     let mut o = u.extra.clone();
+    // 口径归一（P0 计价修复）：Anthropic input_tokens 本身不含缓存命中，
+    // 与 IR prompt_tokens（未缓存输入）语义一致 → 直接写，不加回 cache_read。
     o.insert("input_tokens".into(), Value::from(u.prompt_tokens));
     o.insert("output_tokens".into(), Value::from(u.completion_tokens));
     if let Some(c) = u.cache_read_tokens {
@@ -1895,6 +1899,35 @@ mod tests {
 
         let resp2 = response_to_ir(&back, &mut c).unwrap();
         assert_eq!(resp, resp2);
+    }
+
+    /// P0 计价修复：Anthropic input_tokens 本身不含缓存命中，与 IR 口径一致。
+    /// 入站不扣减；出站 IR prompt_tokens 直接写 input_tokens（不加回 cache_read）。
+    #[test]
+    fn usage_cached_tokens_not_double_counted() {
+        let mut c = ctx();
+        // 入站：input=6（不含缓存）、cache_read=9 → IR prompt=6 原样保留
+        let j = serde_json::json!({
+            "id": "msg_1", "type": "message", "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "claude-3-5-sonnet", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 6, "output_tokens": 2, "cache_read_input_tokens": 9}
+        });
+        let resp = response_to_ir(&j, &mut c).unwrap();
+        let u = resp.usage.as_ref().unwrap();
+        assert_eq!(u.prompt_tokens, 6);
+        assert_eq!(u.cache_read_tokens, Some(9));
+
+        // 出站：IR(prompt=5, cache_read=3) → Anthropic input_tokens=5（不加回）
+        let u2 = IrUsage {
+            prompt_tokens: 5,
+            completion_tokens: 2,
+            cache_read_tokens: Some(3),
+            ..Default::default()
+        };
+        let out = usage_to_anthropic(&u2, &mut c);
+        assert_eq!(out["input_tokens"], 5);
+        assert_eq!(out["cache_read_input_tokens"], 3);
     }
 
     #[test]

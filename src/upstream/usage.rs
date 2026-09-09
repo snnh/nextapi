@@ -1,5 +1,13 @@
 //! usage 提取（4 协议，非流式 JSON / 流式 SSE / 请求参数元数据）。
 //! 契约 contracts/m4-logging.md §11，M4-C 实现。
+//!
+//! 口径归一（P0 计价修复）：提取结果 `Usage.prompt_tokens` 统一为「未命中缓存的
+//! 输入 token」，与 `cache_read_tokens` 互不重叠。OpenAI Chat `prompt_tokens`、
+//! Responses `input_tokens`、Gemini `promptTokenCount` 的上游语义均为「含缓存命中」
+//! 的全量输入（cached 是其子集），故对这三个协议在此扣减 cached；Anthropic
+//! `input_tokens` 本身不含 cache_read，保持不变。透传路径不经 IR，必须在此扣减，
+//! 否则 token_in 按全量输入计费、token_cache_read 再计一次（重复计价）。
+//! `raw`（LogEvent.usage_raw 的来源）保持上游原始数值，不做归一。
 
 use crate::protocol::ir::Protocol;
 
@@ -18,6 +26,13 @@ fn token(v: &serde_json::Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_u64().map(|u| u as i64))
 }
 
+/// 口径归一（P0 计价修复）：由「含缓存命中」的全量输入得出「未命中缓存的输入」。
+/// saturating_sub 防溢出、max(0) 钳位：cached 缺失按 0 不扣；cached > prompt 钳 0，
+/// 不 panic。负数的脏数据 cached 按 0 处理；prompt 缺失（None）保持 None。
+fn uncached_prompt(prompt: Option<i64>, cached: Option<i64>) -> Option<i64> {
+    prompt.map(|p| p.saturating_sub(cached.unwrap_or(0).max(0)).max(0))
+}
+
 /// 非流式：按协议路径取 usage 对象。
 pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
     let mut u = Usage::default();
@@ -33,6 +48,8 @@ pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
                 .and_then(|u| u.get("prompt_tokens_details"))
                 .and_then(|d| d.get("cached_tokens"))
                 .and_then(token);
+            // 口径归一（P0）：prompt_tokens 含缓存命中 → 扣减为未缓存输入
+            u.prompt_tokens = uncached_prompt(u.prompt_tokens, u.cache_read_tokens);
             u.raw = usage.cloned();
         }
         Protocol::OpenaiResponses => {
@@ -43,6 +60,8 @@ pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
                 .and_then(|u| u.get("input_tokens_details"))
                 .and_then(|d| d.get("cached_tokens"))
                 .and_then(token);
+            // 口径归一（P0）：input_tokens 含缓存命中 → 扣减为未缓存输入
+            u.prompt_tokens = uncached_prompt(u.prompt_tokens, u.cache_read_tokens);
             u.raw = usage.cloned();
         }
         Protocol::Anthropic => {
@@ -78,6 +97,8 @@ pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
             u.cache_read_tokens = usage
                 .and_then(|u| u.get("cachedContentTokenCount"))
                 .and_then(token);
+            // 口径归一（P0）：promptTokenCount 含缓存命中 → 扣减为未缓存输入
+            u.prompt_tokens = uncached_prompt(u.prompt_tokens, u.cache_read_tokens);
             u.raw = usage.cloned();
         }
     }
@@ -281,11 +302,13 @@ mod tests {
             "prompt_tokens_details": { "cached_tokens": 5 }
         }});
         let u = extract_json_usage(Protocol::OpenaiChat, &v);
-        assert_eq!(u.prompt_tokens, Some(100));
+        // 口径归一（P0）：prompt_tokens=100 含缓存 5 → 未缓存输入 95
+        assert_eq!(u.prompt_tokens, Some(95));
         assert_eq!(u.completion_tokens, Some(20));
         assert_eq!(u.cache_read_tokens, Some(5));
         assert_eq!(u.cache_write_tokens, None);
-        assert!(u.raw.is_some());
+        // usage_raw 保持上游原始数值（100），不做归一
+        assert_eq!(u.raw.as_ref().unwrap()["prompt_tokens"], json!(100));
     }
 
     #[test]
@@ -296,7 +319,8 @@ mod tests {
             "input_tokens_details": { "cached_tokens": 3 }
         }});
         let u = extract_json_usage(Protocol::OpenaiResponses, &v);
-        assert_eq!(u.prompt_tokens, Some(8));
+        // 口径归一（P0）：input=8 含缓存 3 → prompt=5、cache_read=3
+        assert_eq!(u.prompt_tokens, Some(5));
         assert_eq!(u.completion_tokens, Some(4));
         assert_eq!(u.cache_read_tokens, Some(3));
     }
@@ -324,9 +348,35 @@ mod tests {
             "cachedContentTokenCount": 1
         }});
         let u = extract_json_usage(Protocol::Gemini, &v);
-        assert_eq!(u.prompt_tokens, Some(12));
+        // 口径归一（P0）：promptTokenCount=12 含缓存 1 → 未缓存输入 11
+        assert_eq!(u.prompt_tokens, Some(11));
         assert_eq!(u.completion_tokens, Some(6));
         assert_eq!(u.cache_read_tokens, Some(1));
+    }
+
+    /// P0 口径归一边界：cached 缺失不扣；cached > prompt 钳 0；Anthropic 不扣。
+    #[test]
+    fn json_usage_cached_normalization_edges() {
+        // cached 缺失 → 不扣
+        let v = json!({"usage": {"prompt_tokens": 10, "completion_tokens": 2}});
+        let u = extract_json_usage(Protocol::OpenaiChat, &v);
+        assert_eq!(u.prompt_tokens, Some(10));
+        assert_eq!(u.cache_read_tokens, None);
+
+        // cached > prompt → 钳 0，不 panic
+        let v = json!({"usage": {
+            "prompt_tokens": 2,
+            "prompt_tokens_details": { "cached_tokens": 9 }
+        }});
+        let u = extract_json_usage(Protocol::OpenaiChat, &v);
+        assert_eq!(u.prompt_tokens, Some(0));
+        assert_eq!(u.cache_read_tokens, Some(9));
+
+        // Anthropic input_tokens 本身不含缓存 → 不扣
+        let v = json!({"usage": {"input_tokens": 6, "cache_read_input_tokens": 9}});
+        let u = extract_json_usage(Protocol::Anthropic, &v);
+        assert_eq!(u.prompt_tokens, Some(6));
+        assert_eq!(u.cache_read_tokens, Some(9));
     }
 
     #[test]
@@ -344,7 +394,8 @@ mod tests {
                    data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\n\
                    data: [DONE]\n\n";
         let u = extract_sse_usage(Protocol::OpenaiChat, sse);
-        assert_eq!(u.prompt_tokens, Some(10));
+        // 口径归一（P0）：prompt_tokens=10 含缓存 2 → 未缓存输入 8
+        assert_eq!(u.prompt_tokens, Some(8));
         assert_eq!(u.completion_tokens, Some(5));
         assert_eq!(u.cache_read_tokens, Some(2));
     }
@@ -367,7 +418,8 @@ mod tests {
         let sse = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n\
                    data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":12,\"candidatesTokenCount\":6,\"cachedContentTokenCount\":1}}\n\n";
         let u = extract_sse_usage(Protocol::Gemini, sse);
-        assert_eq!(u.prompt_tokens, Some(12));
+        // 口径归一（P0）：promptTokenCount=12 含缓存 1 → 未缓存输入 11
+        assert_eq!(u.prompt_tokens, Some(11));
         assert_eq!(u.completion_tokens, Some(6));
         assert_eq!(u.cache_read_tokens, Some(1));
     }
@@ -377,7 +429,8 @@ mod tests {
         let sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n\
                    data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":8,\"output_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":3}}}}\n\n";
         let u = extract_sse_usage(Protocol::OpenaiResponses, sse);
-        assert_eq!(u.prompt_tokens, Some(8));
+        // 口径归一（P0）：input=8 含缓存 3 → prompt=5、cache_read=3
+        assert_eq!(u.prompt_tokens, Some(5));
         assert_eq!(u.completion_tokens, Some(4));
         assert_eq!(u.cache_read_tokens, Some(3));
     }
