@@ -161,6 +161,7 @@ import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { proxyApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { PROXY_KINDS } from '@/utils/consts'
+import { confirmDanger } from '@/utils/confirm'
 import type { ProxyIn, ProxyOut, SettingItem } from '@/api/types'
 
 const props = defineProps<{ settings: SettingItem[] }>()
@@ -259,9 +260,11 @@ async function test(row: ProxyOut) {
 async function remove(row: ProxyOut) {
   if (deleting.has(row.id)) return // 防重复删除
   deleting.add(row.id)
-  try {
-    await ElMessageBox.confirm(`确定删除代理「${row.name}」？`, '删除代理', { type: 'warning' })
-  } catch {
+  const ok = await confirmDanger({
+    title: '删除代理',
+    message: `将删除代理「${row.name}」。使用该代理的上游与更新检查会回退直连（或失去网络出口），该操作不可恢复。`,
+  })
+  if (!ok) {
     deleting.delete(row.id)
     return
   }
