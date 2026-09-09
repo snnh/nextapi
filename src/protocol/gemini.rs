@@ -700,7 +700,6 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
 
 fn parse_usage_metadata(u: &Value) -> IrUsage {
     let mut usage = IrUsage::default();
-    usage.prompt_tokens = u["promptTokenCount"].as_u64().unwrap_or(0);
     // 口径归一（review P5）：Gemini candidatesTokenCount 不含 thoughtsTokenCount，
     // 而 OpenAI completion_tokens / Anthropic output_tokens 均含思考 token；
     // 计价与统计按 completion 计量，故 completion = candidates + thoughts，
@@ -710,6 +709,13 @@ fn parse_usage_metadata(u: &Value) -> IrUsage {
     usage.completion_tokens = candidates.saturating_add(thoughts);
     usage.cache_read_tokens = u["cachedContentTokenCount"].as_u64();
     usage.total_tokens = u["totalTokenCount"].as_u64();
+    // 口径归一（P0 计价修复）：Gemini promptTokenCount「含」缓存命中 token
+    // （cachedContentTokenCount 是其子集），IR 统一为「未命中缓存的输入 token」
+    // → 扣减 cached；saturating_sub：cached 缺失按 0 不扣，cached > prompt 钳 0。
+    usage.prompt_tokens = u["promptTokenCount"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(usage.cache_read_tokens.unwrap_or(0));
     if thoughts > 0 {
         usage
             .extra
@@ -878,7 +884,13 @@ fn usage_metadata_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     // candidatesTokenCount 需扣减（completion = candidates + thoughts），防双计。
     let reasoning = u.extra.get("reasoning_tokens").and_then(|v| v.as_u64());
     out.remove("reasoning_tokens");
-    out.insert("promptTokenCount".into(), Value::from(u.prompt_tokens));
+    // 口径归一（P0 计价修复）：IR prompt_tokens 为「未缓存输入」，而 Gemini
+    // promptTokenCount 语义为「含缓存命中」的全量输入 → 出站把 cache_read 加回，
+    // 保持上游/客户端看到的协议语义不变。
+    let prompt_out = u
+        .prompt_tokens
+        .saturating_add(u.cache_read_tokens.unwrap_or(0));
+    out.insert("promptTokenCount".into(), Value::from(prompt_out));
     out.insert(
         "candidatesTokenCount".into(),
         Value::from(u.completion_tokens.saturating_sub(reasoning.unwrap_or(0))),
@@ -1459,7 +1471,8 @@ mod tests {
         assert_eq!(resp.extra["gemini_finish_reason"], "STOP");
 
         let u = resp.usage.as_ref().unwrap();
-        assert_eq!(u.prompt_tokens, 10);
+        // 口径归一（P0）：promptTokenCount=10 含缓存 3 → IR prompt=7、cache_read=3
+        assert_eq!(u.prompt_tokens, 7);
         // 口径归一（review P5）：completion = candidates(5) + thoughts(2)
         assert_eq!(u.completion_tokens, 7);
         assert_eq!(u.cache_read_tokens, Some(3));
@@ -1484,6 +1497,7 @@ mod tests {
             "hi there"
         );
         assert_eq!(back["candidates"][0]["finishReason"], "STOP");
+        // 出站把 cache_read 加回（P0 口径归一）：IR prompt=7 + cached=3 → 10
         assert_eq!(back["usageMetadata"]["promptTokenCount"], 10);
         assert_eq!(back["usageMetadata"]["cachedContentTokenCount"], 3);
         // 回写防双计：candidates = completion(7) - reasoning(2) = 5
