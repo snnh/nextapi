@@ -210,14 +210,26 @@ pub struct IrRequest {
 }
 
 /// token 用量（cache 读/写单列；total 可选）。
+///
+/// 口径归一约定（P0 计价修复）：
+/// - `prompt_tokens` 语义统一为「未命中缓存的输入 token」，与 `cache_read_tokens`
+///   互不重叠（配额/计价口径 = 未缓存输入 + 输出 + 缓存写 + 缓存读）；
+/// - OpenAI Chat `prompt_tokens`、Responses `input_tokens`、Gemini `promptTokenCount`
+///   的上游语义均为「含缓存命中」的全量输入（cached 是其子集）：
+///   协议入站解析时以 saturating_sub 扣减 cached（cached 缺失不扣、cached > prompt
+///   钳 0），出站生成时把 cached 加回，保持上游/客户端看到的协议语义不变；
+/// - Anthropic `input_tokens` 本身不含 cache_read，进出站均不加减。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IrUsage {
+    /// 未命中缓存的输入 token（不含 cache_read；见上方口径约定）
     #[serde(default)]
     pub prompt_tokens: u64,
     #[serde(default)]
     pub completion_tokens: u64,
+    /// 缓存命中（读）token，与 prompt_tokens 互不重叠
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_tokens: Option<u64>,
+    /// 缓存写入 token
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

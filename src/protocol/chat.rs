@@ -614,7 +614,6 @@ fn json_number_f64(v: f64) -> Value {
 
 fn parse_usage(u: &Value) -> IrUsage {
     let mut usage = IrUsage::default();
-    usage.prompt_tokens = u["prompt_tokens"].as_u64().unwrap_or(0);
     usage.completion_tokens = u["completion_tokens"].as_u64().unwrap_or(0);
     usage.total_tokens = u["total_tokens"].as_u64();
     if let Some(details) = u.get("prompt_tokens_details") {
@@ -622,6 +621,14 @@ fn parse_usage(u: &Value) -> IrUsage {
             usage.cache_read_tokens = Some(cached);
         }
     }
+    // 口径归一（P0 计价修复）：OpenAI prompt_tokens「含」缓存命中 token
+    // （cached 是其子集），而 IrUsage.prompt_tokens 统一为「未命中缓存的输入
+    // token」，故入站扣减 cached；saturating_sub：cached 缺失按 0 不扣，
+    // cached > prompt 钳 0，不 panic。
+    usage.prompt_tokens = u["prompt_tokens"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(usage.cache_read_tokens.unwrap_or(0));
     if let Some(details) = u.get("completion_tokens_details") {
         // reasoning_tokens 提升为 IR 标准槽位（供跨协议转出；嵌套 details 原样保留）
         if let Some(rt) = details["reasoning_tokens"].as_u64() {
@@ -729,7 +736,13 @@ fn usage_to_json(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
             "Responses 专属 usage details 已按 Chat 形状归一",
         );
     }
-    out.insert("prompt_tokens".into(), Value::from(u.prompt_tokens));
+    // 口径归一（P0 计价修复）：IR prompt_tokens 为「未缓存输入」，而 OpenAI
+    // prompt_tokens 语义为「含缓存命中」的全量输入 → 出站把 cache_read 加回，
+    // 保持上游/客户端看到的协议语义不变。
+    let prompt_out = u
+        .prompt_tokens
+        .saturating_add(u.cache_read_tokens.unwrap_or(0));
+    out.insert("prompt_tokens".into(), Value::from(prompt_out));
     out.insert("completion_tokens".into(), Value::from(u.completion_tokens));
     if let Some(t) = u.total_tokens {
         out.insert("total_tokens".into(), Value::from(t));
@@ -1334,6 +1347,51 @@ mod tests {
         assert_eq!(out["completion_tokens_details"]["reasoning_tokens"], 7);
         assert!(out.get("reasoning_tokens").is_none());
         assert!(out.get("output_tokens_details").is_none());
+    }
+
+    /// P0 计价修复：口径归一。Chat 入站 prompt_tokens（含缓存）扣减 cached 得
+    /// 未缓存输入；出站把 cached 加回，保持协议语义不变；cached > prompt 钳 0。
+    #[test]
+    fn usage_cached_tokens_normalized() {
+        let mut c = ctx();
+        // 入站：prompt_tokens=8（含缓存）、cached=3 → IR prompt=5、cache_read=3
+        let rj = serde_json::json!({
+            "id": "x", "model": "m", "created": 1,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12,
+                "prompt_tokens_details": {"cached_tokens": 3}
+            }
+        });
+        let resp = response_to_ir(&rj, &mut c).unwrap();
+        let usage = resp.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, 5);
+        assert_eq!(usage.cache_read_tokens, Some(3));
+
+        // 出站：IR(prompt=5, cache_read=3) → Chat prompt_tokens=8 且 cached_tokens=3
+        let back = response_from_ir(&resp, &mut c).unwrap();
+        assert_eq!(back["usage"]["prompt_tokens"], 8);
+        assert_eq!(back["usage"]["prompt_tokens_details"]["cached_tokens"], 3);
+
+        // cached 缺失 → 不扣
+        let rj2 = serde_json::json!({
+            "id": "x", "model": "m", "created": 1,
+            "usage": {"prompt_tokens": 8, "completion_tokens": 4}
+        });
+        let resp2 = response_to_ir(&rj2, &mut c).unwrap();
+        let u2 = resp2.usage.as_ref().unwrap();
+        assert_eq!(u2.prompt_tokens, 8);
+        assert_eq!(u2.cache_read_tokens, None);
+
+        // cached > prompt → 钳 0，不 panic
+        let rj3 = serde_json::json!({
+            "id": "x", "model": "m", "created": 1,
+            "usage": {"prompt_tokens": 2, "prompt_tokens_details": {"cached_tokens": 9}}
+        });
+        let resp3 = response_to_ir(&rj3, &mut c).unwrap();
+        let u3 = resp3.usage.as_ref().unwrap();
+        assert_eq!(u3.prompt_tokens, 0);
+        assert_eq!(u3.cache_read_tokens, Some(9));
     }
 
     /// review P5 回归：Responses 形状 tool_choice 转 Chat 时包装 function 对象。

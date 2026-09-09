@@ -698,7 +698,6 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
 /// 解析 Responses usage（input/output_tokens + details）。
 fn parse_responses_usage(u: &Value) -> IrUsage {
     let mut usage = IrUsage::default();
-    usage.prompt_tokens = u["input_tokens"].as_u64().unwrap_or(0);
     usage.completion_tokens = u["output_tokens"].as_u64().unwrap_or(0);
     usage.total_tokens = u["total_tokens"].as_u64();
 
@@ -750,6 +749,13 @@ fn parse_responses_usage(u: &Value) -> IrUsage {
             }
         }
     }
+    // 口径归一（P0 计价修复）：Responses input_tokens「含」缓存命中 token
+    // （cached 是其子集），IR 统一为「未命中缓存的输入 token」→ 扣减 cached；
+    // saturating_sub：cached 缺失按 0 不扣，cached > prompt 钳 0，不 panic。
+    usage.prompt_tokens = u["input_tokens"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(usage.cache_read_tokens.unwrap_or(0));
     usage
 }
 
@@ -882,7 +888,13 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
 /// IR usage → Responses usage（input/output_tokens + details）。
 fn usage_from_ir(u: &IrUsage, ctx: &mut ConvCtx) -> Value {
     let mut out = Map::new();
-    out.insert("input_tokens".into(), Value::from(u.prompt_tokens));
+    // 口径归一（P0 计价修复）：IR prompt_tokens 为「未缓存输入」，而 Responses
+    // input_tokens 语义为「含缓存命中」的全量输入 → 出站把 cache_read 加回，
+    // 保持上游/客户端看到的协议语义不变。
+    let input_out = u
+        .prompt_tokens
+        .saturating_add(u.cache_read_tokens.unwrap_or(0));
+    out.insert("input_tokens".into(), Value::from(input_out));
     out.insert("output_tokens".into(), Value::from(u.completion_tokens));
     if let Some(t) = u.total_tokens {
         out.insert("total_tokens".into(), Value::from(t));
@@ -2042,7 +2054,8 @@ mod tests {
             Some(IrContent::Text("hi there".into()))
         );
         let usage = resp.usage.as_ref().unwrap();
-        assert_eq!(usage.prompt_tokens, 10);
+        // 口径归一（P0）：input_tokens=10 含缓存 3 → IR prompt=7、cache_read=3
+        assert_eq!(usage.prompt_tokens, 7);
         assert_eq!(usage.completion_tokens, 5);
         assert_eq!(usage.total_tokens, Some(15));
         assert_eq!(usage.cache_read_tokens, Some(3));
@@ -2056,6 +2069,7 @@ mod tests {
         assert_eq!(back["output"][0]["type"], "message");
         assert_eq!(back["output"][0]["content"][0]["type"], "output_text");
         assert_eq!(back["output"][0]["content"][0]["text"], "hi there");
+        // 出站把 cache_read 加回（P0 口径归一）：IR prompt=7 + cached=3 → input_tokens=10
         assert_eq!(back["usage"]["input_tokens"], 10);
         assert_eq!(back["usage"]["output_tokens"], 5);
         assert_eq!(back["usage"]["total_tokens"], 15);
@@ -2064,6 +2078,63 @@ mod tests {
             back["usage"]["output_tokens_details"]["reasoning_tokens"],
             2
         );
+    }
+
+    /// P0 计价修复：Responses 口径归一。入站 input_tokens（含缓存）扣减 cached 得
+    /// 未缓存输入（非流式与流式 response.completed 共用同一解析路径）。
+    #[test]
+    fn usage_cached_tokens_normalized() {
+        let mut c = ctx();
+        // 非流式入站：input=8（含缓存）、cached=3 → IR prompt=5、cache_read=3
+        let j = serde_json::json!({
+            "id": "resp_1", "object": "response", "created_at": 1,
+            "status": "completed", "model": "gpt-4o",
+            "usage": {
+                "input_tokens": 8, "output_tokens": 4, "total_tokens": 12,
+                "input_tokens_details": {"cached_tokens": 3}
+            }
+        });
+        let resp = response_to_ir(&j, &mut c).unwrap();
+        let usage = resp.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, 5);
+        assert_eq!(usage.cache_read_tokens, Some(3));
+
+        // 出站加回：IR → Responses input_tokens=8、cached_tokens=3
+        let back = response_from_ir(&resp, &mut c).unwrap();
+        assert_eq!(back["usage"]["input_tokens"], 8);
+        assert_eq!(back["usage"]["input_tokens_details"]["cached_tokens"], 3);
+
+        // 流式入站（response.completed 携带 usage）同样扣减
+        let mut st = StreamState::default();
+        let ev = serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1", "object": "response", "created_at": 1,
+                "status": "completed", "model": "gpt-4o",
+                "usage": {
+                    "input_tokens": 8, "output_tokens": 4,
+                    "input_tokens_details": {"cached_tokens": 3}
+                }
+            }
+        });
+        let chunk = chunk_to_ir(&serde_json::to_string(&ev).unwrap(), &mut st, &mut c)
+            .unwrap()
+            .unwrap();
+        let u = chunk.usage.as_ref().unwrap();
+        assert_eq!(u.prompt_tokens, 5);
+        assert_eq!(u.cache_read_tokens, Some(3));
+
+        // cached 缺失不扣；cached > prompt 钳 0
+        let j2 = serde_json::json!({"usage": {"input_tokens": 8, "output_tokens": 4}});
+        let resp2 = response_to_ir(&j2, &mut c).unwrap();
+        assert_eq!(resp2.usage.as_ref().unwrap().prompt_tokens, 8);
+        let j3 = serde_json::json!({
+            "usage": {"input_tokens": 2, "input_tokens_details": {"cached_tokens": 9}}
+        });
+        let resp3 = response_to_ir(&j3, &mut c).unwrap();
+        let u3 = resp3.usage.as_ref().unwrap();
+        assert_eq!(u3.prompt_tokens, 0);
+        assert_eq!(u3.cache_read_tokens, Some(9));
     }
 
     /// review P5 回归：Chat 形状 usage（completion_tokens_details）转 Responses 时
@@ -2243,7 +2314,8 @@ mod tests {
         assert_eq!(event_types(&ev4), ["response.completed"]);
         let completed = serde_json::from_str::<Value>(&ev4[0]).unwrap();
         assert_eq!(completed["response"]["status"], "completed");
-        assert_eq!(completed["response"]["usage"]["input_tokens"], 10);
+        // 口径归一（P0）：IR prompt=10（未缓存）+ cache_read=3 → 出站 input_tokens=13
+        assert_eq!(completed["response"]["usage"]["input_tokens"], 13);
         assert_eq!(completed["response"]["usage"]["output_tokens"], 5);
         assert_eq!(
             completed["response"]["usage"]["input_tokens_details"]["cached_tokens"],

@@ -1070,6 +1070,47 @@ mod tests {
     }
 
     #[test]
+    /// P0 计价修复回归：缓存命中不重复计价。记账层已把 prompt_tokens 归一为
+    /// 「未缓存输入」（如 OpenAI input=8/cached=3 → prompt=5、cache_read=3），
+    /// 故 token_in 用量必须为 5（而非全量 8），token_cache_read 单独计 3。
+    fn cached_tokens_not_double_counted() {
+        let rules = vec![
+            base_rule("token_in", "CNY", "1.0"),
+            base_rule("token_out", "CNY", "2.0"),
+            base_rule("token_cache_read", "CNY", "0.1"),
+        ];
+        let fxs = fx_set(&[]);
+        let at = local_dt("Asia/Shanghai", 2026, 1, 5, 12, 0);
+        let res = price_with_rules(
+            &rules,
+            &fxs,
+            &PricingInput {
+                at,
+                // 归一后：未缓存输入 5、输出 4、缓存读 3
+                prompt_tokens: Some(5),
+                completion_tokens: Some(4),
+                cache_read_tokens: Some(3),
+                ..Default::default()
+            },
+            "Asia/Shanghai",
+        );
+        let qty = |unit: &str| {
+            res.lines
+                .iter()
+                .find(|l| l.unit == unit)
+                .map(|l| l.quantity)
+        };
+        // token_in 按未缓存输入 5 计（修复前若用全量 8 则缓存 3 被重复计费）
+        assert_eq!(qty("token_in"), Some(Decimal::from(5)));
+        assert_eq!(qty("token_out"), Some(Decimal::from(4)));
+        // token_cache_read 单独计 3
+        assert_eq!(qty("token_cache_read"), Some(Decimal::from(3)));
+        // CNY 成本 = (5×1.0 + 4×2.0 + 3×0.1) / 1e6
+        let expect = Decimal::from_str("0.0000133").unwrap();
+        assert_eq!(res.cost_cny, Some(expect));
+    }
+
+    #[test]
     fn only_usd_no_fx_uses_builtin_default() {
         let usd = base_rule("token_in", "USD", "1.0");
         let rules = vec![usd];
