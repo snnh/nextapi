@@ -67,6 +67,8 @@ struct LogItem {
 struct LogQuery {
     page: Option<u32>,
     page_size: Option<u32>,
+    /// 游标分页（M14 §5.2）：(ts,id) keyset，提供时忽略 page/OFFSET
+    cursor: Option<String>,
     from_ts: Option<String>,
     to_ts: Option<String>,
     key_id: Option<String>,
@@ -118,6 +120,28 @@ fn effective_cut(dropped: &[partition::PartitionInfo]) -> Option<DateTime<Utc>> 
     dropped.iter().map(|p| p.to_ts).max()
 }
 
+/// 游标编码：(ts, id) → URL 安全 base64（无填充），供 (ts,id) keyset 深页分页。
+fn encode_cursor(ts: DateTime<Utc>, id: i64) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("{}|{}", ts.to_rfc3339(), id))
+}
+
+/// 游标解码：格式非法一律 400，不泄露内部结构。
+fn decode_cursor(s: &str) -> ApiResult<(DateTime<Utc>, i64)> {
+    use base64::Engine as _;
+    let bad = || ApiError::bad_request("cursor 无效".to_string());
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s.trim())
+        .map_err(|_| bad())?;
+    let text = String::from_utf8(raw).map_err(|_| bad())?;
+    let (ts_s, id_s) = text.rsplit_once('|').ok_or_else(bad)?;
+    let ts = DateTime::parse_from_rfc3339(ts_s)
+        .map_err(|_| bad())?
+        .with_timezone(&Utc);
+    let id: i64 = id_s.parse().map_err(|_| bad())?;
+    Ok((ts, id))
+}
+
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_logs))
@@ -137,6 +161,12 @@ async fn list_logs(
     let (page, page_size) = validate_pagination(q.page, q.page_size)?;
     let f = build_log_filter(&q, &tz)?;
     let offset = ((page as i64) - 1) * (page_size as i64);
+    // 游标模式（M14 §5.2）：提供 cursor 时走 (ts,id) keyset 分页，跳过深页 OFFSET 与总数统计
+    let cursor = match q.cursor.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Some(decode_cursor(s)?),
+        None => None,
+    };
+    let cursor_mode = cursor.is_some();
 
     // 事务 + SET LOCAL：服务端 statement_timeout 与客户端 30s 超时对齐，
     // 超时后服务端查询被取消而非继续占用连接（发布审阅数据批 #7）。
@@ -145,20 +175,41 @@ async fn list_logs(
         .execute(&mut *tx)
         .await?;
 
-    // 总数（与列表共用同一过滤条件；M11.2：30s 查询超时治理）
-    let mut count_qb = QueryBuilder::<Postgres>::new("SELECT count(*) FROM usage_logs WHERE");
-    push_log_where(&mut count_qb, &f);
-    let total: i64 = with_log_timeout(count_qb.build_query_scalar().fetch_one(&mut *tx)).await??;
+    // 总数（与列表共用同一过滤条件；M11.2：30s 查询超时治理）。
+    // 游标模式下跳过：深页 count(*) 代价高，且翻页过程中总数无意义。
+    let total: Option<i64> = if cursor_mode {
+        None
+    } else {
+        let mut count_qb = QueryBuilder::<Postgres>::new("SELECT count(*) FROM usage_logs WHERE");
+        push_log_where(&mut count_qb, &f);
+        Some(with_log_timeout(count_qb.build_query_scalar().fetch_one(&mut *tx)).await??)
+    };
 
     // 数据页
     let mut qb = QueryBuilder::<Postgres>::new(format!("SELECT {LOG_COLS} FROM usage_logs WHERE"));
     push_log_where(&mut qb, &f);
+    if let Some((cts, cid)) = cursor {
+        qb.push(" AND (ts, id) < (")
+            .push_bind(cts)
+            .push(", ")
+            .push_bind(cid)
+            .push(")");
+    }
     qb.push(" ORDER BY ts DESC, id DESC LIMIT ")
         .push_bind(page_size as i64);
-    qb.push(" OFFSET ").push_bind(offset);
+    if !cursor_mode {
+        qb.push(" OFFSET ").push_bind(offset);
+    }
     let rows: Vec<UsageLogRow> =
         with_log_timeout(qb.build_query_as().fetch_all(&mut *tx)).await??;
     let _ = tx.rollback().await;
+
+    // 续页游标：仅游标模式且本页取满时给出（最后一行 = 下一页起点）
+    let next_cursor = if cursor_mode && rows.len() == page_size as usize {
+        rows.last().map(|r| encode_cursor(r.ts, r.id))
+    } else {
+        None
+    };
 
     let snap = state.cache.snapshot();
     let items: Vec<LogItem> = rows
@@ -168,9 +219,12 @@ async fn list_logs(
 
     Ok(Json(serde_json::json!({
         "items": items,
+        // 游标模式为 null（不统计总数）
         "total": total,
         "page": page,
         "page_size": page_size,
+        // 游标模式下还有下一页时的续页游标；页码模式恒 null
+        "next_cursor": next_cursor,
     })))
 }
 
@@ -588,6 +642,39 @@ mod cleanup_tests {
         ])
         .unwrap();
         assert_eq!(cut.to_rfc3339(), "2026-03-02T00:00:00+00:00");
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::{decode_cursor, encode_cursor, DateTime};
+
+    #[test]
+    fn cursor_round_trips_ts_and_id() {
+        let ts = DateTime::parse_from_rfc3339("2026-09-07T12:34:56.789+00:00")
+            .unwrap()
+            .to_utc();
+        let encoded = encode_cursor(ts, 42);
+        let (ts2, id2) = decode_cursor(&encoded).unwrap();
+        assert_eq!(ts2, ts);
+        assert_eq!(id2, 42);
+    }
+
+    #[test]
+    fn cursor_invalid_forms_are_bad_request() {
+        use base64::Engine as _;
+        // 非 base64
+        assert!(decode_cursor("!!!not-base64!!!").is_err());
+        // 合法 base64 但缺少分隔符
+        let no_sep = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("no-separator");
+        assert!(decode_cursor(&no_sep).is_err());
+        // 合法 base64、分隔符存在但时间非法
+        let bad_ts = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("not-a-time|7");
+        assert!(decode_cursor(&bad_ts).is_err());
+        // 合法 base64、时间合法但 id 非法
+        let bad_id =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("2026-09-07T00:00:00Z|abc");
+        assert!(decode_cursor(&bad_id).is_err());
     }
 }
 

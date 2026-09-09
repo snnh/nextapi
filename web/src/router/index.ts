@@ -1,6 +1,8 @@
 // 路由表（M8 契约冻结：路径与页面文件一一对应）+ 登录守卫
+// M15 §6.4：history base 取部署前缀（<base href>），支持根路径与子路径反代
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { appBase } from '@/utils/base'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -74,7 +76,7 @@ const routes: RouteRecordRaw[] = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(appBase()),
   routes,
 })
 

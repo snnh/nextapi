@@ -14,11 +14,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, Extension, State},
+    http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::auth::{self, AdminUsername};
@@ -29,7 +31,105 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/version", get(get_version))
         .route("/status", get(get_status))
+        .route("/diagnostics", get(get_diagnostics))
         .route("/check-update", post(check_update))
+}
+
+/// GET /diagnostics：反向代理与部署诊断（M15 §6.5）。
+///
+/// 安全边界：只返回非敏感信息（Host/scheme、客户端 IP 与可信判定、转发头摘要、
+/// 可信代理配置、部署前缀、版本/请求 ID），绝不返回 JWT、API Key、请求体或
+/// Authorization/Cookie 等敏感头。
+async fn get_diagnostics(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminUsername,
+    headers: HeaderMap,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let trusted_proxies = state
+        .file_config
+        .read()
+        .map(|c| c.server.trusted_proxies.clone())
+        .unwrap_or_default();
+    let peer_addr = peer.map(|Extension(c)| c.0);
+    let peer_ip = peer_addr.map(|a| a.ip());
+    let (client_ip, peer_trusted) = auth::diagnose_client_ip(&headers, peer_ip, &trusted_proxies);
+
+    let h = |name: &str| -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    };
+    let xff = h("x-forwarded-for");
+    let x_real_ip = h("x-real-ip");
+    let x_fwd_host = h("x-forwarded-host");
+    let x_fwd_proto = h("x-forwarded-proto");
+    let x_fwd_port = h("x-forwarded-port");
+    let host = x_fwd_host.clone().or_else(|| h("host"));
+    let scheme = x_fwd_proto
+        .clone()
+        .unwrap_or_else(|| "http".to_string())
+        .to_lowercase();
+
+    // 客户端 IP 来源标注（用于解释转发头是否被采信）
+    let source = if !peer_trusted {
+        "peer"
+    } else if xff.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+        "xff"
+    } else if x_real_ip.as_deref().is_some_and(|s| !s.trim().is_empty()) {
+        "x-real-ip"
+    } else {
+        "peer"
+    };
+
+    // 配置建议（只针对当前请求可见的事实，不臆测）
+    let mut hints: Vec<String> = Vec::new();
+    if trusted_proxies.is_empty() {
+        hints.push(
+            "未配置 server.trusted_proxies：X-Forwarded-* / X-Real-IP 一律不采信，审计与日志中的客户端 IP 为 TCP 对端".to_string(),
+        );
+    } else if !peer_trusted {
+        hints.push(format!(
+            "当前 TCP 对端 {} 不在 trusted_proxies 内：转发头被忽略；请把反向代理主机 IP/CIDR 加入 server.trusted_proxies",
+            peer_ip.map(|i| i.to_string()).unwrap_or_else(|| "未知".to_string())
+        ));
+    }
+    if x_fwd_proto.is_none() && host.as_deref().is_some_and(|h| h.contains(':')) {
+        hints
+            .push("未收到 X-Forwarded-Proto：疑似直连访问，请确认反向代理已配置转发头".to_string());
+    }
+    if scheme == "https" && x_fwd_proto.is_none() {
+        hints.push("检测到 https 但缺少 X-Forwarded-Proto，前端生成的地址可能不正确".to_string());
+    }
+
+    Ok(Json(serde_json::json!({
+        "version": state.version,
+        // 本次诊断请求 ID：可与访问日志/请求日志对照
+        "request_id": Uuid::new_v4().to_string(),
+        // 部署前缀（来自 X-Forwarded-Prefix；根路径为 "/"）
+        "deployment_prefix": crate::embed::deployment_prefix(&headers),
+        "request": {
+            "host": host,
+            "scheme": scheme,
+            "user_agent": h("user-agent"),
+            "x_forwarded_for": xff,
+            "x_real_ip": x_real_ip,
+            "x_forwarded_host": x_fwd_host,
+            "x_forwarded_proto": x_fwd_proto,
+            "x_forwarded_port": x_fwd_port,
+            "x_forwarded_prefix": h("x-forwarded-prefix"),
+        },
+        "client": {
+            "peer_addr": peer_addr.map(|a| a.to_string()),
+            "peer_ip": peer_ip.map(|i| i.to_string()),
+            "peer_trusted": peer_trusted,
+            "client_ip": client_ip.map(|i| i.to_string()),
+            "source": source,
+        },
+        "trusted_proxies": trusted_proxies,
+        "hints": hints,
+    })))
 }
 
 /// GET /status：运维状态摘要（M10.4 / PLAN.md §4.4）。
