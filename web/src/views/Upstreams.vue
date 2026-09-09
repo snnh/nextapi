@@ -232,12 +232,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { CopyDocument, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { authApi, presetApi, proxyApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { copyText } from '@/utils/clipboard'
+import { confirmDanger } from '@/utils/confirm'
 import { PROTOCOL_LABEL } from '@/utils/consts'
 import { fmtTime } from '@/utils/format'
 import type { Preset, ProxyOut, UpstreamIn, UpstreamOut } from '@/api/types'
@@ -386,17 +387,13 @@ async function testUpstream(row: UpstreamOut) {
 
 async function removeUpstream(row: UpstreamOut) {
   if (deletingSet.has(row.id)) return
+  const ok = await confirmDanger({
+    title: '删除上游',
+    message: `将删除上游「${row.name}」及其凭证配置。指向该上游的模型路由会失去可用上游（请求失败），该操作不可恢复。`,
+  })
+  if (!ok) return
   deletingSet.add(row.id)
   try {
-    try {
-      await ElMessageBox.confirm(
-        `确定删除上游「${row.name}」？关联的模型路由可能受影响。`,
-        '删除上游',
-        { type: 'warning' },
-      )
-    } catch {
-      return
-    }
     await upstreamApi.remove(row.id)
     ElMessage.success('已删除')
     loadUpstreams()

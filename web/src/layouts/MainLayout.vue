@@ -38,19 +38,22 @@
           </el-icon>
           <div class="page-title">{{ route.meta.title ?? '' }}</div>
         </div>
-        <el-dropdown @command="onCommand" trigger="click">
-          <span class="user">
-            <el-icon><UserFilled /></el-icon>
-            <span class="username">{{ auth.username ?? 'admin' }}</span>
-            <el-icon><ArrowDown /></el-icon>
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="password">修改密码</el-dropdown-item>
-              <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <div class="header-right">
+          <SystemStatusBadge />
+          <el-dropdown @command="onCommand" trigger="click">
+            <span class="user">
+              <el-icon><UserFilled /></el-icon>
+              <span class="username">{{ auth.username ?? 'admin' }}</span>
+              <el-icon><ArrowDown /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </el-header>
       <el-main class="main">
         <router-view />
@@ -69,6 +72,7 @@ import { ArrowDown, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
+import SystemStatusBadge from '@/components/common/SystemStatusBadge.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -299,6 +303,12 @@ async function onCommand(cmd: string) {
   align-items: center;
   gap: 12px;
   min-width: 0;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
 }
 .collapse-btn {
   font-size: 18px;
