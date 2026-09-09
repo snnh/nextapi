@@ -3,15 +3,61 @@
     <div class="page-intro">
       <div>
         <h2>模型</h2>
-        <p>管理对外模型名称、实际模型和请求转发策略。</p>
+        <p>按对外模型名查看可调用情况（上游、价格、别名、健康度），或切换到路由视图编辑转发规则。</p>
       </div>
       <div class="intro-summary">
+        <span><b>{{ uniqueModelCount }}</b> 个模型</span>
         <span><b>{{ drafts.length }}</b> 条路由</span>
         <span><b>{{ enabledCount }}</b> 条启用</span>
-        <span><b>{{ uniqueModelCount }}</b> 个模型</span>
       </div>
     </div>
-    <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
+
+    <div class="toolbar">
+      <el-radio-group v-model="viewMode">
+        <el-radio-button value="models">模型视图</el-radio-button>
+        <el-radio-button value="routes">路由视图</el-radio-button>
+      </el-radio-group>
+
+      <template v-if="viewMode === 'models'">
+        <el-input
+          v-model="modelKeyword"
+          placeholder="搜索模型名 / 上游 / 别名"
+          clearable
+          :prefix-icon="Search"
+          style="width: 260px"
+        />
+        <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+        <div class="spacer" />
+        <div class="hint" v-if="unpricedModelCount > 0">
+          有 {{ unpricedModelCount }} 个模型未配置价格（仍可调用，但不计成本）
+        </div>
+        <template v-if="dirtyCount > 0">
+          <div class="hint">有 {{ dirtyCount }} 条修改未保存</div>
+          <el-button @click="discardLocal">放弃修改</el-button>
+          <el-button type="primary" :loading="saving" @click="saveAll">保存全部</el-button>
+        </template>
+        <el-button v-else type="primary" :icon="Plus" @click="openCreate">新增路由</el-button>
+      </template>
+
+      <template v-else>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新增规则</el-button>
+        <el-button :icon="Refresh" @click="refresh">刷新</el-button>
+        <el-button @click="discardLocal">放弃本地修改</el-button>
+        <div class="spacer" />
+        <div class="hint" v-if="dirtyCount > 0">有 {{ dirtyCount }} 条修改未保存</div>
+        <el-button type="primary" :loading="saving" @click="saveAll">
+          保存全部（{{ drafts.length }} 条）
+        </el-button>
+      </template>
+    </div>
+
+    <el-alert
+      v-if="viewMode === 'routes'"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 16px"
+    >
       <template #title>模型 → 上游绑定（模型名支持 <span class="mono">*</span> 通配）</template>
       <div class="hint">
         <div>· 优先级数字小者优先；同优先级按权重加权。</div>
@@ -21,18 +67,101 @@
       </div>
     </el-alert>
 
-    <div class="toolbar">
-      <el-button type="primary" :icon="Plus" @click="openCreate">新增规则</el-button>
-      <el-button :icon="Refresh" @click="refresh">刷新</el-button>
-      <el-button @click="discardLocal">放弃本地修改</el-button>
-      <div class="spacer" />
-      <div class="hint" v-if="dirtyCount > 0">有 {{ dirtyCount }} 条修改未保存</div>
-      <el-button type="primary" :loading="saving" @click="saveAll">
-        保存全部（{{ drafts.length }} 条）
-      </el-button>
-    </div>
+    <!-- ===== 模型视图：按对外模型名聚合 ===== -->
+    <el-card v-if="viewMode === 'models'" shadow="never">
+      <el-table :data="filteredOverviewRows" border v-loading="pageLoading">
+        <template #empty>
+          <el-empty :description="modelsEmptyText">
+            <el-button type="primary" :icon="Plus" @click="openCreate">新增路由</el-button>
+          </el-empty>
+        </template>
 
-    <el-card shadow="never">
+        <el-table-column label="对外模型名" min-width="230" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="cell-inline">
+              <CopyText :text="row.model" :truncate="28" />
+              <el-tag v-if="row.wildcard" size="small" type="warning" effect="plain">通配</el-tag>
+              <el-tag v-if="row.autoManaged" size="small" type="primary" effect="plain">自动</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="上游" min-width="210">
+          <template #default="{ row }">
+            <div class="tag-group">
+              <el-tag
+                v-for="n in row.upstreamNames.slice(0, 2)"
+                :key="n"
+                size="small"
+                effect="plain"
+              >
+                {{ n }}
+              </el-tag>
+              <el-tooltip
+                v-if="row.upstreamNames.length > 2"
+                :content="row.upstreamNames.join('、')"
+                placement="top"
+              >
+                <el-tag size="small" type="info" effect="plain">
+                  +{{ row.upstreamNames.length - 2 }}
+                </el-tag>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="优先级" width="90" align="center">
+          <template #default="{ row }">
+            <span v-if="row.minPriority != null">{{ row.minPriority }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="路由" width="96" align="center">
+          <template #default="{ row }">
+            <span :class="{ 'text-warn': row.enabledCount === 0 }">
+              {{ row.enabledCount }}/{{ row.totalCount }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="价格" width="118" align="center">
+          <template #default="{ row }">
+            <el-tooltip :content="priceTooltip(row)" placement="top">
+              <el-tag :type="priceTagType(row.priceState)" size="small" effect="plain">
+                {{ priceLabel(row.priceState) }}
+              </el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="别名" width="80" align="center">
+          <template #default="{ row }">
+            <span v-if="row.aliases.length">{{ row.aliases.length }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="状态" width="120" align="center">
+          <template #default="{ row }">
+            <el-tooltip :content="row.healthText" placement="top">
+              <el-tag :type="healthTagType(row.health)" size="small" effect="plain">
+                {{ healthLabel(row.health) }}
+              </el-tag>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="90" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- ===== 路由视图：现有编辑表格 ===== -->
+    <el-card v-else shadow="never">
       <el-table :data="drafts" border>
         <template #empty>
           <el-empty description="暂无模型路由，点击左上角「新增规则」创建" />
@@ -209,19 +338,38 @@
         <el-button type="primary" :loading="saving" @click="submitDialog">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 模型详情抽屉（模型视图） -->
+    <ModelDetailDrawer
+      v-model:visible="detailVisible"
+      :row="detailRow"
+      :upstreams="upstreams"
+      @edit-route="onEditRoute"
+      @add-route="onAddRoute"
+      @goto-pricing="gotoPricing"
+      @goto-aliases="gotoAliases"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
-import { routeApi, upstreamApi } from '@/api'
+import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { aliasApi, pricingApi, routeApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
 import CopyText from '@/components/common/CopyText.vue'
+import ModelDetailDrawer from '@/components/models/ModelDetailDrawer.vue'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
-import type { RouteItem, RouteOut, UpstreamOut } from '@/api/types'
+import {
+  buildModelOverview,
+  type ModelHealth,
+  type ModelOverviewRow,
+  type ModelPriceState,
+} from '@/composables/useModelOverview'
+import type { ModelAliasRow, RouteItem, RouteOut, RuleItem, UpstreamOut } from '@/api/types'
 
 /** 默认重试状态码（可空=默认此列表） */
 const DEFAULT_RETRY_CODES = [429, 500, 502, 503, 504]
@@ -238,13 +386,138 @@ interface RouteRow extends RouteItem {
 const pageLoading = ref(false)
 const saving = ref(false)
 const upstreams = ref<UpstreamOut[]>([])
+/** 价格规则（模型视图判定「是否已计价」） */
+const prices = ref<RuleItem[]>([])
+/** 模型别名（模型视图展示别名关系） */
+const aliases = ref<ModelAliasRow[]>([])
 /** 最近一次后端提交结果（用于 diff / 放弃本地修改） */
 const serverCommit = ref<RouteOut[]>([])
 /** 本地草稿（可编辑工作副本） */
 const drafts = ref<RouteRow[]>([])
 
+// —— 模型视图状态 ——
+const router = useRouter()
+const viewMode = ref<'models' | 'routes'>('models')
+const modelKeyword = ref('')
+const detailVisible = ref(false)
+const detailRow = ref<ModelOverviewRow | null>(null)
+
 const enabledCount = computed(() => drafts.value.filter((r) => r.enabled).length)
 const uniqueModelCount = computed(() => new Set(drafts.value.map((r) => r.model_pattern)).size)
+
+/** 草稿 → 聚合视图输入（未保存草稿用合成 id，保证逐行价格判定键稳定） */
+function overviewRoutes(): RouteOut[] {
+  return drafts.value.map((r, i) => ({
+    id: r.id ?? `draft-${i}`,
+    model_pattern: r.model_pattern,
+    upstream_id: r.upstream_id,
+    upstream_name: r.upstreamName,
+    override_model: r.override_model ?? null,
+    priority: r.priority ?? 10,
+    weight: r.weight ?? 1,
+    enabled: r.enabled ?? true,
+    retries: r.retries ?? 2,
+    retry_status_codes: r.retry_status_codes ?? [...DEFAULT_RETRY_CODES],
+    lock_upstream: r.lock_upstream ?? false,
+    sort_order: r.sort_order ?? 0,
+    managed_by: r.managed_by ?? null,
+    created_at: r.createdAt ?? '',
+    updated_at: r.updatedAt ?? '',
+  }))
+}
+
+/** 模型视图行（基于本地草稿实时聚合，未保存改动也能看到） */
+const overviewRows = computed(() =>
+  buildModelOverview(overviewRoutes(), upstreams.value, prices.value, aliases.value),
+)
+
+const filteredOverviewRows = computed(() => {
+  const kw = modelKeyword.value.trim().toLowerCase()
+  if (!kw) return overviewRows.value
+  return overviewRows.value.filter(
+    (r) =>
+      r.model.toLowerCase().includes(kw) ||
+      r.upstreamNames.some((n) => n.toLowerCase().includes(kw)) ||
+      r.aliases.some((a) => a.alias.toLowerCase().includes(kw)),
+  )
+})
+
+const modelsEmptyText = computed(() =>
+  modelKeyword.value.trim() ? '未找到匹配的模型，请调整搜索关键词' : '暂无模型路由，点击「新增路由」创建',
+)
+
+/** 未配 / 部分配价格的模型数（用于工具栏提示） */
+const unpricedModelCount = computed(
+  () =>
+    overviewRows.value.filter((r) => r.priceState === 'unpriced' || r.priceState === 'partial')
+      .length,
+)
+
+function priceLabel(s: ModelPriceState): string {
+  switch (s) {
+    case 'priced':
+      return '已配置'
+    case 'partial':
+      return '部分配置'
+    case 'unpriced':
+      return '未配置'
+    default:
+      return '待定'
+  }
+}
+
+function priceTagType(s: ModelPriceState): 'success' | 'warning' | 'info' {
+  if (s === 'priced') return 'success'
+  if (s === 'unknown') return 'info'
+  return 'warning'
+}
+
+function priceTooltip(row: ModelOverviewRow): string {
+  if (row.priceState === 'unknown') {
+    return '通配路由未设置覆盖模型名，无法逐条判定价格；请为实际模型配置价格'
+  }
+  if (row.priceState === 'priced') return '该模型下所有路由均已配置价格'
+  return `已配置 ${row.pricedRouteCount}/${row.determinateRouteCount} 条路由；未配置仍可调用但不计成本`
+}
+
+function healthLabel(h: ModelHealth): string {
+  return h === 'ok' ? '正常' : h === 'warn' ? '部分异常' : '异常'
+}
+
+function healthTagType(h: ModelHealth): 'success' | 'warning' | 'danger' {
+  return h === 'ok' ? 'success' : h === 'warn' ? 'warning' : 'danger'
+}
+
+/** 打开模型详情抽屉 */
+function openDetail(row: ModelOverviewRow) {
+  detailRow.value = row
+  detailVisible.value = true
+}
+
+/** 详情内编辑某条路由：切回路由视图并打开该行编辑弹窗 */
+function onEditRoute(route: RouteOut) {
+  const idx = drafts.value.findIndex((r, i) => (r.id ?? `draft-${i}`) === route.id)
+  if (idx < 0) return
+  viewMode.value = 'routes'
+  detailVisible.value = false
+  openEdit(idx)
+}
+
+/** 详情内为该模型新增路由：切回路由视图并预填模型名 */
+function onAddRoute(model: string) {
+  viewMode.value = 'routes'
+  detailVisible.value = false
+  openCreate()
+  form.model_pattern = model
+}
+
+function gotoPricing(model: string) {
+  router.push({ name: 'pricing', query: { model } })
+}
+
+function gotoAliases(model: string) {
+  router.push({ name: 'aliases', query: { model } })
+}
 
 // —— 弹窗状态 ——
 const dialogVisible = ref(false)
@@ -306,8 +579,14 @@ const dirtyCount = computed(() => drafts.value.filter((r) => isRowDirty(r)).leng
 // —— 数据加载 ——
 async function loadData() {
   pageLoading.value = true
-  try {
-    const routes = await routeApi.list()
+  const [routesRes, upstreamsRes, pricesRes, aliasesRes] = await Promise.allSettled([
+    routeApi.list(),
+    upstreamApi.list(),
+    pricingApi.list(),
+    aliasApi.list(),
+  ])
+  if (routesRes.status === 'fulfilled') {
+    const routes = routesRes.value
     serverCommit.value = routes
     drafts.value = routes.map((r) => ({
       id: r.id,
@@ -321,18 +600,20 @@ async function loadData() {
       retry_status_codes: [...r.retry_status_codes],
       lock_upstream: r.lock_upstream,
       sort_order: r.sort_order,
+      managed_by: r.managed_by,
       upstreamName: r.upstream_name,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }))
-  } catch (e) {
-    ElMessage.error(errMsg(e))
+  } else {
+    ElMessage.error(errMsg(routesRes.reason))
   }
-  try {
-    upstreams.value = await upstreamApi.list()
-  } catch (e) {
-    ElMessage.error(errMsg(e))
-  }
+  if (upstreamsRes.status === 'fulfilled') upstreams.value = upstreamsRes.value
+  else ElMessage.error(errMsg(upstreamsRes.reason))
+  if (pricesRes.status === 'fulfilled') prices.value = pricesRes.value
+  else ElMessage.error(errMsg(pricesRes.reason))
+  if (aliasesRes.status === 'fulfilled') aliases.value = aliasesRes.value
+  else ElMessage.error(errMsg(aliasesRes.reason))
   pageLoading.value = false
 }
 
@@ -649,6 +930,12 @@ function computeDiff(): { added: number; modified: number; deleted: number } {
 }
 .muted {
   color: #c0c4cc;
+}
+.text-warn {
+  color: #e6a23c;
+}
+.text-error {
+  color: #f56c6c;
 }
 .cell-inline {
   display: inline-flex;

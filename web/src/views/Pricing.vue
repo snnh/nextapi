@@ -309,6 +309,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting, View } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -337,6 +338,7 @@ import FxPanel from '@/components/pricing/FxPanel.vue'
 
 const upstreams = ref<UpstreamOut[]>([])
 const pageLoading = ref(false)
+const route = useRoute()
 
 const activeTab = ref('rules')
 const formDialogRef = ref<InstanceType<typeof RuleFormDialog>>()
@@ -706,6 +708,12 @@ function onTabChange(name: string | number) {
 }
 
 onMounted(() => {
+  // 支持从模型详情跳转带入模型名（/pricing?model=xxx），直接定位到该模型的价格
+  const qModel = typeof route.query.model === 'string' ? route.query.model.trim() : ''
+  if (qModel) {
+    activeTab.value = 'rules'
+    filterModel.value = qModel
+  }
   pageLoading.value = true
   Promise.all([loadUpstreams(), loadRules()]).finally(() => {
     pageLoading.value = false

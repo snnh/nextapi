@@ -128,6 +128,14 @@
     <el-card shadow="never" class="page-card">
       <div class="table-head">
         <span>请求日志</span>
+        <div class="spacer" />
+        <span v-if="lastLoadedAt" class="hint">更新于 {{ fmtTime(lastLoadedAt) }}</span>
+        <el-tooltip
+          content="日志异步写入，最近几秒的请求可能尚未入库；Tokens 列 P=未缓存输入、C=输出、Cache=缓存命中"
+          placement="top"
+        >
+          <el-icon class="help-icon"><QuestionFilled /></el-icon>
+        </el-tooltip>
       </div>
       <template v-if="listError">
         <div v-loading="loading" class="error-state">
@@ -149,13 +157,13 @@
           </template>
         </el-table-column>
         <el-table-column prop="model" label="模型" min-width="150" show-overflow-tooltip />
-        <el-table-column label="Key" min-width="170" show-overflow-tooltip>
+        <el-table-column v-if="!isNarrow" label="Key" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ keyText(row) }}</template>
         </el-table-column>
         <el-table-column label="上游" min-width="130">
           <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
         </el-table-column>
-        <el-table-column label="协议链" min-width="190">
+        <el-table-column v-if="!isNarrow" label="协议链" min-width="190">
           <template #default="{ row }">
             <div class="proto-cell">
               <span>{{ protoLabel(row.protocol_in) }} → {{ protoLabel(row.protocol_out) }}</span>
@@ -169,12 +177,25 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="流式" width="70" align="center">
+        <el-table-column v-if="!isNarrow" label="流式" width="70" align="center">
           <template #default="{ row }">{{ row.stream ? '是' : '否' }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="84" align="center">
+        <el-table-column label="状态" width="118" align="center">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <div class="status-cell">
+              <el-tooltip :disabled="!row.error" :content="row.error || ''" placement="top">
+                <el-tag :type="statusType(row.status)" size="small" :class="{ 'has-error': !!row.error }">
+                  {{ row.status }}
+                </el-tag>
+              </el-tooltip>
+              <el-tooltip
+                v-if="row.degraded"
+                content="该请求发生了降级，可在详情查看具体环节"
+                placement="top"
+              >
+                <el-tag size="small" type="warning" effect="plain">降级</el-tag>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="延迟" width="130">
@@ -183,7 +204,7 @@
             <div v-if="row.ttfb_ms != null" class="hint">TTFB {{ fmtDur(row.ttfb_ms) }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="Tokens" min-width="175">
+        <el-table-column v-if="!isNarrow" label="Tokens" min-width="175">
           <template #default="{ row }">
             <div class="token-cell">
               <span>P {{ fmtInt(row.prompt_tokens) }}</span>
@@ -225,47 +246,84 @@
     <el-drawer v-model="detailVisible" title="请求详情" :size="drawerSize">
       <div v-loading="detailLoading">
         <template v-if="detail">
+          <!-- 1. 请求结果 -->
+          <div class="detail-head">
+            <el-tag :type="statusType(detail.status)" size="small">{{ detail.status }}</el-tag>
+            <span class="mono rid">{{ detail.request_id }}</span>
+            <el-button size="small" link type="primary" @click="copyRequestId(detail.request_id)">
+              复制
+            </el-button>
+          </div>
+
+          <div class="group-title">请求结果</div>
           <el-descriptions :column="descColumn" border>
-            <el-descriptions-item label="request_id" :span="descColumn">
-              <span class="mono">{{ detail?.request_id }}</span>
-              <el-button size="small" link type="primary" @click="copyRequestId(detail?.request_id ?? '')">
-                复制
-              </el-button>
+            <el-descriptions-item label="时间">{{ fmtTime(detail.ts) }}</el-descriptions-item>
+            <el-descriptions-item label="状态">
+              <el-tag :type="statusType(detail.status)" size="small" effect="plain">{{ detail.status }}</el-tag>
+              <el-tag v-if="detail.degraded" size="small" type="warning" effect="plain" class="tag-gap">
+                降级
+              </el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="时间">{{ fmtTime(detail?.ts) }}</el-descriptions-item>
-            <el-descriptions-item label="模型">{{ detail?.model }}</el-descriptions-item>
-            <el-descriptions-item v-if="detail?.requested_model" label="入口模型">
-              {{ detail.requested_model }}<span class="hint">（别名）</span>
+            <el-descriptions-item label="延迟">{{ fmtDur(detail.latency_ms) }}</el-descriptions-item>
+            <el-descriptions-item label="TTFB">{{ fmtDur(detail.ttfb_ms) }}</el-descriptions-item>
+            <el-descriptions-item label="重试次数">{{ detail.retry_count }}</el-descriptions-item>
+            <el-descriptions-item label="流式">{{ detail.stream ? '是' : '否' }}</el-descriptions-item>
+          </el-descriptions>
+
+          <!-- 2. 路由信息 -->
+          <div class="group-title">路由信息</div>
+          <el-descriptions :column="descColumn" border>
+            <el-descriptions-item label="入口模型">
+              {{ detail.requested_model || detail.model }}
+              <span v-if="detail.requested_model && detail.requested_model !== detail.model" class="hint">
+                （别名）
+              </span>
             </el-descriptions-item>
+            <el-descriptions-item label="实际模型">{{ detail.model }}</el-descriptions-item>
+            <el-descriptions-item label="上游">{{ detail.upstream_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="Key">{{ keyText(detail) }}</el-descriptions-item>
-            <el-descriptions-item label="上游">{{ detail?.upstream_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="协议链">
-              {{ protoLabel(detail?.protocol_in) }} → {{ protoLabel(detail?.protocol_out) }}
+              {{ protoLabel(detail.protocol_in) }} → {{ protoLabel(detail.protocol_out) }}
             </el-descriptions-item>
-            <el-descriptions-item label="转换方式">{{ detail?.convert_mode || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="流式">{{ detail?.stream ? '是' : '否' }}</el-descriptions-item>
-            <el-descriptions-item label="状态">{{ detail?.status }}</el-descriptions-item>
-            <el-descriptions-item label="降级">{{ detail?.degraded ? '是' : '否' }}</el-descriptions-item>
-            <el-descriptions-item label="重试次数">{{ detail?.retry_count }}</el-descriptions-item>
-            <el-descriptions-item label="延迟">{{ fmtDur(detail?.latency_ms) }}</el-descriptions-item>
-            <el-descriptions-item label="TTFB">{{ fmtDur(detail?.ttfb_ms) }}</el-descriptions-item>
-            <el-descriptions-item label="Prompt Tokens">{{ fmtInt(detail?.prompt_tokens) }}</el-descriptions-item>
-            <el-descriptions-item label="Completion Tokens">{{ fmtInt(detail?.completion_tokens) }}</el-descriptions-item>
-            <el-descriptions-item label="Cache Write">{{ fmtInt(detail?.cache_write_tokens) }}</el-descriptions-item>
-            <el-descriptions-item label="Cache Read">{{ fmtInt(detail?.cache_read_tokens) }}</el-descriptions-item>
-            <el-descriptions-item label="图片数">{{ fmtInt(detail?.images) }}</el-descriptions-item>
-            <el-descriptions-item label="图片尺寸">{{ detail?.image_size || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="视频时长">{{ detail?.video_seconds || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="视频分辨率">{{ detail?.video_resolution || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="视频任务">{{ detail?.video_task_type || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="计价来源">{{ detail?.pricing_source || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="成本 CNY">
-              {{ detail?.cost_cny != null ? fmtMoney(detail?.cost_cny) : '未计价' }}
+            <el-descriptions-item label="转换方式">{{ detail.convert_mode || '-' }}</el-descriptions-item>
+          </el-descriptions>
+
+          <!-- 3. 用量与成本 -->
+          <div class="group-title">用量与成本</div>
+          <el-descriptions :column="descColumn" border>
+            <el-descriptions-item label="输入 Tokens">
+              {{ fmtInt(detail.prompt_tokens) }}
+              <el-tooltip content="未缓存输入 token；缓存命中量见「缓存读取」" placement="top">
+                <el-icon class="help-icon"><QuestionFilled /></el-icon>
+              </el-tooltip>
             </el-descriptions-item>
-            <el-descriptions-item label="成本 USD">
-              {{ detail?.cost_usd != null ? fmtMoney(detail?.cost_usd) : '未计价' }}
+            <el-descriptions-item label="输出 Tokens">{{ fmtInt(detail.completion_tokens) }}</el-descriptions-item>
+            <el-descriptions-item label="缓存写入">{{ fmtInt(detail.cache_write_tokens) }}</el-descriptions-item>
+            <el-descriptions-item label="缓存读取">{{ fmtInt(detail.cache_read_tokens) }}</el-descriptions-item>
+            <el-descriptions-item v-if="detail.images" label="图片数">{{ fmtInt(detail.images) }}</el-descriptions-item>
+            <el-descriptions-item v-if="detail.image_size" label="图片尺寸">{{ detail.image_size }}</el-descriptions-item>
+            <el-descriptions-item v-if="detail.video_seconds" label="视频时长">
+              {{ detail.video_seconds }}s
+            </el-descriptions-item>
+            <el-descriptions-item v-if="detail.video_resolution" label="视频分辨率">
+              {{ detail.video_resolution }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="detail.video_task_type" label="视频任务">
+              {{ detail.video_task_type }}
+            </el-descriptions-item>
+            <el-descriptions-item label="计价来源">
+              {{ detail.pricing_source || '未计价' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="成本">
+              <span v-if="detail.cost_cny != null || detail.cost_usd != null">
+                ¥ {{ fmtMoney(detail.cost_cny) }} / $ {{ fmtMoney(detail.cost_usd) }}
+              </span>
+              <span v-else class="hint">未配置价格（不产生成本统计）</span>
             </el-descriptions-item>
           </el-descriptions>
+
+          <!-- 4. 原始记录 -->
+          <div class="group-title">原始记录</div>
 
           <div v-if="detail?.error" class="error-block">Error: {{ detail.error }}</div>
 
@@ -314,9 +372,29 @@
           style="width: 260px"
         />
       </div>
-      <div class="hint" style="margin-bottom: 10px">仅删除分区边界 to_ts ≤ before 的整分区。</div>
+      <div class="hint" style="margin-bottom: 10px">
+        仅删除分区边界 to_ts ≤ before 的整分区；实际截止时间按分区边界对齐，滚动聚合表（usage_hourly）按同一边界清理。
+        独立配额计数器 quota_usage 不受影响。
+      </div>
 
       <div v-if="cleanupPreviewDone">
+        <el-descriptions v-if="cleanupEffectiveBefore" :column="2" border size="small" class="cleanup-summary">
+          <el-descriptions-item label="实际生效截止">
+            {{ fmtTime(cleanupEffectiveBefore) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="待删分区">{{ cleanupPreview.length }} 个</el-descriptions-item>
+          <el-descriptions-item label="待删明细行数">
+            {{ fmtInt(cleanupSummary?.log_rows ?? 0) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="待删聚合行数">{{ fmtInt(cleanupHourlyRows) }}</el-descriptions-item>
+          <el-descriptions-item label="Token 合计">
+            输入 {{ fmtInt(cleanupSummary?.prompt_tokens ?? 0) }} · 输出
+            {{ fmtInt(cleanupSummary?.completion_tokens ?? 0) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="成本合计">
+            ¥ {{ fmtMoney(cleanupSummary?.cost_cny ?? '0') }} / $ {{ fmtMoney(cleanupSummary?.cost_usd ?? '0') }}
+          </el-descriptions-item>
+        </el-descriptions>
         <el-table v-if="cleanupPreview.length" :data="cleanupPreview" size="small" border max-height="260">
           <el-table-column prop="name" label="分区" min-width="180" show-overflow-tooltip />
           <el-table-column label="时间范围" min-width="230">
@@ -353,12 +431,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Delete, Download, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Download, QuestionFilled, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { useRoute, useRouter } from 'vue-router'
 import { keyApi, logApi, upstreamApi, type LogListQuery } from '@/api'
 import { errMsg } from '@/api/http'
-import type { ApiKeyRow, LogItem, PartitionInfo, UpstreamOut } from '@/api/types'
+import type { ApiKeyRow, CleanupSummary, LogItem, PartitionInfo, UpstreamOut } from '@/api/types'
 import CopyText from '@/components/common/CopyText.vue'
 import { PROTOCOL_IN_LABELS, statusType } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
@@ -487,6 +565,7 @@ async function loadLogs() {
     rows.value = resp.items
     total.value = resp.total
     listError.value = ''
+    lastLoadedAt.value = new Date().toISOString()
   } catch (e) {
     if (seq !== loadSeq) return
     rows.value = []
@@ -724,17 +803,28 @@ async function exportCsv() {
 }
 
 // —— 分区清理 ——
+/** 最近一次列表加载完成时间（提示异步落库延迟） */
+const lastLoadedAt = ref('')
+
 const cleanupVisible = ref(false)
 const cleanupBefore = ref<Date | null>(null)
 const cleanupLoading = ref(false)
 const cleanupExecuting = ref(false)
 const cleanupPreview = ref<PartitionInfo[]>([])
 const cleanupPreviewDone = ref(false)
+/** 实际生效截止（分区边界对齐） */
+const cleanupEffectiveBefore = ref<string | null>(null)
+/** dry-run 汇总（行数 / Token / 成本） */
+const cleanupSummary = ref<CleanupSummary | null>(null)
+const cleanupHourlyRows = ref(0)
 
 function openCleanup() {
   cleanupBefore.value = null
   cleanupPreview.value = []
   cleanupPreviewDone.value = false
+  cleanupEffectiveBefore.value = null
+  cleanupSummary.value = null
+  cleanupHourlyRows.value = 0
   cleanupVisible.value = true
 }
 
@@ -747,6 +837,9 @@ async function runCleanupPreview() {
   try {
     const resp = await logApi.cleanup({ before: tsToIso(cleanupBefore.value), dry_run: true })
     cleanupPreview.value = resp.dropped
+    cleanupEffectiveBefore.value = resp.effective_before ?? null
+    cleanupSummary.value = resp.summary ?? null
+    cleanupHourlyRows.value = resp.hourly_rows ?? 0
     cleanupPreviewDone.value = true
   } catch (e) {
     ElMessage.error(errMsg(e))
@@ -758,8 +851,10 @@ async function runCleanupPreview() {
 async function confirmCleanup() {
   if (!cleanupBefore.value) return
   try {
+    const rows = cleanupSummary.value?.log_rows
     await ElMessageBox.confirm(
-      `确定删除 ${cleanupPreview.value.length} 个分区？此操作将对整分区执行 DROP，删除的数据不可恢复！`,
+      `确定删除 ${cleanupPreview.value.length} 个分区${rows != null ? `（约 ${fmtInt(rows)} 行明细）` : ''}？` +
+        '此操作将对整分区执行 DROP，删除的数据不可恢复！',
       '确认删除分区',
       { type: 'warning', confirmButtonText: '确认删除', confirmButtonClass: 'el-button--danger' },
     )
@@ -770,7 +865,8 @@ async function confirmCleanup() {
   try {
     const resp = await logApi.cleanup({ before: tsToIso(cleanupBefore.value), dry_run: false })
     const n = resp.dropped.length
-    ElMessage.success(`已删除 ${n} 个分区`)
+    const hourly = resp.hourly_rows ?? 0
+    ElMessage.success(`已删除 ${n} 个分区 · 聚合表 ${hourly} 行`)
     cleanupVisible.value = false
     // 删除后当前页可能越界：回到第 1 页再刷新
     onQuery()
@@ -851,6 +947,46 @@ async function confirmCleanup() {
   margin-top: 16px;
 }
 
+/* 详情抽屉：request_id 顶栏 + 分组标题 */
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #eef0f3;
+  flex-wrap: wrap;
+}
+.detail-head .rid {
+  font-size: 12px;
+  color: #4b5563;
+  word-break: break-all;
+}
+.status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.status-cell .has-error {
+  cursor: help;
+}
+.group-title {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+}
+.tag-gap {
+  margin-left: 6px;
+}
+.help-icon {
+  color: #9ca3af;
+  font-size: 13px;
+  vertical-align: -2px;
+  margin-left: 2px;
+  cursor: help;
+}
+
 /* JSON 详情块：抽屉内自滚动，避免内外两层滚动条叠加 */
 .json-cards pre {
   margin: 0;
@@ -886,6 +1022,9 @@ async function confirmCleanup() {
   word-break: break-all;
 }
 
+.cleanup-summary {
+  margin-bottom: 10px;
+}
 .cleanup-desc {
   margin-bottom: 14px;
   padding: 10px 12px;

@@ -109,6 +109,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { aliasApi } from '@/api'
@@ -120,6 +121,7 @@ import { fmtTime } from '@/utils/format'
 
 const items = ref<ModelAliasRow[]>([])
 const pageLoading = ref(false)
+const route = useRoute()
 const saving = ref(false)
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
@@ -287,7 +289,12 @@ async function remove(row: ModelAliasRow) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  // 支持从模型详情跳转带入模型名（/aliases?model=xxx），自动过滤该模型的别名
+  const qModel = typeof route.query.model === 'string' ? route.query.model.trim() : ''
+  if (qModel) keyword.value = qModel
+  load()
+})
 </script>
 
 <style scoped>
