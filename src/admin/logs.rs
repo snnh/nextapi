@@ -28,6 +28,7 @@ use crate::entities::UsageLogRow;
 use crate::error::{ApiError, ApiResult};
 use crate::logging::partition;
 use crate::state::AppState;
+use rust_decimal::Decimal;
 
 /// 日志查询超时（M11.2 资源治理）：30s 未返回 → 503，防慢查询拖垮连接池。
 const LOG_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -98,6 +99,23 @@ struct LogFilter {
 struct CleanupReq {
     before: String,
     dry_run: bool,
+}
+
+/// dry-run 预览汇总：待删明细规模与用量/成本合计（M14 清理口径）。
+#[derive(Debug, Serialize, Default)]
+struct CleanupSummary {
+    log_rows: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    cache_write_tokens: i64,
+    cache_read_tokens: i64,
+    cost_cny: Decimal,
+    cost_usd: Decimal,
+}
+
+/// 实际生效截止时间：被删分区的最大 to_ts（分区边界对齐）；无可删分区 → None。
+fn effective_cut(dropped: &[partition::PartitionInfo]) -> Option<DateTime<Utc>> {
+    dropped.iter().map(|p| p.to_ts).max()
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -231,7 +249,7 @@ async fn get_log(
     Ok(Json(serde_json::json!(item)))
 }
 
-/// POST /api/logs/cleanup：整分区 DROP（dry_run 只返回待删列表）。
+/// POST /api/logs/cleanup：整分区 DROP（dry_run 只返回待删列表与汇总）。
 async fn cleanup_logs(
     State(state): State<Arc<AppState>>,
     admin: AdminUsername,
@@ -245,19 +263,61 @@ async fn cleanup_logs(
     let days = state.hot.load().gateway.log_partition_days;
     let dropped = partition::drop_covered(&state.db, before, days, req.dry_run).await?;
 
-    // 同步清理滚动聚合表：usage_hourly 无分区，不随 DROP 删除——否则清理后
-    // summary（明细源）与 series（hourly 源）口径背离（发布审阅数据批 #3）。
-    let hourly_deleted: u64 = if req.dry_run {
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM usage_hourly WHERE hour < $1")
-            .bind(before)
-            .fetch_one(&state.db)
-            .await? as u64
+    // 边界归一化（M14 §5.4）：明细按整分区 DROP，聚合表按同一截止时间删除。
+    // effective_before = 被删分区的最大 to_ts（分区边界对齐），两者口径一致；
+    // 无可删分区时不清理 usage_hourly（避免明细还在、聚合已被删的背离）。
+    let effective_before = effective_cut(&dropped);
+
+    let hourly_rows: u64 = match effective_before {
+        None => 0,
+        Some(cut) => {
+            if req.dry_run {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM usage_hourly WHERE hour < $1")
+                    .bind(cut)
+                    .fetch_one(&state.db)
+                    .await? as u64
+            } else {
+                sqlx::query("DELETE FROM usage_hourly WHERE hour < $1")
+                    .bind(cut)
+                    .execute(&state.db)
+                    .await?
+                    .rows_affected()
+            }
+        }
+    };
+
+    // dry-run 汇总：待删明细的行数 / Token / 成本合计（仅预览时执行，避免执行路径多一次大范围扫描）。
+    let summary: Option<CleanupSummary> = if req.dry_run {
+        match effective_before {
+            None => Some(CleanupSummary::default()),
+            Some(cut) => {
+                let row = with_log_timeout(
+                    sqlx::query_as::<_, (i64, i64, i64, i64, i64, Decimal, Decimal)>(
+                        "SELECT count(*), \
+                         COALESCE(sum(prompt_tokens),0)::int8, \
+                         COALESCE(sum(completion_tokens),0)::int8, \
+                         COALESCE(sum(cache_write_tokens),0)::int8, \
+                         COALESCE(sum(cache_read_tokens),0)::int8, \
+                         COALESCE(sum(cost_cny),0), COALESCE(sum(cost_usd),0) \
+                         FROM usage_logs WHERE ts < $1",
+                    )
+                    .bind(cut)
+                    .fetch_one(&state.db),
+                )
+                .await??;
+                Some(CleanupSummary {
+                    log_rows: row.0,
+                    prompt_tokens: row.1,
+                    completion_tokens: row.2,
+                    cache_write_tokens: row.3,
+                    cache_read_tokens: row.4,
+                    cost_cny: row.5,
+                    cost_usd: row.6,
+                })
+            }
+        }
     } else {
-        sqlx::query("DELETE FROM usage_hourly WHERE hour < $1")
-            .bind(before)
-            .execute(&state.db)
-            .await?
-            .rows_affected()
+        None
     };
 
     // 非 dry_run 且有删除时写审计
@@ -277,7 +337,11 @@ async fn cleanup_logs(
             "logs.cleanup",
             "usage_logs",
             None,
-            serde_json::json!({ "before": before, "partitions": summaries }),
+            serde_json::json!({
+                "before": before,
+                "effective_before": effective_before,
+                "partitions": summaries,
+            }),
             None,
         )
         .await?;
@@ -287,7 +351,10 @@ async fn cleanup_logs(
         "dry_run": req.dry_run,
         "dropped": dropped,
         // dry_run 时为待删行数预估；实际执行时为已删行数
-        "hourly_rows": hourly_deleted,
+        "hourly_rows": hourly_rows,
+        // 实际生效截止时间（分区边界对齐）；null = 没有可清理的分区
+        "effective_before": effective_before,
+        "summary": summary,
     })))
 }
 
@@ -492,6 +559,36 @@ fn csv_response(body: String) -> Response {
         HeaderValue::from_static("attachment; filename=\"usage_logs.csv\""),
     );
     resp
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::{effective_cut, partition, DateTime};
+
+    fn part(to: &str) -> partition::PartitionInfo {
+        partition::PartitionInfo {
+            name: "usage_logs_p0".to_string(),
+            from_ts: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+            to_ts: DateTime::parse_from_rfc3339(to).unwrap().to_utc(),
+            size_bytes: 0,
+            row_estimate: 0,
+        }
+    }
+
+    /// 边界归一化：取被删分区的最大 to_ts；无候选 → None（不清理聚合表）。
+    #[test]
+    fn effective_cut_uses_latest_partition_end() {
+        assert_eq!(effective_cut(&[]), None);
+        let cut = effective_cut(&[
+            part("2026-01-31T00:00:00Z"),
+            part("2026-03-02T00:00:00Z"),
+            part("2026-02-15T00:00:00Z"),
+        ])
+        .unwrap();
+        assert_eq!(cut.to_rfc3339(), "2026-03-02T00:00:00+00:00");
+    }
 }
 
 #[cfg(test)]

@@ -164,7 +164,24 @@
             description="关闭后将无法再次查看完整 Key；数据库仅存储哈希，页面与后端均无法再次取得明文。"
           />
           <div class="secret-key mono">{{ secretKey }}</div>
-          <el-button type="primary" :icon="CopyDocument" @click="copySecret">一键复制</el-button>
+          <div class="secret-actions">
+            <el-button type="primary" :icon="CopyDocument" @click="copySecret">一键复制密钥</el-button>
+            <el-button :icon="CopyDocument" @click="copyCurl">复制调用示例</el-button>
+          </div>
+
+          <el-divider content-position="left">调用信息</el-divider>
+          <el-descriptions :column="1" border size="small" class="secret-desc">
+            <el-descriptions-item label="网关地址">
+              <CopyText :text="gatewayBase" />
+            </el-descriptions-item>
+            <el-descriptions-item label="模型名">
+              填写「模型」页中的对外模型名（如 <span class="mono">gpt-4o-mini</span>），别名同样可用
+            </el-descriptions-item>
+          </el-descriptions>
+          <pre class="code">{{ curlExample }}</pre>
+          <div class="hint">
+            兼容 OpenAI / Anthropic / Gemini 官方 SDK：把 SDK 的 base_url 指向网关地址、api_key 填入本密钥即可。
+          </div>
         </div>
       </template>
 
@@ -280,7 +297,8 @@
 
       <template #footer>
         <template v-if="secretKey">
-          <el-button type="primary" @click="closeSecret">我已保存</el-button>
+          <el-button @click="closeSecret">完成</el-button>
+          <el-button type="primary" @click="gotoModels">去配置模型</el-button>
         </template>
         <template v-else>
           <el-button @click="handleCancel">取消</el-button>
@@ -293,6 +311,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { CopyDocument, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -302,6 +321,7 @@ import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import { copyText } from '@/utils/clipboard'
 import { QUOTA_UNIT_LABELS, QUOTA_WINDOW_LABELS } from '@/utils/consts'
 import { fmtInt, fmtTime } from '@/utils/format'
+import CopyText from '@/components/common/CopyText.vue'
 import type { ApiKeyRow, KeyCreateReq, QuotaUnit, QuotaWindow } from '@/api/types'
 
 /** 更新写体：KeyCreateReq 冻结类型未含 enabled，但契约 §4.3 要求行内/编辑启用开关走 PUT enabled */
@@ -309,6 +329,7 @@ type KeyWriteReq = KeyCreateReq & { enabled?: boolean }
 
 const keys = ref<ApiKeyRow[]>([])
 const pageLoading = ref(false)
+const router = useRouter()
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
 const rotatingId = ref('')
@@ -749,6 +770,28 @@ async function submit() {
 function copySecret() {
   copyText(secretKey.value, '已复制完整 Key')
 }
+
+// —— 一次性调用向导（创建/轮换成功后展示） ——
+/** 网关调用地址：以浏览器当前 origin 为准（反代/自定义域名场景下即用户访问地址） */
+const gatewayBase = computed(() => `${window.location.origin}/v1`)
+const curlExample = computed(() =>
+  [
+    `curl ${gatewayBase.value}/chat/completions \\`,
+    `  -H "Authorization: Bearer ${secretKey.value}" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'`,
+  ].join('\n'),
+)
+
+function copyCurl() {
+  copyText(curlExample.value, '已复制调用示例')
+}
+
+/** 调用向导「去配置模型」：关闭弹窗并跳转模型页 */
+function gotoModels() {
+  dialogVisible.value = false
+  router.push({ name: 'routes' })
+}
 </script>
 
 <style scoped>
@@ -781,6 +824,32 @@ function copySecret() {
   flex-direction: column;
   gap: 16px;
   align-items: flex-start;
+}
+.secret-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.secret-desc {
+  width: 100%;
+}
+.code {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 10px 12px;
+  background: #f7f8fa;
+  border: 1px solid #e8eaee;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.hint {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.7;
 }
 .secret-key {
   font-size: 16px;

@@ -504,10 +504,27 @@ export interface CleanupReq {
   dry_run: boolean
 }
 
+/** dry-run 预览汇总：待删明细的规模与用量/成本合计 */
+export interface CleanupSummary {
+  log_rows: number
+  prompt_tokens: number
+  completion_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  cost_cny: string
+  cost_usd: string
+}
+
 export interface CleanupResp {
   dry_run: boolean
   /** dry_run=true 时为将被删分区预览 */
   dropped: PartitionInfo[]
+  /** dry_run 时为待删聚合行数，执行时为已删行数 */
+  hourly_rows?: number
+  /** 实际生效截止时间（按分区边界对齐）；null = 没有可清理的分区 */
+  effective_before?: string | null
+  /** 仅 dry_run 返回；执行时为 null */
+  summary?: CleanupSummary | null
 }
 
 // ---------------------------------------------------------------------------

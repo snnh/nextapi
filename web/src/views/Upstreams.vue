@@ -7,43 +7,10 @@
     </div>
 
     <div class="toolbar">
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建上游</el-button>
+      <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">接入上游</el-button>
+      <el-button :icon="Plus" @click="openCreate">自定义上游</el-button>
       <div class="spacer" />
     </div>
-
-    <!-- 预设一键接入 -->
-    <el-collapse v-model="presetOpen" id="presets-panel" class="page-card">
-      <el-collapse-item name="presets" title="预设一键接入">
-        <div class="hint" style="margin-bottom: 12px">
-          从内置预设快速接入主流上游（阿里百炼 / OpenAI 等）。接入时仅需填写 API Key，其余配置自动填充，接入后可到「模型路由」页为模型绑定该上游。
-        </div>
-        <el-row :gutter="16">
-          <el-col v-for="p in presets" :key="p.name" :xs="24" :sm="12" :md="8" :lg="6" class="preset-col">
-            <el-card shadow="hover" class="preset-card">
-              <div class="preset-head">
-                <span class="preset-name">{{ p.display_name }}</span>
-                <el-tag size="small" type="info">{{ p.kind }}</el-tag>
-              </div>
-              <div class="preset-desc hint">{{ p.description }}</div>
-              <div class="tag-group preset-protos">
-                <el-tag v-for="proto in p.protocols" :key="proto" size="small" type="primary" effect="plain">
-                  {{ PROTOCOL_LABEL(proto) }}
-                </el-tag>
-              </div>
-              <div v-if="p.media_base_url" class="hint preset-media">
-                媒体基础地址：{{ p.media_base_url }}
-              </div>
-              <div v-if="p.protocol_base_urls" class="hint preset-media">
-                <div v-for="(url, proto) in p.protocol_base_urls" :key="proto">
-                  {{ PROTOCOL_LABEL(proto) }} 地址：{{ url }}
-                </div>
-              </div>
-              <el-button size="small" type="primary" @click="openProvision(p)">接入</el-button>
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-collapse-item>
-    </el-collapse>
 
     <!-- 上游表格 -->
     <el-card shadow="never">
@@ -62,8 +29,8 @@
                 <div class="empty-sub hint">接入上游后，才能在「模型路由」页把模型请求转发到对应的上游。</div>
               </template>
               <div class="empty-actions">
-                <el-button type="primary" :icon="Plus" @click="openCreate">新建上游</el-button>
-                <el-button :icon="MagicStick" @click="openPresetPanel">用预设一键接入</el-button>
+                <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">接入上游（预设）</el-button>
+                <el-button :icon="Plus" @click="openCreate">自定义上游</el-button>
               </div>
             </el-empty>
           </div>
@@ -189,72 +156,14 @@
       默认值：timeout_ms = 300000、breaker_threshold = 5；图片媒体地址留空时回退 base_url。启用/禁用直接切换行内开关（禁用后 disabled_by = manual）。
     </div>
 
-    <!-- 预设接入弹窗 -->
-    <el-dialog v-model="provisionVisible" title="预设一键接入" width="560px" :close-on-click-modal="false">
-      <el-form label-width="90px" @submit.prevent>
-        <el-form-item label="预设">
-          <div class="hint">{{ provisionPreset?.display_name }}（{{ provisionPreset?.kind }}）</div>
-        </el-form-item>
-        <el-form-item label="上游名称" required>
-          <el-input v-model="provisionName" placeholder="上游名称（预填预设名）" clearable />
-        </el-form-item>
-        <el-form-item label="API Key" required>
-          <el-input
-            v-model="provisionKey"
-            type="password"
-            show-password
-            placeholder="必填，接入后用于网关调用"
-            clearable
-          />
-        </el-form-item>
-        <el-form-item label="Base URL">
-          <el-input :model-value="provisionPreset?.base_url" readonly />
-        </el-form-item>
-        <template v-if="provisionPreset?.protocol_base_urls">
-          <el-form-item
-            v-for="(url, proto) in provisionPreset.protocol_base_urls"
-            :key="proto"
-            :label="`${PROTOCOL_LABEL(String(proto))} 地址`"
-          >
-            <el-input :model-value="String(url)" readonly />
-          </el-form-item>
-        </template>
-      </el-form>
-
-      <div v-if="provisionResult" class="provision-result">
-        <el-alert
-          v-if="provisionResult.test.ok"
-          type="success"
-          :closable="false"
-          show-icon
-          :title="`连通正常 HTTP ${provisionResult.test.status} · ${provisionResult.test.latency_ms}ms`"
-        />
-        <el-alert
-          v-else
-          type="error"
-          :closable="false"
-          show-icon
-          :title="provisionResult.test.error || '连通测试失败'"
-        />
-        <div class="hint" style="margin-top: 8px">
-          上游已创建，可继续到「模型路由」页为对外模型绑定该上游。
-        </div>
-      </div>
-      <div v-if="provisionConflict" class="hint" style="margin-top: 12px">
-        名称「{{ provisionName }}」已存在，请修改名称后重试。
-      </div>
-
-      <template #footer>
-        <template v-if="provisionResult">
-          <el-button @click="finishProvision">完成</el-button>
-          <el-button type="primary" @click="goConfigureRoutes">下一步：配置模型路由</el-button>
-        </template>
-        <template v-else>
-          <el-button @click="provisionVisible = false">取消</el-button>
-          <el-button type="primary" :loading="provisionSaving" @click="submitProvision">确认接入</el-button>
-        </template>
-      </template>
-    </el-dialog>
+    <!-- 接入向导（选择供应商 → 填写凭证 → 连通与模型） -->
+    <ProvisionWizard
+      v-model="wizardVisible"
+      :presets="presets"
+      :initial-preset="wizardPreset"
+      @saved="loadUpstreams"
+      @goto-routes="goConfigureRoutes"
+    />
 
     <!-- 查看明文 API Key（安全验证） -->
     <el-dialog
@@ -322,7 +231,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
@@ -331,8 +240,9 @@ import { errMsg } from '@/api/http'
 import { copyText } from '@/utils/clipboard'
 import { PROTOCOL_LABEL } from '@/utils/consts'
 import { fmtTime } from '@/utils/format'
-import type { Preset, ProvisionResp, ProxyOut, UpstreamIn, UpstreamOut } from '@/api/types'
+import type { Preset, ProxyOut, UpstreamIn, UpstreamOut } from '@/api/types'
 import UpstreamFormDialog from '@/components/upstreams/UpstreamFormDialog.vue'
+import ProvisionWizard from '@/components/upstreams/ProvisionWizard.vue'
 
 const DISABLED_BY_LABELS: Record<string, string> = {
   manual: '手动禁用',
@@ -345,10 +255,9 @@ const upstreams = ref<UpstreamOut[]>([])
 const proxies = ref<ProxyOut[]>([])
 const pageLoading = ref(false)
 const router = useRouter()
-/** 预设区折叠态；初始空，首次加载上游成功后按数量决定（有上游默认收起，空库展开引导） */
-const presetOpen = ref<string[]>([])
-/** 预设折叠态是否已按首次加载结果决定过 */
-const presetInitDone = ref(false)
+/** 接入向导可见性 + 预选供应商（null = 从「选择供应商」开始） */
+const wizardVisible = ref(false)
+const wizardPreset = ref<Preset | null>(null)
 const expandedRows = reactive(new Set<string>())
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
@@ -359,10 +268,6 @@ async function loadUpstreams() {
   pageLoading.value = true
   try {
     upstreams.value = await upstreamApi.list()
-    if (!presetInitDone.value) {
-      presetInitDone.value = true
-      presetOpen.value = upstreams.value.length > 0 ? [] : ['presets']
-    }
   } catch (e) {
     ElMessage.error(errMsg(e))
   } finally {
@@ -510,17 +415,14 @@ function openEdit(row: UpstreamOut) {
   formDialogRef.value?.open(row)
 }
 
-/** 空态引导：展开「预设一键接入」区并滚动到可见位置 */
-function openPresetPanel() {
-  presetOpen.value = ['presets']
-  nextTick(() => {
-    document.getElementById('presets-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  })
+/** 空态引导 / 工具栏主操作：打开接入向导（可预选供应商） */
+function openWizard(p: Preset | null) {
+  wizardPreset.value = p
+  wizardVisible.value = true
 }
 
-/** 预设接入成功后「下一步」：关闭弹窗并跳转模型路由配置页 */
+/** 向导「下一步：配置模型路由」：跳转模型页 */
 function goConfigureRoutes() {
-  finishProvision()
   router.push({ name: 'routes' })
 }
 
@@ -598,67 +500,6 @@ function closeRevealSecret() {
   revealVisible.value = false
 }
 
-// —— 预设一键接入 ——
-const provisionVisible = ref(false)
-const provisionSaving = ref(false)
-const provisionPreset = ref<Preset | null>(null)
-const provisionName = ref('')
-const provisionKey = ref('')
-const provisionResult = ref<ProvisionResp | null>(null)
-const provisionConflict = ref(false)
-
-function openProvision(p: Preset) {
-  provisionPreset.value = p
-  provisionName.value = p.name
-  provisionKey.value = ''
-  provisionResult.value = null
-  provisionConflict.value = false
-  provisionVisible.value = true
-}
-
-async function submitProvision() {
-  if (!provisionPreset.value) return
-  if (!provisionName.value.trim()) {
-    ElMessage.warning('请输入上游名称')
-    return
-  }
-  if (!provisionKey.value.trim()) {
-    ElMessage.warning('请填写 API Key')
-    return
-  }
-  provisionSaving.value = true
-  provisionResult.value = null
-  provisionConflict.value = false
-  try {
-    const resp = await presetApi.provision(provisionPreset.value.name, {
-      api_key: provisionKey.value,
-      name: provisionName.value.trim(),
-    })
-    provisionResult.value = resp
-    ElMessage.success('上游已创建，可在列表中配置模型路由')
-    loadUpstreams()
-  } catch (e) {
-    const msg = errMsg(e)
-    if (msg.includes('已存在')) {
-      provisionConflict.value = true
-      ElMessage.warning('名称已存在，请修改名称后重试')
-    } else {
-      ElMessage.error(msg)
-    }
-  } finally {
-    provisionSaving.value = false
-  }
-}
-
-/** provision 成功后主按钮「完成」：关闭弹窗并重置接入状态 */
-function finishProvision() {
-  provisionVisible.value = false
-  provisionResult.value = null
-  provisionConflict.value = false
-  provisionPreset.value = null
-  provisionName.value = ''
-  provisionKey.value = ''
-}
 </script>
 
 <style scoped>
@@ -698,38 +539,8 @@ function finishProvision() {
   align-items: center;
   justify-content: space-between;
 }
-.preset-col {
-  margin-bottom: 16px;
-}
-.preset-card :deep(.el-card__body) {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.preset-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.preset-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1f2329;
-}
-.preset-desc {
-  min-height: 36px;
-}
-.preset-protos {
-  margin: 4px 0;
-}
-.preset-media {
-  margin-bottom: 4px;
-}
 .clickable {
   cursor: pointer;
-}
-.provision-result {
-  margin-top: 12px;
 }
 .secret-view {
   display: flex;
