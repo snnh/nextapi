@@ -527,6 +527,17 @@ export interface CleanupResp {
   summary?: CleanupSummary | null
 }
 
+/** 日志列表响应：页码模式返回 total；游标模式 total=null、返回 next_cursor */
+export interface LogListResp {
+  items: LogItem[]
+  /** 游标模式（带 cursor 请求）为 null */
+  total: number | null
+  page: number
+  page_size: number
+  /** 游标模式下还有下一页时的续页游标；页码模式恒 null */
+  next_cursor?: string | null
+}
+
 // ---------------------------------------------------------------------------
 // stats（/api/stats）
 // ---------------------------------------------------------------------------
@@ -813,6 +824,35 @@ export interface SystemStatusResp {
 export interface VersionResp {
   version: string
   started_at: string
+}
+
+/** 反向代理与部署诊断（/api/system/diagnostics，M15 §6.5） */
+export interface DiagnosticsResp {
+  version: string
+  request_id: string
+  /** 部署前缀（子路径部署支持落地后填充；当前恒为空） */
+  deployment_prefix: string
+  request: {
+    host: string | null
+    scheme: string
+    user_agent: string | null
+    x_forwarded_for: string | null
+    x_real_ip: string | null
+    x_forwarded_host: string | null
+    x_forwarded_proto: string | null
+    x_forwarded_port: string | null
+  }
+  client: {
+    peer_addr: string | null
+    peer_ip: string | null
+    /** TCP 对端是否命中 server.trusted_proxies */
+    peer_trusted: boolean
+    client_ip: string | null
+    /** 客户端 IP 来源：peer / xff / x-real-ip */
+    source: string
+  }
+  trusted_proxies: string[]
+  hints: string[]
 }
 
 export interface CheckUpdateReq {

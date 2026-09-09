@@ -15,6 +15,68 @@
     <el-card shadow="never" class="card">
       <template #header>
         <div class="card-head">
+          <span>反向代理诊断</span>
+          <el-button link type="primary" :loading="diagLoading" :icon="Refresh" @click="loadDiag">
+            重新检测
+          </el-button>
+        </div>
+      </template>
+      <div class="hint" style="margin-bottom: 10px">
+        检测本次浏览器请求链路上后端实际收到的 Host、协议、客户端 IP 与可信代理判定；
+        API 客户端（curl/SDK）的链路可能不同。
+      </div>
+      <el-descriptions v-if="diag" :column="descColumns" border>
+        <el-descriptions-item label="访问地址">
+          <span class="mono">{{ diag.request.scheme }}://{{ diag.request.host || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="部署前缀">
+          {{ diag.deployment_prefix || '根路径 /' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="客户端 IP">
+          <span class="mono">{{ diag.client.client_ip || '未知' }}</span>
+          <span class="hint" style="margin-left: 6px">（来源 {{ diag.client.source }}）</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="TCP 对端">
+          <span class="mono">{{ diag.client.peer_addr || '-' }}</span>
+          <el-tag
+            :type="diag.client.peer_trusted ? 'success' : 'warning'"
+            size="small"
+            style="margin-left: 6px"
+          >
+            {{ diag.client.peer_trusted ? '可信代理' : '不可信' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="可信代理配置" :span="descColumns">
+          <span v-if="diag.trusted_proxies.length" class="mono">
+            {{ diag.trusted_proxies.join(' · ') }}
+          </span>
+          <span v-else class="hint">未配置（转发头不采信）</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="转发头" :span="descColumns">
+          <div class="fwd-heads">
+            <div>X-Forwarded-For：{{ diag.request.x_forwarded_for || '—' }}</div>
+            <div>X-Real-IP：{{ diag.request.x_real_ip || '—' }}</div>
+            <div>X-Forwarded-Proto：{{ diag.request.x_forwarded_proto || '—' }}</div>
+            <div>X-Forwarded-Host：{{ diag.request.x_forwarded_host || '—' }}</div>
+            <div>User-Agent：{{ diag.request.user_agent || '—' }}</div>
+          </div>
+        </el-descriptions-item>
+      </el-descriptions>
+      <div v-if="diag && diag.hints.length" class="diag-hints">
+        <el-alert
+          v-for="(h, i) in diag.hints"
+          :key="i"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="h"
+        />
+      </div>
+    </el-card>
+
+    <el-card shadow="never" class="card">
+      <template #header>
+        <div class="card-head">
           <span>运行状态</span>
           <el-button link type="primary" :loading="statusLoading" :icon="Refresh" @click="loadStatus">刷新</el-button>
         </div>
@@ -132,9 +194,11 @@ import { errMsg } from '@/api/http'
 import { fmtBytes, fmtTime } from '@/utils/format'
 import { downloadText } from '@/utils/download'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
-import type { ConfigFileView, SystemStatusResp, VersionResp } from '@/api/types'
+import type { ConfigFileView, DiagnosticsResp, SystemStatusResp, VersionResp } from '@/api/types'
 
 const version = ref<VersionResp | null>(null)
+const diag = ref<DiagnosticsResp | null>(null)
+const diagLoading = ref(false)
 const status = ref<SystemStatusResp | null>(null)
 const config = ref<ConfigFileView | null>(null)
 const pageLoading = ref(false)
@@ -188,6 +252,18 @@ async function loadStatus() {
     ElMessage.error(errMsg(e))
   } finally {
     statusLoading.value = false
+  }
+}
+
+async function loadDiag() {
+  if (diagLoading.value) return
+  diagLoading.value = true
+  try {
+    diag.value = await systemApi.diagnostics()
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    diagLoading.value = false
   }
 }
 
@@ -298,7 +374,7 @@ onMounted(() => {
   mq.addEventListener('change', onMqChange)
 
   pageLoading.value = true
-  Promise.all([loadVersion(), loadConfig(), loadStatus()]).finally(() => {
+  Promise.all([loadVersion(), loadConfig(), loadStatus(), loadDiag()]).finally(() => {
     pageLoading.value = false
   })
 })
@@ -357,6 +433,17 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   max-height: 420px;
   overflow: auto;
+}
+.fwd-heads {
+  font-size: 12px;
+  line-height: 1.8;
+  word-break: break-all;
+}
+.diag-hints {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .import-textarea {
   width: 100%;

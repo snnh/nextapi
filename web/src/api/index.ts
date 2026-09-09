@@ -14,6 +14,7 @@ import type {
   CleanupResp,
   ConfigFileView,
   ConfigPutReq,
+  DiagnosticsResp,
   FxRefreshResp,
   FxRow,
   ImportReport,
@@ -25,6 +26,7 @@ import type {
   TotpSetupResp,
   TotpStatusResp,
   LogItem,
+  LogListResp,
   OkResp,
   Paged,
   PreviewReq,
@@ -197,11 +199,13 @@ export interface LogListQuery {
   degraded?: boolean
   page?: number
   page_size?: number
+  /** 游标分页（深页优先）：提供时忽略 page/OFFSET */
+  cursor?: string
 }
 
 export const logApi = {
   list: (q: LogListQuery) =>
-    http.get<Paged<LogItem>>('/api/logs', { params: clean({ ...q }) }).then((r) => r.data),
+    http.get<LogListResp>('/api/logs', { params: clean({ ...q }) }).then((r) => r.data),
   detail: (requestId: string) =>
     http.get<LogItem>(`/api/logs/${encodeURIComponent(requestId)}`).then((r) => r.data),
   cleanup: (body: CleanupReq) =>
@@ -283,6 +287,8 @@ export const auditApi = {
 export const systemApi = {
   version: () => http.get<VersionResp>('/api/system/version').then((r) => r.data),
   status: () => http.get<SystemStatusResp>('/api/system/status').then((r) => r.data),
+  /** 反向代理与部署诊断（非敏感信息） */
+  diagnostics: () => http.get<DiagnosticsResp>('/api/system/diagnostics').then((r) => r.data),
   checkUpdate: (body?: CheckUpdateReq) =>
     http.post<CheckUpdateResp>('/api/system/check-update', body ?? {}).then((r) => r.data),
 }

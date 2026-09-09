@@ -220,3 +220,66 @@ server:
 - 读/写超时高于后端流式超时；
 - 转发 `X-Forwarded-For / X-Real-IP / X-Forwarded-Proto`，并在 NextAPI `trusted_proxies` 填写该代理所在 CIDR；
 - NextAPI 自身写 `X-Accel-Buffering: no`，兼容「响应头驱动的缓冲关闭」类代理。
+
+## 9. 子路径部署（如 `https://example.com/nextapi/`）
+
+前端产物使用相对路径 + 运行时 `<base href>`，后端按 `X-Forwarded-Prefix` 注入部署前缀，
+因此同一个镜像可挂在任意子路径下，**无需重新构建前端或修改环境变量**。
+
+### 9.1 Nginx（推荐：剥离前缀）
+
+```nginx
+location /nextapi/ {
+    # 末尾带 / 会剥离 /nextapi/ 前缀后再转发
+    proxy_pass http://192.168.123.50:3220/;
+    proxy_http_version 1.1;
+
+    # 关键：告知后端外部访问前缀（用于注入 <base href>，并决定资源/API 路径）
+    proxy_set_header X-Forwarded-Prefix /nextapi;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_buffering off;
+    proxy_request_buffering off;
+    client_max_body_size 100m;
+    proxy_read_timeout 660s;
+    proxy_send_timeout 660s;
+    proxy_set_header Connection "";
+}
+```
+
+要点：
+
+- `proxy_pass` 末尾是否带 `/` 决定是否剥离前缀，两种写法都支持，但**都必须设置
+  `X-Forwarded-Prefix`**；缺少它时，深层路径（如 `/nextapi/logs`）刷新会因 `<base>`
+  无法注入而导致资源/API 路径解析错误。
+- 建议让入口统一带尾斜杠，例如补一条 `location = /nextapi { return 301 /nextapi/; }`。
+- 后端会忽略含非法字符的 `X-Forwarded-Prefix`（防注入），此时退回根路径行为。
+
+### 9.2 验证清单
+
+1. 打开 `https://example.com/nextapi/` → 登录页正常（无 404 资源）；
+2. 直接刷新 `https://example.com/nextapi/logs` → 页面正常（不是白屏/资源 404）；
+3. 「系统设置 → 反向代理诊断」→ 部署前缀显示 `/nextapi/`；
+4. `curl https://example.com/nextapi/healthz` 与 `/readyz` 正常；
+5. Key 创建页展示的调用地址为 `https://example.com/nextapi/v1`。
+
+## 10. 反向代理诊断
+
+管理后台「系统设置 → 反向代理诊断」展示后端实际收到的请求信息（均为非敏感字段）：
+
+- Host / scheme / 部署前缀；
+- 客户端 IP 与来源（`peer` / `xff` / `x-real-ip`）、TCP 对端是否命中 `trusted_proxies`；
+- `X-Forwarded-For` / `X-Real-IP` / `X-Forwarded-Proto` / `X-Forwarded-Host` / `User-Agent` 原文；
+- 针对当前配置的提示（未配置 `trusted_proxies`、缺少 `X-Forwarded-Proto`、对端不可信等）。
+
+也可直接调用接口（需管理员 JWT）：
+
+```bash
+curl -H "Authorization: Bearer <admin JWT>" https://example.com/api/system/diagnostics
+```
+
+注意：诊断只反映「浏览器 → 代理 → 后端」这一条链路；API 客户端（curl/SDK）可能走不同路径。
