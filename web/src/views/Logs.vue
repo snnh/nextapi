@@ -450,7 +450,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { ArrowDown, Delete, Download, QuestionFilled, Refresh, Search, Sort } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { useRoute, useRouter } from 'vue-router'
@@ -461,6 +461,7 @@ import CopyText from '@/components/common/CopyText.vue'
 import { PROTOCOL_IN_LABELS, statusType } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
 import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtTime, todayRange } from '@/utils/format'
+import { confirmDanger } from '@/utils/confirm'
 
 type TriState = '' | 'true' | 'false'
 
@@ -931,17 +932,17 @@ async function runCleanupPreview() {
 
 async function confirmCleanup() {
   if (!cleanupBefore.value) return
-  try {
-    const rows = cleanupSummary.value?.log_rows
-    await ElMessageBox.confirm(
-      `确定删除 ${cleanupPreview.value.length} 个分区${rows != null ? `（约 ${fmtInt(rows)} 行明细）` : ''}？` +
-        '此操作将对整分区执行 DROP，删除的数据不可恢复！',
-      '确认删除分区',
-      { type: 'warning', confirmButtonText: '确认删除', confirmButtonClass: 'el-button--danger' },
-    )
-  } catch {
-    return
-  }
+  const rows = cleanupSummary.value?.log_rows
+  const ok = await confirmDanger({
+    title: '删除日志分区',
+    message:
+      `将删除 ${cleanupPreview.value.length} 个完整分区` +
+      `${rows != null ? `（约 ${fmtInt(rows)} 行明细）` : ''}，` +
+      '按分区边界整分区 DROP，明细与滚动聚合表同步清理，**数据不可恢复**；' +
+      '独立配额计数器 quota_usage 不受影响。',
+    confirmText: '确认删除',
+  })
+  if (!ok) return
   cleanupExecuting.value = true
   try {
     const resp = await logApi.cleanup({ before: tsToIso(cleanupBefore.value), dry_run: false })

@@ -312,12 +312,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { CopyDocument, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { keyApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
+import { confirmDanger } from '@/utils/confirm'
 import { copyText } from '@/utils/clipboard'
 import { QUOTA_UNIT_LABELS, QUOTA_WINDOW_LABELS } from '@/utils/consts'
 import { gatewayBase } from '@/utils/base'
@@ -572,13 +573,11 @@ function copyPrefix(row: ApiKeyRow) {
 
 async function removeKey(row: ApiKeyRow) {
   if (deletingSet.has(row.id)) return
-  try {
-    await ElMessageBox.confirm(`确定删除密钥「${rowName(row)}」？删除后使用该 Key 的请求将失效。`, '删除密钥', {
-      type: 'warning',
-    })
-  } catch {
-    return
-  }
+  const ok = await confirmDanger({
+    title: '删除密钥',
+    message: `将删除密钥「${rowName(row)}」。删除后使用该 Key 的客户端请求会立即全部失败，且不可恢复（需重新创建 Key）。`,
+  })
+  if (!ok) return
   deletingSet.add(row.id)
   try {
     await keyApi.remove(row.id)
@@ -592,13 +591,12 @@ async function removeKey(row: ApiKeyRow) {
 }
 
 async function rotateKey(row: ApiKeyRow) {
-  try {
-    await ElMessageBox.confirm(`确定轮换密钥「${rowName(row)}」？旧 Key 将立即失效。`, '轮换密钥', {
-      type: 'warning',
-    })
-  } catch {
-    return
-  }
+  const ok = await confirmDanger({
+    title: '轮换密钥',
+    message: `将为密钥「${rowName(row)}」生成新 Key，旧 Key 立即失效；请同步更新所有使用该 Key 的客户端。`,
+    confirmText: '确认轮换',
+  })
+  if (!ok) return
   rotatingId.value = row.id
   try {
     const resp = await keyApi.rotate(row.id)

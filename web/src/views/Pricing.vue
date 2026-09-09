@@ -310,7 +310,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting, View } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { pricingApi, upstreamApi } from '@/api'
@@ -318,6 +318,7 @@ import { errMsg } from '@/api/http'
 import { UNIT_LABEL, UNIT_SHORT } from '@/utils/consts'
 import { fmtMoney } from '@/utils/format'
 import { downloadText } from '@/utils/download'
+import { confirmDanger } from '@/utils/confirm'
 import CopyText from '@/components/common/CopyText.vue'
 import type {
   PreviewReq,
@@ -507,15 +508,11 @@ async function toggleEnabled(row: RuleItem, val: boolean) {
 }
 
 async function removeRule(row: RuleItem) {
-  try {
-    await ElMessageBox.confirm(
-      `确定删除「${row.model_id}」在「${row.upstream_name || ''}」的价格规则？`,
-      '删除规则',
-      { type: 'warning' },
-    )
-  } catch {
-    return
-  }
+  const ok = await confirmDanger({
+    title: '删除价格规则',
+    message: `将删除「${row.model_id}」在「${row.upstream_name || '该上游'}」的价格规则。删除后该组合不再计价（成本记为 NULL），历史已产生成本不受影响。`,
+  })
+  if (!ok) return
   try {
     await pricingApi.remove(row.id)
     ElMessage.success('已删除')

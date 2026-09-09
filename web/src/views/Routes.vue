@@ -363,6 +363,7 @@ import { fmtTime } from '@/utils/format'
 import CopyText from '@/components/common/CopyText.vue'
 import ModelDetailDrawer from '@/components/models/ModelDetailDrawer.vue'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
+import { confirmDanger } from '@/utils/confirm'
 import {
   buildModelOverview,
   type ModelHealth,
@@ -744,15 +745,11 @@ function onCancelDialog() {
 async function removeRow(index: number) {
   const row = drafts.value[index]
   if (!row) return
-  try {
-    await ElMessageBox.confirm(
-      `确定删除规则「${row.model_pattern}」？点击「保存全部」后生效。`,
-      '删除规则',
-      { type: 'warning' },
-    )
-  } catch {
-    return
-  }
+  const ok = await confirmDanger({
+    title: '删除规则',
+    message: `将从草稿移除规则「${row.model_pattern} → ${row.upstreamName}」。点击顶部「保存全部」后才会写入后端；该路由被移除后，对应模型可能失去可用上游。`,
+  })
+  if (!ok) return
   drafts.value.splice(index, 1)
   ElMessage.success('已从草稿删除，点击「保存全部」后生效')
 }

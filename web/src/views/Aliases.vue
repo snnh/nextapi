@@ -110,10 +110,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { aliasApi } from '@/api'
 import { errMsg } from '@/api/http'
+import { confirmDanger } from '@/utils/confirm'
 import CopyText from '@/components/common/CopyText.vue'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import type { AliasIn, ModelAliasRow } from '@/api/types'
@@ -274,11 +275,11 @@ async function remove(row: ModelAliasRow) {
   // 行级 loading 防重入：确认与请求期间该行删除按钮均禁用
   deletingSet.add(row.id)
   try {
-    try {
-      await ElMessageBox.confirm(`确认删除别名「${row.alias}」？`, '提示', { type: 'warning' })
-    } catch {
-      return
-    }
+    const ok = await confirmDanger({
+      title: '删除别名',
+      message: `将删除别名「${row.alias}」→ 实际模型「${row.model}」的映射。使用该别名的客户端请求会立即失败（可改用实际模型名），该操作不可恢复。`,
+    })
+    if (!ok) return
     await aliasApi.remove(row.id)
     ElMessage.success('已删除')
     await load()
