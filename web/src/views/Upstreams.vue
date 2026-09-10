@@ -20,7 +20,11 @@
           <el-button size="small" :icon="Refresh" @click="loadUpstreams">刷新</el-button>
         </div>
       </template>
-      <el-table :data="upstreams">
+      <div v-if="listError" class="error-state">
+        <p class="error-msg">上游列表加载失败：{{ listError }}</p>
+        <el-button type="primary" :icon="Refresh" @click="loadUpstreams">重新加载</el-button>
+      </div>
+      <el-table v-else :data="upstreams">
         <template #empty>
           <div class="empty-guide">
             <el-empty :image-size="110">
@@ -255,6 +259,8 @@ const presets = ref<Preset[]>([])
 const upstreams = ref<UpstreamOut[]>([])
 const proxies = ref<ProxyOut[]>([])
 const pageLoading = ref(false)
+/** 列表加载失败信息（非空时展示失败态 + 重试，而不是空表格） */
+const listError = ref('')
 const router = useRouter()
 /** 接入向导可见性 + 预选供应商（null = 从「选择供应商」开始） */
 const wizardVisible = ref(false)
@@ -269,7 +275,9 @@ async function loadUpstreams() {
   pageLoading.value = true
   try {
     upstreams.value = await upstreamApi.list()
+    listError.value = ''
   } catch (e) {
+    listError.value = errMsg(e)
     ElMessage.error(errMsg(e))
   } finally {
     pageLoading.value = false
@@ -538,6 +546,20 @@ function closeRevealSecret() {
 }
 .clickable {
   cursor: pointer;
+}
+.error-state {
+  padding: 30px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.error-msg {
+  margin: 0;
+  color: #f56c6c;
+  font-size: 13px;
+  text-align: center;
+  word-break: break-all;
 }
 .secret-view {
   display: flex;

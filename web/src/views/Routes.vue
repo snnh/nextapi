@@ -67,8 +67,14 @@
       </div>
     </el-alert>
 
+    <!-- 加载失败：不展示空表格，给出重试入口 -->
+    <div v-if="listError" class="page-card error-state">
+      <p class="error-msg">模型路由加载失败：{{ listError }}</p>
+      <el-button type="primary" :icon="Refresh" @click="loadData">重新加载</el-button>
+    </div>
+
     <!-- ===== 模型视图：按对外模型名聚合 ===== -->
-    <el-card v-if="viewMode === 'models'" shadow="never">
+    <el-card v-if="!listError && viewMode === 'models'" shadow="never">
       <el-table :data="filteredOverviewRows" border v-loading="pageLoading">
         <template #empty>
           <el-empty :description="modelsEmptyText">
@@ -161,7 +167,7 @@
     </el-card>
 
     <!-- ===== 路由视图：现有编辑表格 ===== -->
-    <el-card v-else shadow="never">
+    <el-card v-else-if="!listError" shadow="never">
       <el-table :data="drafts" border>
         <template #empty>
           <el-empty description="暂无模型路由，点击左上角「新增规则」创建" />
@@ -386,6 +392,8 @@ interface RouteRow extends RouteItem {
 // —— 状态 ——
 const pageLoading = ref(false)
 const saving = ref(false)
+/** 路由列表加载失败信息（非空时展示失败态 + 重试，而不是空表格） */
+const listError = ref('')
 const upstreams = ref<UpstreamOut[]>([])
 /** 价格规则（模型视图判定「是否已计价」） */
 const prices = ref<RuleItem[]>([])
@@ -589,6 +597,7 @@ async function loadData() {
   if (routesRes.status === 'fulfilled') {
     const routes = routesRes.value
     serverCommit.value = routes
+    listError.value = ''
     drafts.value = routes.map((r) => ({
       id: r.id,
       model_pattern: r.model_pattern,
@@ -607,6 +616,7 @@ async function loadData() {
       updatedAt: r.updated_at,
     }))
   } else {
+    listError.value = errMsg(routesRes.reason)
     ElMessage.error(errMsg(routesRes.reason))
   }
   if (upstreamsRes.status === 'fulfilled') upstreams.value = upstreamsRes.value
@@ -933,6 +943,20 @@ function computeDiff(): { added: number; modified: number; deleted: number } {
 }
 .text-error {
   color: #f56c6c;
+}
+.error-state {
+  padding: 30px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.error-msg {
+  margin: 0;
+  color: #f56c6c;
+  font-size: 13px;
+  text-align: center;
+  word-break: break-all;
 }
 .cell-inline {
   display: inline-flex;
