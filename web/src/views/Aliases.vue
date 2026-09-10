@@ -17,6 +17,11 @@
     </div>
 
     <el-card shadow="never">
+      <div v-if="listError" class="error-state">
+        <p class="error-msg">别名列表加载失败：{{ listError }}</p>
+        <el-button type="primary" :icon="Refresh" @click="load">重新加载</el-button>
+      </div>
+      <template v-else>
       <el-table :data="pagedItems" :row-key="(row: ModelAliasRow) => row.id" border>
         <template #empty>
           <el-empty :description="emptyText" />
@@ -68,6 +73,7 @@
           layout="total, sizes, prev, pager, next"
         />
       </div>
+      </template>
     </el-card>
 
     <el-dialog
@@ -122,6 +128,8 @@ import { fmtTime } from '@/utils/format'
 
 const items = ref<ModelAliasRow[]>([])
 const pageLoading = ref(false)
+/** 列表加载失败信息（非空时展示失败态 + 重试，而不是空表格） */
+const listError = ref('')
 const route = useRoute()
 const saving = ref(false)
 const togglingSet = reactive(new Set<string>())
@@ -187,7 +195,9 @@ async function load() {
   pageLoading.value = true
   try {
     items.value = await aliasApi.list()
+    listError.value = ''
   } catch (e) {
+    listError.value = errMsg(e)
     ElMessage.error(errMsg(e))
   } finally {
     pageLoading.value = false
@@ -303,5 +313,19 @@ onMounted(() => {
   margin-top: 14px;
   display: flex;
   justify-content: flex-end;
+}
+.error-state {
+  padding: 30px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.error-msg {
+  margin: 0;
+  color: #f56c6c;
+  font-size: 13px;
+  text-align: center;
+  word-break: break-all;
 }
 </style>
