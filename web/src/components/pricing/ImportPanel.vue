@@ -72,10 +72,11 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { pricingApi } from '@/api'
 import { errMsg } from '@/api/http'
+import { confirmDanger } from '@/utils/confirm'
 import type { ImportReport } from '@/api/types'
 import ImportReportDialog from './ImportReportDialog.vue'
 
@@ -151,17 +152,14 @@ function onFileExceed(files: File[]) {
 }
 
 /** dry-run 关闭（正式写库）时二次确认，返回是否继续 */
-async function confirmRealImport(): Promise<boolean> {
-  try {
-    await ElMessageBox.confirm('数据将直接写入价格表，确认导入？', '正式导入', {
-      type: 'warning',
-      confirmButtonText: '确认导入',
-      cancelButtonText: '取消',
-    })
-    return true
-  } catch {
-    return false
-  }
+function confirmRealImport(): Promise<boolean> {
+  return confirmDanger({
+    title: '正式导入价格',
+    message:
+      '导入内容将直接写入价格表：同（上游 + 模型 + 计价单位）的已有规则会被更新或新增，' +
+      '不存在的条目不受影响。建议先执行 dry-run 预览导入报告。',
+    confirmText: '确认导入',
+  })
 }
 
 async function previewFile() {

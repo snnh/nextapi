@@ -186,13 +186,14 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
+import { ElMessage, type UploadFile } from 'element-plus'
 import { Download, Refresh, Upload } from '@element-plus/icons-vue'
 import yaml from 'js-yaml'
 import { configApi, systemApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { fmtBytes, fmtTime } from '@/utils/format'
 import { downloadText } from '@/utils/download'
+import { confirmDanger } from '@/utils/confirm'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 import type { ConfigFileView, DiagnosticsResp, SystemStatusResp, VersionResp } from '@/api/types'
 
@@ -344,15 +345,14 @@ async function doImport() {
     return
   }
   // 整包覆盖属危险操作：二次确认，说明将覆盖 config 文件并热加载
-  try {
-    await ElMessageBox.confirm(
-      '整包导入将整体覆盖当前 config 配置文件并立即热加载。请确认内容无误（掩码字段 *** 回传保持原值）。',
-      '确认覆盖配置',
-      { type: 'warning', confirmButtonText: '覆盖并写入', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  const ok = await confirmDanger({
+    title: '覆盖配置文件',
+    message:
+      '整包导入将整体覆盖当前 config 配置文件并立即热加载，未包含的配置项会恢复为默认值；' +
+      '掩码字段 *** 回传保持原值。请确认内容无误后再继续。',
+    confirmText: '覆盖并写入',
+  })
+  if (!ok) return
   savingConfig.value = true
   try {
     await configApi.put(parsed as ConfigFileView)
