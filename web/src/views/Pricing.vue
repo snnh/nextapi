@@ -31,6 +31,11 @@
         </div>
 
         <el-card shadow="never">
+          <div v-if="rulesError" class="error-state">
+            <p class="error-msg">价格规则加载失败：{{ rulesError }}</p>
+            <el-button type="primary" :icon="Refresh" @click="loadRules">重新加载</el-button>
+          </div>
+          <template v-else>
           <el-table :data="pageGroups" :empty-text="rulesEmptyText" v-loading="rulesLoading" row-key="key">
             <el-table-column type="expand">
               <template #default="{ row }">
@@ -152,6 +157,7 @@
               small
             />
           </div>
+          </template>
         </el-card>
       </el-tab-pane>
 
@@ -356,6 +362,8 @@ async function loadUpstreams() {
 // —— Tab1 价格规则 ——
 const rules = ref<RuleItem[]>([])
 const rulesLoading = ref(false)
+/** 规则列表加载失败信息（非空时表格空态改为失败提示 + 重试） */
+const rulesError = ref('')
 const filterUpstream = ref('')
 // 模型名过滤词：客户端过滤（见 filteredGroups），并驱动「未定价 → 查看已有规则」跳转。
 const filterModel = ref('')
@@ -375,8 +383,10 @@ async function loadRules() {
     const resp = await pricingApi.list(filterUpstream.value || undefined)
     if (seq !== rulesSeq) return
     rules.value = resp
+    rulesError.value = ''
   } catch (e) {
     if (seq !== rulesSeq) return
+    rulesError.value = errMsg(e)
     ElMessage.error(errMsg(e))
   } finally {
     if (seq === rulesSeq) rulesLoading.value = false
@@ -727,6 +737,20 @@ onMounted(() => {
   justify-content: flex-end;
   align-items: center;
   padding-top: 12px;
+}
+.error-state {
+  padding: 30px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.error-msg {
+  margin: 0;
+  color: #f56c6c;
+  font-size: 13px;
+  text-align: center;
+  word-break: break-all;
 }
 .export-row {
   display: flex;

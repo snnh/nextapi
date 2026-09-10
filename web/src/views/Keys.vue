@@ -15,6 +15,11 @@
     </div>
 
     <el-card shadow="never">
+      <div v-if="listError" class="error-state">
+        <p class="error-msg">密钥列表加载失败：{{ listError }}</p>
+        <el-button type="primary" :icon="Refresh" @click="loadKeys">重新加载</el-button>
+      </div>
+      <template v-else>
       <el-table :data="pagedKeys" :row-key="(row: ApiKeyRow) => row.id" border>
         <template #empty>
           <el-empty
@@ -139,6 +144,7 @@
           background
         />
       </div>
+      </template>
     </el-card>
 
     <!-- 新建 / 编辑弹窗 -->
@@ -331,6 +337,8 @@ type KeyWriteReq = KeyCreateReq & { enabled?: boolean }
 
 const keys = ref<ApiKeyRow[]>([])
 const pageLoading = ref(false)
+/** 列表加载失败信息（非空时展示失败态 + 重试，而不是空表格） */
+const listError = ref('')
 const router = useRouter()
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
@@ -505,7 +513,9 @@ async function loadKeys() {
   pageLoading.value = true
   try {
     keys.value = await keyApi.list()
+    listError.value = ''
   } catch (e) {
+    listError.value = errMsg(e)
     ElMessage.error(errMsg(e))
   } finally {
     pageLoading.value = false
@@ -804,6 +814,20 @@ function gotoModels() {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
+}
+.error-state {
+  padding: 30px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.error-msg {
+  margin: 0;
+  color: #f56c6c;
+  font-size: 13px;
+  text-align: center;
+  word-break: break-all;
 }
 .rate-row {
   display: flex;
