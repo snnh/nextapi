@@ -47,6 +47,12 @@
 - **清理边界归一**：`usage_hourly` 改为按被删分区的最大 `to_ts` 清理（此前按 `before`
   精确时间，可能与明细口径背离；无可删分区时不再清理聚合表）。
 
+### Fixed
+- **容器健康检查适配实际端口**：Dockerfile 与 `docker-compose.yml` 的 healthcheck 原先固定
+  探测 `127.0.0.1:3220`，当 `config.yaml` 显式写 `0.0.0.0:8080`（旧默认）时容器会被持续标记
+  unhealthy（可能触发编排层反复重启）。现改为「3220 → 8080」依次探测；镜像内置 HEALTHCHECK
+  还会优先读取 `NEXTAPI_LISTEN` 的端口。
+
 ## [0.2.1] - 2026-09-07
 
 ### Fixed
