@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-10
+
+### ⚠️ Fixed（紧急）
+- **管理后台全站 API 404（v0.3.0 回归）**：`apiBase()` 误返回 `/api`，与 `api/index.ts` 中
+  已含 `/api` 前缀的请求路径被 axios 拼接为 `/api/api/...`，导致登录、列表、保存等全部前端
+  请求 404「资源不存在」（网关 `/v1/*` 不受影响）。现改为仅返回部署前缀（根路径 `/`，
+  子路径 `/nextapi/`），并新增构建前自检 `web/scripts/check-api-paths.mjs` 防同类回归。
+- **静态资源缓存策略**：`index.html` 加 `Cache-Control: no-cache`（升级后立即获取新首页，
+  避免旧首页引用已删除的旧哈希资源）；`assets/*` 哈希资源加一年 `immutable` 强缓存；
+  请求不存在的哈希资源返回 404 而非回退 HTML。
+
 ## [0.3.0] - 2026-09-10
 
 ### ⚠️ Breaking
