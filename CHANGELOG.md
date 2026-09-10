@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-10
+
 ### ⚠️ Breaking
 - **Token 口径归一（计价正确性修复）**：`usage_logs.prompt_tokens` 与日志/统计中的
   「输入 token」统一为**未命中缓存的输入 token**（此前 OpenAI Chat / Responses / Codex、
