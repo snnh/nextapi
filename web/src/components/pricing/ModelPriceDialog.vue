@@ -99,13 +99,14 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { pricingApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import { CURRENCIES, UNIT_LABEL } from '@/utils/consts'
 import { fmtMoney } from '@/utils/format'
+import { confirmDanger } from '@/utils/confirm'
 import type { PriceRuleIn, PriceUnit, StatsCurrency, SuggestGroup, UpstreamOut } from '@/api/types'
 import SegmentsEditor from './SegmentsEditor.vue'
 import { numToDecimal, priceToSegForm, segToPrice, type SegmentForm } from './types'
@@ -272,15 +273,12 @@ async function submit() {
 
   // #8：取消勾选 = 删除已有规则，需二次确认
   if (pendingRemoved) {
-    try {
-      await ElMessageBox.confirm(`将删除 ${pendingRemoved} 个单位的已有价格规则，确认？`, '删除已有规则', {
-        type: 'warning',
-        confirmButtonText: '确认删除',
-        cancelButtonText: '取消',
-      })
-    } catch {
-      return
-    }
+    const ok = await confirmDanger({
+      title: '删除已有价格规则',
+      message: `保存后将删除该模型 ${pendingRemoved} 个单位的已有价格规则。删除后这些单位不再计价（成本记为 NULL），历史已产生成本不受影响。`,
+      confirmText: '确认删除并保存',
+    })
+    if (!ok) return
   }
 
   saving.value = true
