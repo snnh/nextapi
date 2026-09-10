@@ -99,7 +99,7 @@ fn strip_prefix<'a>(path: &'a str, prefix: &str) -> &'a str {
     }
 }
 
-/// index.html 响应：注入部署前缀到 `<base href>`，使相对资源与前端路由在子路径下正确解析。
+/// index.html 统一出口：加 no-cache，确保升级后浏览器不会用旧首页引用已删除的旧资源。
 fn index_html(prefix: &str) -> Response {
     let Some(f) = Assets::get("index.html") else {
         return json_404();
@@ -114,7 +114,14 @@ fn index_html(prefix: &str) -> Response {
             )
             .replace(r#"<base href="/">"#, &format!(r#"<base href="{prefix}">"#));
     }
-    ([(header::CONTENT_TYPE, content_type("index.html"))], body).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, content_type("index.html")),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// SPA fallback handler（挂在 Router 末尾，仅接收未匹配请求）。
@@ -145,25 +152,43 @@ pub async fn spa_fallback(uri: Uri, method: Method, headers: HeaderMap) -> Respo
         return index_html(&prefix);
     }
     if let Some(f) = Assets::get(file) {
-        return (
-            [(header::CONTENT_TYPE, content_type(file))],
-            f.data.into_owned(),
-        )
-            .into_response();
+        return file_response(file, f.data.into_owned());
     }
     // 兜底：反代保留前缀但未传 X-Forwarded-Prefix 时，剥离首段再试一次
     // （仅在原路径未命中时触发；深层路径刷新仍需 X-Forwarded-Prefix 才能注入正确的 <base>）
     if let Some((_seg, rest)) = file.split_once('/') {
         if let Some(f) = Assets::get(rest) {
-            return (
-                [(header::CONTENT_TYPE, content_type(rest))],
-                f.data.into_owned(),
-            )
-                .into_response();
+            return file_response(rest, f.data.into_owned());
         }
+    }
+    // Vite 构建产物（assets/ 下均为内容哈希文件名）未命中即不存在——
+    // 典型场景：浏览器缓存的旧 index.html 引用已随升级删除的旧哈希资源。
+    // 直接 404，避免回退 HTML 被浏览器当 JS/CSS 解析造成误导性报错。
+    if file.starts_with("assets/") {
+        return json_404();
     }
     // 未知前端路径（history 路由直达）→ index.html
     index_html(&prefix)
+}
+
+/// 静态资源响应：按文件类型给出缓存策略。
+/// - `assets/`（Vite 哈希文件，内容变即文件名变）→ 一年强缓存 immutable；
+/// - 其它（index.html / favicon.svg 等固定名）→ no-cache，每次校验，避免升级后
+///   浏览器拿旧 index.html 引用已删除的旧哈希资源（本次线上问题的根因类型）。
+fn file_response(file: &str, data: Vec<u8>) -> Response {
+    let cache = if file.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    (
+        [
+            (header::CONTENT_TYPE, content_type(file)),
+            (header::CACHE_CONTROL, cache),
+        ],
+        data,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -298,6 +323,56 @@ mod tests {
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
             "image/svg+xml"
+        );
+    }
+
+    /// 旧缓存首页引用的旧哈希资源 → 404（不回退 HTML，避免被当 JS 解析）。
+    #[tokio::test]
+    async fn missing_hashed_asset_returns_404_not_index() {
+        let resp = spa_fallback(
+            Uri::from_static("/assets/index-DEADBEEF.js"),
+            Method::GET,
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json; charset=utf-8"
+        );
+    }
+
+    /// 缓存策略：index.html no-cache；assets 强缓存 immutable。
+    #[tokio::test]
+    async fn cache_control_headers() {
+        let resp = spa_fallback(Uri::from_static("/"), Method::GET, HeaderMap::new()).await;
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-cache"
+        );
+
+        let resp = spa_fallback(
+            Uri::from_static("/assets/no-such.js"),
+            Method::GET,
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // 命中真实 exists 的资源（构建产物至少有一个 assets/*.js）
+        let js = Assets::iter()
+            .find(|p| p.starts_with("assets/") && p.ends_with(".js"))
+            .expect("dist 中应存在 assets/*.js");
+        let resp = spa_fallback(
+            Uri::from_static(Box::leak(format!("/{js}").into_boxed_str())),
+            Method::GET,
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
         );
     }
 }

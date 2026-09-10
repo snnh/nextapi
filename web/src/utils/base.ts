@@ -18,11 +18,19 @@ export function appBase(): string {
   }
 }
 
-/** API 前缀：默认 `${appBase()}api`；构建期可用 VITE_API_BASE 覆盖（如跨域部署） */
+/**
+ * axios baseURL：**只提供部署前缀**（根路径 `/`，子路径 `/nextapi/`）。
+ *
+ * ⚠️ 关键约定：`api/index.ts` 中所有请求路径都已包含 `/api` 前缀（如 `/api/auth/login`），
+ * 而 axios 会把 baseURL 与 url 拼接（`combineURLs`）。因此这里**不能再加 `api`**，
+ * 否则会拼成 `/api/api/...` 导致全站 404（v0.3.0 线上回归的根因，0.3.1 修复）。
+ *
+ * 构建期可用 `VITE_API_BASE` 覆盖（如跨域部署：填完整前缀 `https://api.example.com`）。
+ */
 export function apiBase(): string {
   const env = import.meta.env.VITE_API_BASE
   if (env) return env
-  return `${appBase()}api`
+  return appBase()
 }
 
 /** 拼接到部署前缀下的绝对路径（用于整页导航等浏览器级跳转） */
