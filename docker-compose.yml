@@ -37,8 +37,14 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # 健康检查端口自适配：容器内代码默认 3220，config.yaml 显式写 8080 的旧部署回退探测 8080。
+    # 自定义端口时请同步修改此处（或移除本段以使用镜像内置 HEALTHCHECK，其支持 NEXTAPI_LISTEN）。
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3220/healthz"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:3220/healthz || curl -fsS http://127.0.0.1:8080/healthz || exit 1",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3

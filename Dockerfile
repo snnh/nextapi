@@ -60,6 +60,10 @@ EXPOSE 3220
 VOLUME /data
 
 USER nextapi
+# 健康检查端口自适配：优先 NEXTAPI_LISTEN 的端口，其次容器内代码默认 3220，
+# 最后回退 8080（config.yaml 显式写 0.0.0.0:8080 的旧部署）。
+# 说明：健康检查必须匹配实际监听端口，否则容器会被持续标记 unhealthy。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:3220/healthz || exit 1
+    CMD sh -c 'P="${NEXTAPI_LISTEN##*:}"; curl -fsS "http://127.0.0.1:${P:-3220}/healthz" \
+        || curl -fsS http://127.0.0.1:8080/healthz || exit 1'
 CMD ["nextapi"]
