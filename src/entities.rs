@@ -128,6 +128,27 @@ impl UpstreamRow {
         self.base_url.clone()
     }
 
+    /// 模型列表路径：extra.models_path 覆盖（如千帆 Token Plan 为 "/v1/models"），默认 "/models"。
+    pub fn models_path(&self) -> &str {
+        self.extra
+            .get("models_path")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("/models")
+    }
+
+    /// 模型列表 URL：{base_url}{models_path}（缺前导斜杠自动补；连通性探测与模型拉取共用）。
+    pub fn models_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let path = self.models_path();
+        if path.starts_with('/') {
+            format!("{base}{path}")
+        } else {
+            format!("{base}/{path}")
+        }
+    }
+
     pub fn protocol_list(&self) -> Vec<crate::protocol::ir::Protocol> {
         self.protocols
             .iter()
@@ -521,5 +542,32 @@ mod base_url_tests {
             u3.base_url_for(crate::protocol::ir::Protocol::Anthropic),
             "https://api.deepseek.com/v1"
         );
+    }
+
+    #[test]
+    fn models_url_override_and_fallback() {
+        // 默认 /models
+        let u = up(serde_json::json!({}));
+        assert_eq!(u.models_path(), "/models");
+        assert_eq!(u.models_url(), "https://api.deepseek.com/v1/models");
+
+        // 覆盖（千帆 Token Plan 场景）
+        let u2 = up(serde_json::json!({"models_path": "/v1/models"}));
+        assert_eq!(u2.models_url(), "https://api.deepseek.com/v1/v1/models");
+
+        // 无前导斜杠 → 自动补
+        let u3 = up(serde_json::json!({"models_path": "v1/models"}));
+        assert_eq!(u3.models_url(), "https://api.deepseek.com/v1/v1/models");
+
+        // 空白 / 非字符串 → 回落默认
+        let u4 = up(serde_json::json!({"models_path": "  "}));
+        assert_eq!(u4.models_url(), "https://api.deepseek.com/v1/models");
+        let u5 = up(serde_json::json!({"models_path": 7}));
+        assert_eq!(u5.models_url(), "https://api.deepseek.com/v1/models");
+
+        // base_url 末尾斜杠不产生双斜杠
+        let mut u6 = up(serde_json::json!({}));
+        u6.base_url = "https://up.example.com/base/".into();
+        assert_eq!(u6.models_url(), "https://up.example.com/base/models");
     }
 }
