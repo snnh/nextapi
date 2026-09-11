@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-11
+
 ### Added
 - **百度千帆 Token Plan 预设**：新增 `qianfan_tokenplan` 一键接入预设——OpenAI 兼容
   Chat/Responses（`https://qianfan.baidubce.com/v2/tokenplan/personal`）与 Anthropic 兼容
@@ -17,6 +19,11 @@
 - **腾讯混元 TokenHub 修正**：`hunyuan` 预设 base_url 由旧混元地址
   `https://api.hunyuan.cloud.tencent.com/v1` 更正为 TokenHub 官方地址
   `https://tokenhub.tencentmaas.com/v1`，并补充 Responses / Anthropic 兼容协议支持。
+- **浏览器自动填充静默覆盖上游 API Key**：上游 API Key / 一键接入 / 代理密码 /
+  设置项密码等 secret 输入框未声明防自动填充，浏览器将其误判为登录密码框并
+  自动填充管理后台登录密码，导致保存其它字段时 Key 被静默替换（表现为"刚填好
+  的 Key 又变错"）。现全部加 `autocomplete="new-password"` 与主流密码管理器忽略
+  标记；`upstream.update` 审计新增 `api_key_changed` 字段，Key 变更可追溯。
 
 ## [0.3.1] - 2026-09-10
 
