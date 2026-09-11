@@ -23,11 +23,14 @@ pub struct Preset {
     /// 分协议 base_url 覆盖（多根供应商：如 DeepSeek 的 Anthropic 根独立于 OpenAI 根），
     /// provision 时写入 upstreams.extra.protocol_base_urls
     pub protocol_base_urls: Option<&'static [(&'static str, &'static str)]>,
+    /// 模型列表路径覆盖（provision 时写入 upstreams.extra.models_path；默认 /models，
+    /// 如千帆 Token Plan 的模型列表在 /v1/models 而 /models 不存在）
+    pub models_path: Option<&'static str>,
     pub description: &'static str,
 }
 
-/// 全部预设（9 个）
-static PRESETS: [Preset; 9] = [
+/// 全部预设（12 个）
+static PRESETS: [Preset; 12] = [
     Preset {
         name: "dashscope",
         display_name: "阿里云百炼 DashScope",
@@ -41,6 +44,7 @@ static PRESETS: [Preset; 9] = [
         ],
         media_base_url: Some("https://dashscope.aliyuncs.com"),
         protocol_base_urls: None,
+        models_path: None,
         description:
             "阿里云百炼：文本走 OpenAI 兼容；图像走 DashScope 原生（Qwen-Image 同步 + 万相异步）。",
     },
@@ -52,7 +56,25 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat"],
         media_base_url: None,
         protocol_base_urls: None,
+        models_path: None,
         description: "百度千帆：OpenAI 兼容对话，接入即用。",
+    },
+    Preset {
+        name: "qianfan_tokenplan",
+        display_name: "百度千帆 Token Plan",
+        kind: "baidu",
+        base_url: "https://qianfan.baidubce.com/v2/tokenplan/personal",
+        // 三协议实测可用：Chat/Responses 走 OpenAI 兼容根，Anthropic 走独立 /anthropic 根
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
+        media_base_url: None,
+        protocol_base_urls: Some(&[(
+            "anthropic",
+            "https://qianfan.baidubce.com/anthropic/tokenplan/personal/v1",
+        )]),
+        // 模型列表在 /v1/models（/models 不存在，若不覆盖探测与模型拉取会 404）
+        models_path: Some("/v1/models"),
+        description:
+            "百度千帆 Token Plan（订阅套餐，需专属 API Key）：OpenAI 兼容 Chat/Responses 与 Anthropic 兼容，接入即用。",
     },
     Preset {
         name: "kimi",
@@ -62,17 +84,53 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat"],
         media_base_url: None,
         protocol_base_urls: None,
+        models_path: None,
         description: "月之暗面 Kimi：OpenAI 兼容对话，接入即用。",
     },
     Preset {
         name: "hunyuan",
-        display_name: "腾讯混元 TokenHub",
+        display_name: "腾讯云 TokenHub",
         kind: "tencent",
-        base_url: "https://api.hunyuan.cloud.tencent.com/v1",
-        protocols: &["openai_chat"],
+        base_url: "https://tokenhub.tencentmaas.com/v1",
+        // hy4-preview 等兼容三协议；Anthropic 为独立根（Claude Code 拼接 /v1/messages）
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
-        protocol_base_urls: None,
-        description: "腾讯混元 TokenHub：OpenAI 兼容对话，接入即用。",
+        protocol_base_urls: Some(&[("anthropic", "https://tokenhub.tencentmaas.com/v1")]),
+        models_path: None,
+        description:
+            "腾讯云 TokenHub：混元及第三方模型，OpenAI 兼容 Chat/Responses 与 Anthropic 兼容，接入即用。",
+    },
+    Preset {
+        name: "tencent_tokenplan",
+        display_name: "腾讯云 Token Plan",
+        kind: "tencent",
+        base_url: "https://api.lkeap.cloud.tencent.com/plan/v3",
+        // 官方双根：OpenAI 兼容 /plan/v3；Anthropic 独立根 /plan/anthropic（+ /v1/messages）
+        protocols: &["openai_chat", "anthropic"],
+        media_base_url: None,
+        protocol_base_urls: Some(&[(
+            "anthropic",
+            "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
+        )]),
+        models_path: None,
+        description:
+            "腾讯云 Token Plan（个人版，订阅专属 Key：sk-tp- 开头）：OpenAI 兼容与 Anthropic 兼容，接入即用。",
+    },
+    Preset {
+        name: "dashscope_tokenplan",
+        display_name: "阿里云百炼 Token Plan",
+        kind: "aliyun",
+        base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        // 官方双根：OpenAI 兼容 /compatible-mode/v1；Anthropic 独立根 /apps/anthropic（+ /v1/messages）
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
+        media_base_url: None,
+        protocol_base_urls: Some(&[(
+            "anthropic",
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1",
+        )]),
+        models_path: None,
+        description:
+            "阿里云百炼 Token Plan（个人版/团队版，订阅专属 Key：sk-sp- 开头）：OpenAI 兼容 Chat/Responses 与 Anthropic 兼容。",
     },
     Preset {
         name: "zhipu",
@@ -82,6 +140,7 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat"],
         media_base_url: None,
         protocol_base_urls: None,
+        models_path: None,
         description: "智谱 GLM：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -92,6 +151,7 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat"],
         media_base_url: None,
         protocol_base_urls: None,
+        models_path: None,
         description: "字节火山方舟：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -102,6 +162,7 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat", "openai_responses"],
         media_base_url: None,
         protocol_base_urls: None,
+        models_path: None,
         description: "OpenRouter：OpenAI Chat/Responses 兼容聚合站，模型路由 + 联网搜索透传。",
     },
     Preset {
@@ -113,6 +174,7 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat", "openai_responses", "anthropic", "gemini"],
         media_base_url: None,
         protocol_base_urls: None,
+        models_path: None,
         description: "Zenmux：四协议兼容聚合站，zenmux/auto 自动路由、跨协议调用。",
     },
     Preset {
@@ -124,12 +186,13 @@ static PRESETS: [Preset; 9] = [
         protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
         protocol_base_urls: Some(&[("anthropic", "https://api.deepseek.com/anthropic/v1")]),
+        models_path: None,
         description:
             "DeepSeek 官方：原生支持 OpenAI Chat/Responses 与 Anthropic 三协议（Anthropic 走独立 /anthropic 根，已内置映射）。",
     },
 ];
 
-/// 全部预设（9 个）。
+/// 全部预设（12 个）。
 pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
@@ -145,6 +208,34 @@ pub fn media_base_url(up: &UpstreamRow) -> &str {
         .get("media_base_url")
         .and_then(|v| v.as_str())
         .unwrap_or(&up.base_url)
+}
+
+/// 预设 → upstreams.extra（media_base_url / protocol_base_urls / models_path；仅写入 Some 项）。
+fn preset_extra(preset: &Preset) -> serde_json::Value {
+    let mut extra = serde_json::Map::new();
+    if let Some(m) = preset.media_base_url {
+        extra.insert(
+            "media_base_url".to_string(),
+            serde_json::Value::String(m.to_string()),
+        );
+    }
+    if let Some(pbu) = preset.protocol_base_urls {
+        let map: serde_json::Map<String, serde_json::Value> = pbu
+            .iter()
+            .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
+            .collect();
+        extra.insert(
+            "protocol_base_urls".to_string(),
+            serde_json::Value::Object(map),
+        );
+    }
+    if let Some(mp) = preset.models_path {
+        extra.insert(
+            "models_path".to_string(),
+            serde_json::Value::String(mp.to_string()),
+        );
+    }
+    serde_json::Value::Object(extra)
 }
 
 /// 一键接入：创建 upstream（加密 key + 缓存刷新 + 审计）→ 连通性探测（不阻断）。
@@ -179,25 +270,7 @@ pub async fn provision(
         .encrypt(api_key)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    // extra 写 media_base_url（仅当 Some；保留既有键，勿覆盖——新建行并无既有键）
-    let mut extra = serde_json::Map::new();
-    if let Some(m) = preset.media_base_url {
-        extra.insert(
-            "media_base_url".to_string(),
-            serde_json::Value::String(m.to_string()),
-        );
-    }
-    if let Some(pbu) = preset.protocol_base_urls {
-        let map: serde_json::Map<String, serde_json::Value> = pbu
-            .iter()
-            .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
-            .collect();
-        extra.insert(
-            "protocol_base_urls".to_string(),
-            serde_json::Value::Object(map),
-        );
-    }
-    let extra = serde_json::Value::Object(extra);
+    let extra = preset_extra(preset);
 
     let protocols: Vec<String> = preset.protocols.iter().map(|s| s.to_string()).collect();
 
@@ -271,7 +344,7 @@ async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> 
         .copied()
         .unwrap_or(Protocol::OpenaiChat);
 
-    let url = format!("{}/models", up.base_url.trim_end_matches('/'));
+    let url = up.models_url();
     let mut headers = reqwest::header::HeaderMap::new();
     // api_key_plain 仅在内存快照中持有；此处加鉴权头（绝不回传）
     upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
@@ -333,13 +406,13 @@ mod tests {
     #[test]
     fn presets_complete() {
         let ps = presets();
-        assert_eq!(ps.len(), 9, "应有 9 个预设");
+        assert_eq!(ps.len(), 12, "应有 12 个预设");
 
         // name 唯一
         let mut names: Vec<&str> = ps.iter().map(|p| p.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 9, "预设 name 必须唯一");
+        assert_eq!(names.len(), 12, "预设 name 必须唯一");
 
         // protocols 全在白名单内
         const WHITELIST: &[&str] = &[
@@ -400,8 +473,62 @@ mod tests {
         let or = find("openrouter").unwrap();
         assert_eq!(or.protocols, &["openai_chat", "openai_responses"]);
 
+        // 千帆 Token Plan：三协议 + 独立 Anthropic 根 + /v1/models 模型列表
+        let tp = find("qianfan_tokenplan").unwrap();
+        assert_eq!(
+            tp.base_url,
+            "https://qianfan.baidubce.com/v2/tokenplan/personal"
+        );
+        assert_eq!(
+            tp.protocols,
+            &["openai_chat", "openai_responses", "anthropic"]
+        );
+        assert_eq!(tp.models_path, Some("/v1/models"));
+        assert!(tp.media_base_url.is_none());
+        let anthropic_root: &[(&str, &str)] = &[(
+            "anthropic",
+            "https://qianfan.baidubce.com/anthropic/tokenplan/personal/v1",
+        )];
+        assert_eq!(tp.protocol_base_urls, Some(anthropic_root));
+
+        // 腾讯云 TokenHub：官方新地址 + 三协议（Anthropic 走同域 /v1 前缀根）
+        let hy = find("hunyuan").unwrap();
+        assert_eq!(hy.base_url, "https://tokenhub.tencentmaas.com/v1");
+        assert_eq!(
+            hy.protocols,
+            &["openai_chat", "openai_responses", "anthropic"]
+        );
+        let hy_anthropic: &[(&str, &str)] = &[("anthropic", "https://tokenhub.tencentmaas.com/v1")];
+        assert_eq!(hy.protocol_base_urls, Some(hy_anthropic));
+
+        // 腾讯云 Token Plan（个人版）：OpenAI /plan/v3 + Anthropic /plan/anthropic
+        let tctp = find("tencent_tokenplan").unwrap();
+        assert_eq!(tctp.base_url, "https://api.lkeap.cloud.tencent.com/plan/v3");
+        assert_eq!(tctp.protocols, &["openai_chat", "anthropic"]);
+        let tctp_anthropic: &[(&str, &str)] = &[(
+            "anthropic",
+            "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
+        )];
+        assert_eq!(tctp.protocol_base_urls, Some(tctp_anthropic));
+
+        // 阿里云百炼 Token Plan：OpenAI /compatible-mode/v1 + Anthropic /apps/anthropic
+        let ali_tp = find("dashscope_tokenplan").unwrap();
+        assert_eq!(
+            ali_tp.base_url,
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        );
+        assert_eq!(
+            ali_tp.protocols,
+            &["openai_chat", "openai_responses", "anthropic"]
+        );
+        let ali_anthropic: &[(&str, &str)] = &[(
+            "anthropic",
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1",
+        )];
+        assert_eq!(ali_tp.protocol_base_urls, Some(ali_anthropic));
+
         // 其余单协议
-        for name in ["qianfan", "kimi", "hunyuan", "zhipu", "volcano"] {
+        for name in ["qianfan", "kimi", "zhipu", "volcano"] {
             let p = find(name).unwrap();
             assert_eq!(
                 p.protocols,
@@ -446,5 +573,71 @@ mod tests {
         assert!(validate_provision_key(" ").is_err()); // 纯空白
         assert!(validate_provision_key("").is_err());
         assert!(validate_provision_key("\t\n").is_err());
+    }
+
+    /// Token Plan 三预设（千帆 / 腾讯 / 阿里）：预设 → extra → 实际请求 URL 组合（防回归）。
+    #[test]
+    fn tokenplan_presets_urls_compose_correctly() {
+        use crate::protocol::ir::Protocol;
+        use crate::upstream::endpoint_path;
+
+        // (预设名, chat 完整 URL, anthropic 完整 URL, models URL)
+        let cases: [(&str, &str, &str, &str); 3] = [
+            (
+                "qianfan_tokenplan",
+                "https://qianfan.baidubce.com/v2/tokenplan/personal/chat/completions",
+                "https://qianfan.baidubce.com/anthropic/tokenplan/personal/v1/messages",
+                "https://qianfan.baidubce.com/v2/tokenplan/personal/v1/models",
+            ),
+            (
+                "tencent_tokenplan",
+                "https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions",
+                "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1/messages",
+                "https://api.lkeap.cloud.tencent.com/plan/v3/models",
+            ),
+            (
+                "dashscope_tokenplan",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
+            ),
+        ];
+        for (name, chat_exp, anthropic_exp, models_exp) in cases {
+            let p = find(name).unwrap();
+            let mut up = make_upstream(preset_extra(p));
+            up.base_url = p.base_url.to_string();
+            assert_eq!(
+                up.base_url_for(Protocol::OpenaiChat),
+                p.base_url,
+                "{name} openai 根"
+            );
+            let chat = format!(
+                "{}{}",
+                up.base_url_for(Protocol::OpenaiChat),
+                endpoint_path(Protocol::OpenaiChat, "m", false)
+            );
+            assert_eq!(chat, chat_exp, "{name} chat URL");
+            let anthropic = format!(
+                "{}{}",
+                up.base_url_for(Protocol::Anthropic),
+                endpoint_path(Protocol::Anthropic, "m", false)
+            );
+            assert_eq!(anthropic, anthropic_exp, "{name} anthropic URL");
+            assert_eq!(up.models_url(), models_exp, "{name} models URL");
+        }
+
+        // 千帆 Token Plan 的 Responses 入口（OpenAI 兼容根 + /responses）
+        let p = find("qianfan_tokenplan").unwrap();
+        let mut up = make_upstream(preset_extra(p));
+        up.base_url = p.base_url.to_string();
+        let responses = format!(
+            "{}{}",
+            up.base_url_for(Protocol::OpenaiResponses),
+            endpoint_path(Protocol::OpenaiResponses, "m", false)
+        );
+        assert_eq!(
+            responses,
+            "https://qianfan.baidubce.com/v2/tokenplan/personal/responses"
+        );
     }
 }

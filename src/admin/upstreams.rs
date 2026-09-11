@@ -519,7 +519,7 @@ async fn test_upstream(
         .copied()
         .unwrap_or(Protocol::OpenaiChat);
 
-    let url = format!("{}/models", up.base_url.trim_end_matches('/'));
+    let url = up.models_url();
     let mut headers = reqwest::header::HeaderMap::new();
     if up.kind == "codex" {
         // Codex 渠道用 OAuth 凭证（临期自动刷新），无 api_key

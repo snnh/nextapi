@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+- **百度千帆 Token Plan 预设**：新增 `qianfan_tokenplan` 一键接入预设——OpenAI 兼容
+  Chat/Responses（`https://qianfan.baidubce.com/v2/tokenplan/personal`）与 Anthropic 兼容
+  （`https://qianfan.baidubce.com/anthropic/tokenplan/personal/v1`）三协议；模型列表在
+  `/v1/models`（该服务不提供 `/models`）。上游新增 `extra.models_path` 通用覆盖（默认
+  `/models`），连通性测试与模型拉取随之按覆盖路径请求。
+- **腾讯云 / 阿里云 Token Plan 预设**：新增 `tencent_tokenplan`（腾讯云 Token Plan 个人版，
+  OpenAI 兼容 `/plan/v3` + Anthropic 兼容 `/plan/anthropic`）与 `dashscope_tokenplan`
+  （阿里云百炼 Token Plan，OpenAI 兼容 `/compatible-mode/v1` + Anthropic 兼容
+  `/apps/anthropic`，仅华北2地域）一键接入预设。
+
+### Fixed
+- **腾讯混元 TokenHub 修正**：`hunyuan` 预设 base_url 由旧混元地址
+  `https://api.hunyuan.cloud.tencent.com/v1` 更正为 TokenHub 官方地址
+  `https://tokenhub.tencentmaas.com/v1`，并补充 Responses / Anthropic 兼容协议支持。
+
 ## [0.3.1] - 2026-09-10
 
 ### ⚠️ Fixed（紧急）
