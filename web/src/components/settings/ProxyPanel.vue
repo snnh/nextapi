@@ -121,6 +121,7 @@
               v-model="dlg.form.password"
               type="password"
               show-password
+              autocomplete="new-password"
               :placeholder="dlg.form.hasPassword ? '留空保持不变' : '（可选）'"
               clearable
             />
@@ -131,6 +132,7 @@
             v-model="dlg.form.password"
             type="password"
             show-password
+            autocomplete="new-password"
             placeholder="（可选）"
             clearable
           />
