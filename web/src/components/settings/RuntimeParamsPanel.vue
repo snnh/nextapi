@@ -94,6 +94,7 @@
                   :model-value="secretVals[it.key] || ''"
                   type="password"
                   show-password
+                  autocomplete="new-password"
                   :disabled="isEnv(it)"
                   :placeholder="secretPlaceholder(it)"
                   class="secret-input"

@@ -70,6 +70,9 @@
           v-model="apiKey"
           type="password"
           show-password
+          autocomplete="new-password"
+          data-lpignore="true"
+          data-1p-ignore
           placeholder="必填，加密存储，之后仅可二次验证查看"
           clearable
         />
