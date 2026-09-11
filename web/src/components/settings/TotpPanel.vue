@@ -28,6 +28,7 @@
                 v-model="setupPassword"
                 type="password"
                 show-password
+                autocomplete="current-password"
                 style="width: 200px"
                 placeholder="设置 TOTP 需验证密码"
               />
@@ -77,7 +78,13 @@
         <el-button v-if="!disabling" type="danger" plain @click="disabling = true">禁用 TOTP</el-button>
         <el-form v-else inline @submit.prevent>
           <el-form-item label="密码">
-            <el-input v-model="disableForm.password" type="password" show-password style="width: 180px" />
+            <el-input
+              v-model="disableForm.password"
+              type="password"
+              show-password
+              autocomplete="current-password"
+              style="width: 180px"
+            />
           </el-form-item>
           <el-form-item label="验证码">
             <el-input

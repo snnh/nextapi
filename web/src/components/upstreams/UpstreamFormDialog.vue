@@ -108,6 +108,9 @@
               v-model="form.api_key"
               type="password"
               show-password
+              autocomplete="new-password"
+              data-lpignore="true"
+              data-1p-ignore
               class="api-key-input"
               :placeholder="form.hasApiKey ? '留空保持不变' : '输入新的 Key'"
               clearable
@@ -122,6 +125,9 @@
           v-model="form.api_key"
           type="password"
           show-password
+          autocomplete="new-password"
+          data-lpignore="true"
+          data-1p-ignore
           placeholder="（可选）无 Key 也可保存，网关调用会失败"
           clearable
         />

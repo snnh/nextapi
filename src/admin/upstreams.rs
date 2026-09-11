@@ -449,13 +449,19 @@ async fn update_upstream(
     if body.enabled.is_some() {
         state.breaker.reset(id);
     }
+    // Key 是否随本次保存被显式变更（Set/Clear；未传或掩码=Keep）——审计留痕，便于排查"Key 何时被改"
+    let api_key_changed = matches!(
+        api_key_semantics(body.api_key.as_deref()),
+        ApiKeySemantics::Set(_) | ApiKeySemantics::Clear
+    );
     auth::audit(
         &state,
         &admin.0,
         "upstream.update",
         "upstream",
         Some(&id.to_string()),
-        serde_json::json!({ "name": name, "enabled": enabled, "disabled_by": disabled_by }),
+        serde_json::json!({ "name": name, "enabled": enabled, "disabled_by": disabled_by,
+                            "api_key_changed": api_key_changed }),
         None,
     )
     .await?;
