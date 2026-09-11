@@ -42,8 +42,9 @@ pub fn router() -> Router<Arc<AppState>> {
 // ---------------------------------------------------------------------------
 
 /// 按上游首个协议拉取模型列表：
-/// URL 统一 `{base_url}/models`（Anthropic 为 /v1/models、Gemini 为 /v1beta/models，
-/// 均由 base_url 携带版本前缀）；响应形状按协议适配：
+/// URL 统一 `{base_url}{models_path}`（extra.models_path 可覆盖，如千帆 Token Plan 为
+/// /v1/models；Anthropic 为 /v1/models、Gemini 为 /v1beta/models 均由 base_url 携带
+/// 版本前缀）；响应形状按协议适配：
 /// OpenAI/Anthropic `{data:[{id}]}`；Gemini `{models:[{name:"models/x"}]}`（去前缀）。
 pub async fn fetch_upstream_models(
     state: &Arc<AppState>,
@@ -63,7 +64,7 @@ pub async fn fetch_upstream_models(
         .copied()
         .unwrap_or(Protocol::OpenaiChat);
 
-    let url = format!("{}/models", up.base_url.trim_end_matches('/'));
+    let url = up.models_url();
     let mut headers = reqwest::header::HeaderMap::new();
     if is_codex {
         // Codex 渠道：OAuth 凭证（临期自动刷新）+ 必需头；覆盖 SSE Accept 为 JSON
