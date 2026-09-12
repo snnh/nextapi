@@ -46,7 +46,7 @@ where
 }
 
 /// usage_logs 查询列清单（与 entities::UsageLogRow 字段名一一对应）。
-const LOG_COLS: &str = "id, request_id, ts, key_id, model, requested_model, upstream_id, protocol_in, protocol_out, \
+const LOG_COLS: &str = "id, request_id, ts, key_id, model, requested_model, upstream_model, upstream_id, protocol_in, protocol_out, \
     convert_mode, stream, prompt_tokens, completion_tokens, cache_write_tokens, cache_read_tokens, \
     images, image_size, video_seconds, video_resolution, video_task_type, latency_ms, status, error, \
     retry_count, ttfb_ms, degraded, pricing_source, cost_cny, cost_usd, price_used, fx_snapshot, \
@@ -258,7 +258,7 @@ async fn export_csv(
     let snap = state.cache.snapshot();
     let mut out = String::new();
     out.push_str(
-        "request_id,ts,key_name,model,upstream_name,protocol_in,protocol_out,convert_mode,stream,\
+        "request_id,ts,key_name,model,upstream_model,upstream_name,protocol_in,protocol_out,convert_mode,stream,\
          status,prompt_tokens,completion_tokens,cache_read_tokens,cache_write_tokens,latency_ms,\
          ttfb_ms,retry_count,degraded,cost_cny,cost_usd,error",
     );
@@ -550,6 +550,7 @@ fn csv_record(row: &UsageLogRow, snap: &Snapshot) -> String {
         row.ts.to_rfc3339(),
         key.map(|k| k.name.clone()).unwrap_or_default(),
         row.model.clone(),
+        row.upstream_model.clone().unwrap_or_default(),
         upstream.map(|u| u.name.clone()).unwrap_or_default(),
         row.protocol_in.clone(),
         row.protocol_out.clone(),
