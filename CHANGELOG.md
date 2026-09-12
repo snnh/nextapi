@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.3] - 2026-09-12
 
 ### Fixed
 - **override_model 改写的模型未计价（计价跟随上游实际模型名）**：路由配置 `override_model`
