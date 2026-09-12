@@ -340,6 +340,8 @@ pub struct UsageLogRow {
     pub model: String,
     /// 客户端原始入口模型（M10.1；经别名解析时与 model 不同，未走别名为 NULL）
     pub requested_model: Option<String>,
+    /// 上游实际使用的模型名（override_model 生效且与 model 不同时记录；NULL=与 model 相同。计价修复）
+    pub upstream_model: Option<String>,
     pub upstream_id: Option<Uuid>,
     pub protocol_in: String,
     pub protocol_out: String,
@@ -412,6 +414,8 @@ pub struct MediaTaskRow {
     pub media_type: String,
     pub gateway_key_id: Uuid,
     pub model: String,
+    /// 上游实际模型名（override_model 生效时；NULL=与 model 相同。计价修复）
+    pub upstream_model: Option<String>,
     pub upstream_id: Uuid,
     pub provider_task_id: Option<String>,
     pub status: String,

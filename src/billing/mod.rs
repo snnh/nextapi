@@ -448,6 +448,17 @@ pub fn price_with_rules(
     }
 }
 
+/// 计价用模型名（计价修复 2026-09-12）：优先「上游实际模型名」（路由 override_model
+/// 改写后的名字，仅在与入口 model 不同时记录）；价格为「供应商 + 上游模型 ID」绑定，
+/// 因此计价必须跟随改写后的名字，否则 `entry → override` 类路由（如 glm-5.3-qf →
+/// glm-5.3 走千帆套餐）会被误判为未定价。
+pub fn effective_price_model(ev: &crate::logging::LogEvent) -> &str {
+    ev.upstream_model
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ev.model.as_str())
+}
+
 /// 事件是否含计价用量（token 类 + 图片/视频维度）。M6：media 维度纳入判定。
 fn has_usage(ev: &crate::logging::LogEvent) -> bool {
     ev.prompt_tokens.unwrap_or(0) > 0
@@ -498,7 +509,7 @@ pub async fn price_batch(
         let Some(up_id) = ev.upstream_id else {
             continue;
         };
-        let key = (up_id, ev.model.clone());
+        let key = (up_id, effective_price_model(ev).to_string());
         if seen.insert(key.clone()) {
             pairs.push(key);
         }
@@ -541,7 +552,7 @@ pub async fn price_batch(
         let Some(up_id) = ev.upstream_id else {
             continue;
         };
-        let rules = rules_by.get(&(up_id, ev.model.clone()));
+        let rules = rules_by.get(&(up_id, effective_price_model(ev).to_string()));
         let input = input_from_event(ev);
         let result = price_with_rules(
             rules.map(|v| v.as_slice()).unwrap_or(&[]),
@@ -607,6 +618,53 @@ mod tests {
     use crate::entities::FxRateRow;
     use chrono::TimeZone;
     use std::str::FromStr;
+
+    /// 构造最小可用事件（serde 反序列化路径，与 WAL 兼容测试同口径）。
+    fn mk_log_event(model: &str, upstream_model: Option<&str>) -> crate::logging::LogEvent {
+        serde_json::from_value(serde_json::json!({
+            "request_id": "r1",
+            "ts": "2024-01-01T00:00:00Z",
+            "key_id": null,
+            "model": model,
+            "upstream_model": upstream_model,
+            "upstream_id": null,
+            "protocol_in": "openai_chat",
+            "protocol_out": "openai_chat",
+            "convert_mode": "passthrough",
+            "stream": false,
+            "status": 200,
+            "error": null,
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "cache_write_tokens": null,
+            "cache_read_tokens": null,
+            "latency_ms": null,
+            "retry_count": 0,
+            "ttfb_ms": null,
+            "degraded": false,
+            "usage_raw": null,
+            "debug_payload": null
+        }))
+        .expect("构造 LogEvent 失败")
+    }
+
+    /// 计价模型名：override 生效时用上游实际模型名，否则回落入口名（计价修复 2026-09-12）。
+    #[test]
+    fn price_model_follows_upstream_override() {
+        assert_eq!(
+            effective_price_model(&mk_log_event("glm-5.3-qf", Some("glm-5.3"))),
+            "glm-5.3"
+        );
+        assert_eq!(
+            effective_price_model(&mk_log_event("glm-5.3-qf", None)),
+            "glm-5.3-qf"
+        );
+        // 空串防御：按未改写处理
+        assert_eq!(
+            effective_price_model(&mk_log_event("glm-5.3-qf", Some(""))),
+            "glm-5.3-qf"
+        );
+    }
 
     /// 构造一条默认价格规则（id 随机、dimension_key=''、无分段、生效期无限）。
     fn base_rule(unit: &str, currency: &str, base: &str) -> PriceRuleRow {

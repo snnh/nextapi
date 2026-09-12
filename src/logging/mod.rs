@@ -30,6 +30,10 @@ pub struct LogEvent {
     /// 客户端原始入口模型（M10.1 别名；未走别名为 None。旧 WAL 行缺省可反序列化）
     #[serde(default)]
     pub requested_model: Option<String>,
+    /// 上游实际使用的模型名（路由 override_model 生效且与 model 不同时记录；
+    /// NULL = 与 model 相同。计价按此名查价格规则。旧 WAL 行缺省可反序列化）
+    #[serde(default)]
+    pub upstream_model: Option<String>,
     pub upstream_id: Option<Uuid>,
     pub protocol_in: String,
     /// 未知时 = protocol_in
@@ -222,12 +226,13 @@ impl LogSink {
 // ---------------------------------------------------------------------------
 
 /// 直接来自 LogEvent 的列（顺序固定，与数组类型一一对应）。
-const LOG_COLS: [&str; 33] = [
+const LOG_COLS: [&str; 34] = [
     "request_id",
     "ts",
     "key_id",
     "model",
     "requested_model",
+    "upstream_model",
     "upstream_id",
     "protocol_in",
     "protocol_out",
@@ -259,10 +264,11 @@ const LOG_COLS: [&str; 33] = [
 ];
 
 /// 对应列的 Postgres 数组类型（与 LOG_COLS 同序）。
-const LOG_ARRAY_TYPES: [&str; 33] = [
+const LOG_ARRAY_TYPES: [&str; 34] = [
     "text[]",
     "timestamptz[]",
     "uuid[]",
+    "text[]",
     "text[]",
     "text[]",
     "uuid[]",
@@ -377,6 +383,7 @@ pub async fn insert_batch(
     let mut key_ids = Vec::with_capacity(n);
     let mut models = Vec::with_capacity(n);
     let mut requested_models = Vec::with_capacity(n);
+    let mut upstream_models = Vec::with_capacity(n);
     let mut upstream_ids = Vec::with_capacity(n);
     let mut protocols_in = Vec::with_capacity(n);
     let mut protocols_out = Vec::with_capacity(n);
@@ -412,6 +419,7 @@ pub async fn insert_batch(
         key_ids.push(ev.key_id);
         models.push(ev.model.clone());
         requested_models.push(ev.requested_model.clone());
+        upstream_models.push(ev.upstream_model.clone());
         upstream_ids.push(ev.upstream_id);
         protocols_in.push(ev.protocol_in.clone());
         protocols_out.push(ev.protocol_out.clone());
@@ -450,6 +458,7 @@ pub async fn insert_batch(
         .bind(&key_ids)
         .bind(&models)
         .bind(&requested_models)
+        .bind(&upstream_models)
         .bind(&upstream_ids)
         .bind(&protocols_in)
         .bind(&protocols_out)
@@ -724,16 +733,18 @@ mod tests {
         assert!(sql.contains("cost_cny, cost_usd, pricing_source, price_used, fx_snapshot"));
         // M6：新增 5 个媒体列进入 INSERT 列清单（数值型/文本型/数值型/文本型/文本型）
         assert!(sql.contains("cache_read_tokens, images, image_size, video_seconds, video_resolution, video_task_type"));
-        // M10.1：requested_model 紧随 model 之后（$5::text[]），其后位次整体 +1
-        assert!(sql.contains("model, requested_model, upstream_id"));
-        // 数组位次：usage_raw=$26::jsonb[]、video_seconds=$17::numeric[]、cost_cny=$28::numeric[]、fx_snapshot=$32::jsonb[]
-        assert!(sql.contains("$17::numeric[]"));
-        assert!(sql.contains("$26::jsonb[]"));
-        assert!(sql.contains("$28::numeric[]"));
-        assert!(sql.contains("$32::jsonb[]"));
-        // M14.3：request_headers 追加在末尾（$33::jsonb[]），不改变既有列位次
-        assert!(sql.contains("fx_snapshot, request_headers"));
+        // M10.1：requested_model 紧随 model 之后（$5::text[]）
+        assert!(sql.contains("model, requested_model, upstream_model, upstream_id"));
+        // 计价修复：upstream_model=$6::text[]（上游实际模型名），其后位次整体 +1
+        assert!(sql.contains("$6::text[]"));
+        // 数组位次：video_seconds=$18::numeric[]、usage_raw=$27::jsonb[]、cost_cny=$29::numeric[]、fx_snapshot=$33::jsonb[]
+        assert!(sql.contains("$18::numeric[]"));
+        assert!(sql.contains("$27::jsonb[]"));
+        assert!(sql.contains("$29::numeric[]"));
         assert!(sql.contains("$33::jsonb[]"));
+        // M14.3：request_headers 追加在末尾（$34::jsonb[]），不改变既有列位次
+        assert!(sql.contains("fx_snapshot, request_headers"));
+        assert!(sql.contains("$34::jsonb[]"));
         assert!(sql.contains("ON CONFLICT (request_id, ts) DO NOTHING"));
         // review P4：RETURNING request_id 供聚合侧精确区分新插入行
         assert!(sql.trim_end().ends_with("RETURNING request_id"));

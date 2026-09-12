@@ -1092,6 +1092,7 @@ async fn run_gateway(
         key_id: Some(key.id),
         model: String::new(),
         requested_model: None,
+        upstream_model: None,
         upstream_id: None,
         protocol_in: entry_protocol.as_str().to_string(),
         protocol_out: String::new(),
@@ -1393,6 +1394,8 @@ async fn run_gateway(
     let mut last_upstream: Option<String> = None;
     // 失败事件回填：最后尝试的上游 ID / 请求侧降级 / 失败 debug 载荷
     let mut last_upstream_id: Option<Uuid> = None;
+    // 失败事件回填：最后尝试候选的上游实际模型名（override_model 生效时；None=与入口同名）
+    let mut last_upstream_model: Option<String> = None;
     let mut last_degraded = false;
     let mut last_debug: Option<serde_json::Value> = None;
     // retry_count 定义：本候选内重试次数 idx + 之前彻底失败的候选数。
@@ -1432,6 +1435,7 @@ async fn run_gateway(
                 // 的前提不成立；转换失败只能转移到下一候选。
                 last_upstream = Some(upstream.name.clone());
                 last_upstream_id = Some(upstream.id);
+                last_upstream_model = (up_model != model).then(|| up_model.clone());
                 // 失败调试：记录入口请求与转换错误（转换失败无出站请求体）
                 last_debug = debug_fail_payload(
                     &debug_req,
@@ -1577,6 +1581,8 @@ async fn run_gateway(
                     let retry_count = (idx + failed_candidates) as i32;
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
+                    // 计价修复：记录上游实际模型名（override_model 生效时），计价按此名匹配价格。
+                    ev.upstream_model = (up_model != model).then(|| up_model.clone());
                     ev.protocol_out = outbound.protocol.as_str().to_string();
                     ev.convert_mode = mode_str(outbound.mode).to_string();
                     ev.latency_ms = Some(start.elapsed().as_millis() as i32);
@@ -1669,6 +1675,8 @@ async fn run_gateway(
                     };
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
+                    // 计价修复：记录上游实际模型名（override_model 生效时），计价按此名匹配价格。
+                    ev.upstream_model = (up_model != model).then(|| up_model.clone());
                     ev.protocol_out = outbound.protocol.as_str().to_string();
                     ev.convert_mode = mode_str(outbound.mode).to_string();
                     // 请求侧降级已知（L9 修复后随 Outbound 传出）；流内帧级降级
@@ -1705,6 +1713,7 @@ async fn run_gateway(
                     let no_failover = e.client_causal();
                     last_upstream = Some(upstream.name.clone());
                     last_upstream_id = Some(upstream.id);
+                    last_upstream_model = (up_model != model).then(|| up_model.clone());
                     last_degraded = outbound.req_degraded.is_some();
                     // 失败调试：入口请求 + 实际发往上游的（转换后）请求体 + 上游错误原文
                     {
@@ -1764,6 +1773,7 @@ async fn run_gateway(
     ev.convert_mode = last_convert_mode.unwrap_or_else(|| "none".into());
     // 失败终点回填实际尝试的上游与请求侧降级标记（此前恒 NULL/false，日志无法定位上游）
     ev.upstream_id = last_upstream_id;
+    ev.upstream_model = last_upstream_model;
     ev.degraded = last_degraded;
     ev.debug_payload = last_debug;
     let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
@@ -1866,6 +1876,7 @@ async fn images_generations(
         key_id: Some(key.id),
         model: String::new(),
         requested_model: None,
+        upstream_model: None,
         upstream_id: None,
         protocol_in: "openai_image".to_string(),
         protocol_out: String::new(),
@@ -2252,6 +2263,8 @@ async fn images_generations(
                             });
                             let mut ev = tmpl.clone();
                             ev.upstream_id = Some(upstream.id);
+                            // 计价修复：记录上游实际模型名（override_model 生效时），计价按此名匹配价格。
+                            ev.upstream_model = (up_model != model).then(|| up_model.clone());
                             ev.protocol_out = image_api_name(image_api).to_string();
                             ev.convert_mode = if image_api == ImageApi::Openai {
                                 "media_passthrough"
@@ -2293,8 +2306,8 @@ async fn images_generations(
                             let task_id: Uuid =
                                 match sqlx::query_scalar(
                                     "INSERT INTO media_tasks \
-                                     (id, media_type, gateway_key_id, model, upstream_id, provider_task_id, status, billing_key, raw, request_id) \
-                                     VALUES ($1, 'image', $2, $3, $4, $5, 'pending', $6, $7, $8) \
+                                     (id, media_type, gateway_key_id, model, upstream_model, upstream_id, provider_task_id, status, billing_key, raw, request_id) \
+                                     VALUES ($1, 'image', $2, $3, $9, $4, $5, 'pending', $6, $7, $8) \
                                      ON CONFLICT (billing_key) DO NOTHING RETURNING id",
                                 )
                                 .bind(Uuid::new_v4())
@@ -2305,6 +2318,7 @@ async fn images_generations(
                                 .bind(&billing_key)
                                 .bind(json.clone())
                                 .bind(&request_id)
+                                .bind((up_model != model).then(|| up_model.clone()))
                                 .fetch_optional(&state.db)
                                 .await
                                 {
@@ -2344,6 +2358,8 @@ async fn images_generations(
                             let body_json = serde_json::json!({ "task_id": task_id });
                             let mut ev = tmpl.clone();
                             ev.upstream_id = Some(upstream.id);
+                            // 计价修复：记录上游实际模型名（override_model 生效时），计价按此名匹配价格。
+                            ev.upstream_model = (up_model != model).then(|| up_model.clone());
                             ev.protocol_out = image_api_name(image_api).to_string();
                             ev.convert_mode = "media_adapt".into();
                             ev.latency_ms = Some(start.elapsed().as_millis() as i32);

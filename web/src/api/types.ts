@@ -450,6 +450,8 @@ export interface UsageLogRow {
   model: string
   /** 客户端原始入口模型（经别名解析时与 model 不同，未走别名为 null） */
   requested_model: string | null
+  /** 上游实际模型名（路由改写 override_model 生效时；null=与 model 相同） */
+  upstream_model: string | null
   upstream_id: string | null
   protocol_in: string
   protocol_out: string

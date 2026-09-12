@@ -294,10 +294,16 @@ async fn finalize_succeeded(
         image_size: st.image_size.clone(),
         ..Default::default()
     };
+    // 计价修复：按上游实际模型名（override_model 生效时）匹配价格，与网关主链路一致。
+    let price_model = task
+        .upstream_model
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&task.model);
     let (cost_cny, cost_usd, pricing_source, price_used, fx_snapshot) = match price_one(
         &state.db,
         task.upstream_id,
-        &task.model,
+        price_model,
         &input,
         billing_tz,
         fx_stale,
@@ -358,6 +364,7 @@ async fn finalize_succeeded(
         key_id: Some(task.gateway_key_id),
         model: task.model.clone(),
         requested_model: None,
+        upstream_model: task.upstream_model.clone(),
         upstream_id: Some(task.upstream_id),
         protocol_in: "openai_image".to_string(),
         protocol_out: "images_dashscope_async".to_string(),
@@ -420,6 +427,7 @@ async fn finalize_failed(state: &AppState, task: &MediaTaskRow, st: &TaskStatus)
         key_id: Some(task.gateway_key_id),
         model: task.model.clone(),
         requested_model: None,
+        upstream_model: task.upstream_model.clone(),
         upstream_id: Some(task.upstream_id),
         protocol_in: "openai_image".to_string(),
         protocol_out: "images_dashscope_async".to_string(),
