@@ -6,21 +6,23 @@
 
 **NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 管理后台 API，定位为「面向团队/应用的工具型网关」。
 
-仓库为 Rust + axum 工程：工程骨架（配置热加载/设置优先级/种子）、协议层（4 协议互转）、网关核心（鉴权/限流/路由/熔断/透传与转换决策）、日志统计（分区/WAL/聚合）、计价引擎（分段计价/双币种/导入导出）、图片通道（4 种上游形状适配 + 异步任务计费闭环）、Codex OAuth 渠道、渠道模型自动同步、模型别名、供应商预设（12 个内置 + 一键接入，含百度千帆 / 腾讯云 / 阿里云百炼 Token Plan 个人版）、更新检查（GitHub 手动/定时）。管理后台前端在 `web/`（Vue 3，登录/仪表盘/密钥/上游/路由/别名/价格/日志/统计/系统设置 9 页面），构建产物经 rust-embed 内嵌进二进制（Docker 多阶段自动构建）。
+仓库为 Rust + axum 单体服务（PostgreSQL 存储），管理后台前端在 `web/`（Vue 3，构建产物经 rust-embed 内嵌进二进制，Docker 多阶段自动构建）；模块划分见「代码组织」。
 
 其他文件说明：
 
+- `PLAN.md` — 里程碑与开发顺序；`CHANGELOG.md` — 版本变更记录。
+- `docs/` — `protocol-matrix.md`（协议能力矩阵）、`reverse-proxy.md`（反向代理/子路径部署指南）。
+- `contracts/` — 模块设计契约（m4 日志 / m5 计价 / m6 媒体 / m7 预设 / m8 前端）。
 - `.owc/memory.md` — AI 代理的会话记忆（非项目文档）。
 - `.owc/venv/` — AI 代理工具链的 Python venv，与项目无关，勿动。
 
 ### 明确不做（硬约束）
 
-- 如非极为必要，不编写测试文件，测试文件数量不得超过100，单文件行数不得超过2000
+- 如非极为必要，不新增测试；测试规模硬上限：`tests/` 独立测试文件与源文件内联 `#[cfg(test)]` 模块合计 ≤ 100 个，单个 ≤ 2000 行；测试必须无外部依赖（不连真实 PG / 上游，DB 逻辑用纯函数覆盖）。
 - 不做任何运营售卖功能：充值、余额、积分、兑换码、邀请、套餐、支付、账单、发票；
 - 不做终端用户账号体系：仅单管理员登录，无用户/角色/分组；
 - 不做倍率体系：后端只存直接价格（倍率仅为纯前端试算工具）；
-- v1 不做 Embeddings / Rerank / Audio / Moderation / Fine-tuning 端点；
-- 价格按「供应商 + 上游实际模型 ID」绑定存储（路由 `override_model` 改写后按改写名匹配，未改写 = 入口名），未设价格即不计价（记 NULL + 提示）。
+- v1 不做 Embeddings / Rerank / Audio / Moderation / Fine-tuning 端点。
 
 ## 技术栈
 
@@ -36,13 +38,11 @@
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus + ECharts，rust-embed 嵌入二进制 |
 | 部署 | 单 Docker 镜像（后端 + 内嵌前端）+ docker-compose（含 PG）|
 
-实现要点：异步记账用 `tokio::sync::mpsc` 有界队列 + 批量写 worker；WAL 兜底为 append-only JSONL（CRC 校验，单文件 128MB）；价格导入导出用 `serde_json` / `quick-xml`。
-
 ## 构建与测试命令
 
 - 构建：`cargo build`；检查：`cargo check`；运行：`cargo run`（需要 PostgreSQL：本机 PG 或 `docker-compose up postgres`）
 - **前端（web/ 已存在）**：`cd web && npm install && npm run build`（产物 `web/dist`，经 rust-embed 编译进二进制）。**注意：`cargo build/test` 编译期读取 `web/dist`，目录缺失会编译失败**——本地改完前端后先 `npm run build` 再 cargo；Docker 多阶段已自动保证顺序（rust-embed 内嵌，运行期无需 dist）。构建前置自检 `web/scripts/check-api-paths.mjs` 校验 API 路径前缀（防 `/api/api/...` 双拼回归，v0.3.1 事故）。
-- 测试：`cargo test`（单元测试在各模块内 `#[cfg(test)]`；集成测试在 `tests/`，需 docker-compose 起 PG + mock 上游）
+- 测试：`cargo test`（单元测试内联在 `src/**` 各模块，无外部依赖；`tests/` 集成测试目录尚未建立）
 - 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:3220，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
 - 部署：`docker-compose up -d`（默认拉 GHCR 发布镜像 `ghcr.io/snnh/nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`；本地构建见 compose 内注释）
 - 发布：推送 `v*` 标签即触发 `.github/workflows/ci.yml` 发布流程（rust 检查兜底 + 原生 runner 分布式构建 amd64/arm64 多架构镜像推 GHCR）；GitHub Release 用 `gh release create` 另行创建（不触发构建）；发布前宜跑 `cargo audit` / `cargo deny` 依赖审计
@@ -115,7 +115,7 @@ src/
 migrations/          # 0001_init ~ 0016_usage_upstream_model（sqlx::migrate! 启动自动执行；
                      # 含分区/计价/媒体/加固/别名/幂等/TOTP/模型同步/Codex OAuth/
                      # 日志索引与游标/请求头/上游模型名 upstream_model）
-tests/               # 集成测试（待补充，需 PG + mock 上游）
+tests/               # 集成测试（尚未建立；需 PG + mock 上游）
 web/                 # Vue3 管理后台：src/views 9 页面（含模型别名）+ components/{pricing,settings,upstreams,stats}/
                      # 页面私有组件 + api/（types.ts 接口类型唯一事实源、index.ts 分组函数、http.ts 401 拦截）
                      # + scripts/check-api-paths.mjs 构建前置自检
@@ -125,10 +125,10 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 ## 核心架构约定（开发时必须遵守）
 
 - **请求链路**：鉴权 → 限流/用量上限 → 协议解析 → 路由决策 → 透传/转换 → 上游调用 → （旁路）usage 提取 → 计价 → 异步批量写库（只统计，绝不阻塞主链路）。
-- **透传优先**：上游支持入口协议则原样转发（仅改写模型名、替换鉴权头、应用用户配置的请求头/体 add/set 覆盖；SSE 边转发边改写 `model/id`）；不支持则走内部 IR 换协议（转换失败可回退透传）。
+- **透传优先**：上游支持入口协议则原样转发（仅改写模型名、替换鉴权头、应用用户配置的请求头/体 add/set 覆盖；SSE 边转发边改写 `model/id`）；不支持则走内部 IR 换协议（转换失败只能转移到下一候选，无「回退透传」路径）。
 - **配置单一事实源**：DB 为运行态事实，YAML 仅首次初始化种子（`app_meta.seeded_at` 标记，不靠"表空才写入"）。热参数优先级 **UI > YAML**；启动类参数 **env > UI > YAML**；`NEXTAPI_SECRET_KEY` 为 env-only 例外（不落 DB/YAML）。
 - **日志存储**：`usage_logs` 按 `ts` 声明式分区（每 30 天一个分区），**不自动清理**，管理员手动整分区 DROP（支持 dry_run）；`usage_hourly` 滚动聚合与明细并存；配额用独立 `quota_usage` 计数器（与日志清理解耦，request_id 幂等）。
-- **计价**：`cost = matched_price × quantity`；价格规则按「上游 + 模型名」绑定，**模型名取上游实际模型名**（`upstream_model`：路由 `override_model` 改写后的名字，未改写 = 入口名）——按别名/入口名查价属回归（v0.3.3 修复）；分段有序第一命中（时间 ∧ 上下文长度条件），无命中回落 `base_price`；CNY/USD 双币种快照 + `price_used`/`fx_snapshot` 入账；展示统一舍入 6 位小数；视频秒数向上取整至少 1 秒。
+- **计价**：`cost = matched_price × quantity`；价格规则按「上游 + 模型名」绑定，**模型名取上游实际模型名**（`upstream_model`：路由 `override_model` 改写后的名字；未改写 = 入口名）——按别名/入口名查价属回归（v0.3.3 修复）；未设价格即不计价（记 NULL）；分段有序第一命中（时间 ∧ 上下文长度条件），无命中回落 `base_price`；CNY/USD 双币种快照 + `price_used`/`fx_snapshot` 入账；展示统一舍入 6 位小数；视频秒数向上取整至少 1 秒。
 - **模型名三段语义**：`requested_model`（客户端原始名，仅别名命中时记录）→ `model`（网关侧入口名，别名解析后）→ `upstream_model`（`override_model` 改写后真正发往上游的名字，仅与入口名不同时记录）；白名单/路由按 `model`，计价按 `upstream_model ?? model`，日志页展示「入口名 → 上游名」。
 - **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。
 
@@ -138,15 +138,6 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - 实现与设计文档冲突时先确认是改文档还是改实现，不擅自扩散改动范围。
 - 前端 secret 输入框（上游 API Key / 代理密码 / Token 等）必须带 `autocomplete="new-password"` 与 `data-lpignore`/`data-1p-ignore` 标记：浏览器自动填充会把管理后台登录密码写进 Key 框并在保存其它字段时静默覆盖（v0.3.2 事故，务必遵守）。
 - 增删 `usage_logs` / `media_tasks` 表列时，必须同步更新 `logging::LOG_COLS`+`LOG_ARRAY_TYPES`、`entities` 行结构与 `admin/logs.rs` 查询列（sqlx 运行时校验，编译期不检查）。
-
-## 测试约定
-
-- **单元测试**：协议转换（每对协议 × 文本/图片/工具/流式）、透传/转换决策、计价引擎（分段边界、双币种换算、维度回落）、限流/熔断状态机、quota_usage 幂等。
-- **集成测试**：docker-compose 起 PG，mock 上游（wiremock 风格）验证透传/转换/记账；日志分区/手动清理/WAL 重放；配置热加载与 UI/YAML/env 优先级；代理矩阵。
-- **客户端兼容测试**：OpenAI / Anthropic / Gemini 官方 SDK 直接指向网关作为验收用例。
-- **前端/安全**：Vitest + Playwright E2E；登录防爆破、越权、掩码测试。
-- **性能冒烟**：透传附加开销 < 5ms 中位数；SSE 首字节延迟。
-- Live 测试（真实供应商 Key）可选，CI 不跑。
 
 ## 安全考虑
 
