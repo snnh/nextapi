@@ -169,7 +169,12 @@
             <CopyText :text="row.request_id" :truncate="16" />
           </template>
         </el-table-column>
-        <el-table-column prop="model" label="模型" min-width="150" show-overflow-tooltip />
+        <el-table-column label="模型" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.model }}
+            <span v-if="row.upstream_model" class="hint"> → {{ row.upstream_model }}</span>
+          </template>
+        </el-table-column>
         <el-table-column v-if="!isNarrow" label="Key" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ keyText(row) }}</template>
         </el-table-column>
@@ -299,7 +304,10 @@
                 （别名）
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="实际模型">{{ detail.model }}</el-descriptions-item>
+            <el-descriptions-item label="实际模型">
+              {{ detail.model }}
+              <span v-if="detail.upstream_model" class="hint">（上游实际名 {{ detail.upstream_model }}）</span>
+            </el-descriptions-item>
             <el-descriptions-item label="上游">{{ detail.upstream_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="Key">{{ keyText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="协议链">
