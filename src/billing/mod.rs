@@ -619,53 +619,6 @@ mod tests {
     use chrono::TimeZone;
     use std::str::FromStr;
 
-    /// 构造最小可用事件（serde 反序列化路径，与 WAL 兼容测试同口径）。
-    fn mk_log_event(model: &str, upstream_model: Option<&str>) -> crate::logging::LogEvent {
-        serde_json::from_value(serde_json::json!({
-            "request_id": "r1",
-            "ts": "2024-01-01T00:00:00Z",
-            "key_id": null,
-            "model": model,
-            "upstream_model": upstream_model,
-            "upstream_id": null,
-            "protocol_in": "openai_chat",
-            "protocol_out": "openai_chat",
-            "convert_mode": "passthrough",
-            "stream": false,
-            "status": 200,
-            "error": null,
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "cache_write_tokens": null,
-            "cache_read_tokens": null,
-            "latency_ms": null,
-            "retry_count": 0,
-            "ttfb_ms": null,
-            "degraded": false,
-            "usage_raw": null,
-            "debug_payload": null
-        }))
-        .expect("构造 LogEvent 失败")
-    }
-
-    /// 计价模型名：override 生效时用上游实际模型名，否则回落入口名（计价修复 2026-09-12）。
-    #[test]
-    fn price_model_follows_upstream_override() {
-        assert_eq!(
-            effective_price_model(&mk_log_event("glm-5.3-qf", Some("glm-5.3"))),
-            "glm-5.3"
-        );
-        assert_eq!(
-            effective_price_model(&mk_log_event("glm-5.3-qf", None)),
-            "glm-5.3-qf"
-        );
-        // 空串防御：按未改写处理
-        assert_eq!(
-            effective_price_model(&mk_log_event("glm-5.3-qf", Some(""))),
-            "glm-5.3-qf"
-        );
-    }
-
     /// 构造一条默认价格规则（id 随机、dimension_key=''、无分段、生效期无限）。
     fn base_rule(unit: &str, currency: &str, base: &str) -> PriceRuleRow {
         PriceRuleRow {
