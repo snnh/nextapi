@@ -1,6 +1,7 @@
 //! 价格表 XML/JSON 导入导出（PLAN §5.6 v1.9）。契约 contracts/m5-billing.md §7，M5-B 实现。
 //!
-//! - `export_json` / `export_xml`：把聚合后的 `PriceExportItem` 序列化为契约格式；
+//! - `export_json` / `export_xml`：把聚合后的 `PriceExportItem` 序列化为契约格式
+//!   （XML 默认输出两空格缩进的易读格式，导入解析忽略元素间空白，可原样回传）；
 //! - `detect_format`：按首非空白字符识别 `xml` / `json`；
 //! - `parse_json` / `parse_xml`：把导入文件还原为 `Vec<PriceExportItem>`；
 //! - 导入的逐行校验 / upsert 与上游名解析逻辑放 admin/pricing.rs（见契约 §8）。
@@ -208,7 +209,14 @@ fn dimensions_xml(dims: &serde_json::Value) -> String {
     out
 }
 
+/// 导出 XML：默认输出两空格缩进、逐元素换行的人类易读格式
+/// （导入解析忽略元素间空白，可直接把导出文件原样回传；见 `pretty_xml`）。
 pub fn export_xml(items: &[PriceExportItem]) -> String {
+    pretty_xml(&export_xml_compact(items))
+}
+
+/// 紧凑单行 XML（`pretty_xml` 的输入；保留以便需要定长/最小体积输出时复用）。
+fn export_xml_compact(items: &[PriceExportItem]) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<prices schema=\"nextapi-prices/v1\">");
     for item in items {
@@ -243,6 +251,107 @@ pub fn export_xml(items: &[PriceExportItem]) -> String {
         out.push_str("</price>");
     }
     out.push_str("</prices>");
+    out
+}
+
+/// 紧凑 XML → 人类易读的多行缩进格式（两个空格；`<tag>文本</tag>` 叶子节点保持单行）。
+///
+/// 输入约定为本模块 `export_xml_compact` 生成的规范 XML（无注释/CDATA/混合内容），
+/// 只对元素做换行与缩进，不改动文本内容（叶子文本按解析口径去首尾空白）。
+fn pretty_xml(xml: &str) -> String {
+    enum Tok<'a> {
+        /// `<?xml ... ?>` 声明
+        Decl(&'a str),
+        /// 起始标签 `<price>`
+        Open(&'a str),
+        /// 结束标签 `</price>`
+        Close(&'a str),
+        /// 自闭合标签 `<window .../>`
+        Empty(&'a str),
+        /// 标签之间的文本
+        Text(&'a str),
+    }
+
+    // 词法切分：`<...>` 为一个 token，其余为文本 token（字节索引只在 ASCII '<' 处推进）。
+    let mut toks: Vec<Tok> = Vec::new();
+    let bytes = xml.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let Some(end) = xml[i..].find('>').map(|p| i + p + 1) else {
+                toks.push(Tok::Text(&xml[i..]));
+                break;
+            };
+            let raw = &xml[i..end];
+            if raw.starts_with("<?") {
+                toks.push(Tok::Decl(raw));
+            } else if raw.starts_with("</") {
+                toks.push(Tok::Close(raw));
+            } else if raw.ends_with("/>") {
+                toks.push(Tok::Empty(raw));
+            } else {
+                toks.push(Tok::Open(raw));
+            }
+            i = end;
+        } else {
+            let next = xml[i..].find('<').map(|p| i + p).unwrap_or(xml.len());
+            toks.push(Tok::Text(&xml[i..next]));
+            i = next;
+        }
+    }
+
+    const IND: &str = "  ";
+    let mut out = String::new();
+    let mut depth: usize = 0;
+    let mut idx = 0;
+    while idx < toks.len() {
+        match &toks[idx] {
+            // 元素间空白丢弃；理论不出现的裸文本原样保留（不丢数据）
+            Tok::Text(t) => {
+                if !t.trim().is_empty() {
+                    out.push_str(&IND.repeat(depth));
+                    out.push_str(t.trim());
+                    out.push('\n');
+                }
+                idx += 1;
+            }
+            Tok::Decl(raw) | Tok::Empty(raw) => {
+                out.push_str(&IND.repeat(depth));
+                out.push_str(raw);
+                out.push('\n');
+                idx += 1;
+            }
+            // 叶子节点（起始标签 + 文本 + 结束标签）压成一行，例如 `<model_id>gpt-4</model_id>`
+            Tok::Open(raw) => {
+                let leaf = match (toks.get(idx + 1), toks.get(idx + 2)) {
+                    (Some(Tok::Text(t)), Some(Tok::Close(c))) => Some((t.trim(), *c)),
+                    _ => None,
+                };
+                out.push_str(&IND.repeat(depth));
+                out.push_str(raw);
+                match leaf {
+                    Some((text, close)) => {
+                        out.push_str(text);
+                        out.push_str(close);
+                        out.push('\n');
+                        idx += 3;
+                    }
+                    None => {
+                        out.push('\n');
+                        depth += 1;
+                        idx += 1;
+                    }
+                }
+            }
+            Tok::Close(raw) => {
+                depth = depth.saturating_sub(1);
+                out.push_str(&IND.repeat(depth));
+                out.push_str(raw);
+                out.push('\n');
+                idx += 1;
+            }
+        }
+    }
     out
 }
 
