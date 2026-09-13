@@ -282,7 +282,7 @@
             <div class="card-head"><span>导出价格</span></div>
           </template>
           <div class="hint" style="margin-bottom: 12px">
-            导出的文件包含全部价格规则，字段结构参考：<span class="mono">input_per_m / output_per_m / cache_* / image / video</span>，可用于备份或迁移到其它实例。
+            导出的文件包含全部价格规则（XML 为缩进换行的易读格式），字段结构参考：<span class="mono">input_per_m / output_per_m / cache_* / image / video</span>，可用于备份或迁移到其它实例。
           </div>
           <div class="export-row">
             <el-radio-group v-model="exportFormat">
