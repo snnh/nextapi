@@ -259,6 +259,29 @@
     </output_per_m>
   </price>
   <price>
+    <model_id>ernie-5.0-thinking-preview</model_id>
+    <upstream>qianfan</upstream>
+    <currency>CNY</currency>
+    <input_per_m>
+      <price>6.0000000000</price>
+      <segments>
+        <segment>
+          <price>10</price>
+          <min_prompt_tokens>32000</min_prompt_tokens>
+        </segment>
+      </segments>
+    </input_per_m>
+    <output_per_m>
+      <price>24.0000000000</price>
+      <segments>
+        <segment>
+          <price>40</price>
+          <min_prompt_tokens>32000</min_prompt_tokens>
+        </segment>
+      </segments>
+    </output_per_m>
+  </price>
+  <price>
     <model_id>ernie-5.1</model_id>
     <upstream>qianfan</upstream>
     <currency>CNY</currency>
