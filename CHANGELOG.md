@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.4] - 2026-09-13
+
+### Changed
+- **XML 价格表导出改为人类易读格式**：此前全部内容挤在单行，人工查看/比对困难；现按
+  两空格缩进逐元素换行（`<tag>文本</tag>` 叶子节点保持单行），导入解析忽略元素间空白，
+  导出文件可原样回传（既有导出→导入往返测试覆盖）。
+
+### Fixed
+- **价格导入「本地文件导入」误报「参数错误: 请输入 url」**：axios 实例全局设了
+  `Content-Type: application/json`，axios v1 见到该头会把 FormData 请求体交给
+  `formDataToJSON` 序列化，本地文件因此被发成 JSON `{"file":{}}`（File 序列化为 `{}`），
+  后端按 JSON 分支解析后报「缺少 url」。现移除全局 Content-Type（对象请求体由 axios
+  自动带 application/json），并在文件导入请求上显式置空 Content-Type，让浏览器补
+  `multipart/form-data` + boundary；后端该错误文案同步回显 Content-Type 便于定位。
+
 ## [0.3.3] - 2026-09-12
 
 ### Fixed
