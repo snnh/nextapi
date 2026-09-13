@@ -788,9 +788,25 @@ async fn import_rules(
             .map_err(|e| ApiError::bad_request(format!("读取请求体失败: {e}")))?;
         let body: ImportBody = serde_json::from_slice(&body_bytes)
             .map_err(|e| ApiError::bad_request(format!("JSON 解析失败: {e}")))?;
+        // multipart 走文件分支；JSON 体必须带 url。报错回显 Content-Type，
+        // 便于诊断「FormData 被按 JSON 发出去」这类客户端问题。
         let url = body
             .url
-            .ok_or_else(|| ApiError::bad_request("请输入 url"))?;
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "缺少 url：本地文件导入请用 multipart/form-data 上传（字段名 file），\
+                     URL 导入请在 JSON 体提供 url（当前 Content-Type: {}）",
+                    if content_type.is_empty() {
+                        "未提供"
+                    } else {
+                        content_type.as_str()
+                    }
+                ))
+            })?
+            .to_string();
         let bytes = fetch_url(&state, &url).await?;
         (bytes, q.dry_run.unwrap_or(body.dry_run.unwrap_or(false)))
     };
