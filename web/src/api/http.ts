@@ -41,7 +41,10 @@ const http = axios.create({
   // 子路径部署（M15 §6.4）：API 前缀随部署前缀变化，不再写死 /api
   baseURL: apiBase(),
   timeout: 30000,
-  headers: { 'Content-Type': 'application/json' },
+  // 刻意不设全局 Content-Type：axios v1 一旦看到 application/json，就会把 FormData
+  // 请求体交给 formDataToJSON 序列化（File 变 `{}`）——文件导入因此变成 JSON `{"file":{}}`，
+  // 后端按 JSON 解析后报「参数错误: 请输入 url」。对象请求体由 axios 自动带
+  // application/json，multipart 必须留空 Content-Type 让浏览器补 boundary。
 })
 
 http.interceptors.request.use((cfg) => {

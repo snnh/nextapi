@@ -254,8 +254,13 @@ export const pricingApi = {
   importFile: async (file: File, dry_run: boolean): Promise<ImportReport> => {
     const fd = new FormData()
     fd.append('file', file)
-    // 不显式设置 Content-Type：浏览器会自动带 boundary（手写会丢 boundary 导致解析失败）
-    const r = await http.post<ImportReport>('/api/pricing/import', fd, { params: { dry_run } })
+    // Content-Type 置空（axios 会对 null 头做删除）：既避免 axios v1 把 FormData 转成
+    // JSON，也避免它给 post 补 x-www-form-urlencoded；留空后浏览器自动带
+    // multipart/form-data + boundary（手写固定值会丢 boundary 导致后端解析失败）
+    const r = await http.post<ImportReport>('/api/pricing/import', fd, {
+      params: { dry_run },
+      headers: { 'Content-Type': null },
+    })
     return r.data
   },
   /** 网络链接导入 */
