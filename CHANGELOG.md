@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.5] - 2026-09-14
 
 ### Added
 - **Codex 渠道 WebSocket 传输（预设 auto：WS 优先，失败回落 HTTP）**：对齐官方 CLI 的
