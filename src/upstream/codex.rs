@@ -499,6 +499,35 @@ pub fn prepare_body(
     b
 }
 
+/// compact 请求体整形（直接转发语义，区别于 prepare_body 的恒流式整形）：
+/// 不强制 stream/store/instructions，仅在指纹模拟开启且缺失时注入 client_metadata
+/// （与请求头身份一致）；入站真实 Codex CLI 的 client_metadata 一律保留。
+pub fn prepare_compact_body(
+    body: &serde_json::Value,
+    ident: &Identity,
+    cfg: &SimConfig,
+) -> serde_json::Value {
+    let mut b = body.clone();
+    if !cfg.enabled || !cfg.simulate_body {
+        return b;
+    }
+    let Some(o) = b.as_object_mut() else {
+        return b;
+    };
+    let has_client_metadata = o
+        .get("client_metadata")
+        .and_then(|v| v.as_object())
+        .map(|m| !m.is_empty())
+        .unwrap_or(false);
+    if !has_client_metadata {
+        o.insert(
+            "client_metadata".into(),
+            serde_json::Value::Object(ident.client_metadata()),
+        );
+    }
+    b
+}
+
 /// 非流式入口聚合：读尽 SSE，取 `response.completed` 帧内的完整 response 对象。
 pub async fn aggregate_stream_to_json(
     resp: reqwest::Response,
@@ -677,6 +706,39 @@ pub type CodexLockTable = std::sync::Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepare_compact_body_only_fills_missing_metadata() {
+        let ident = Identity::resolve(
+            None,
+            uuid::Uuid::new_v4(),
+            "k:m",
+            1_700_000_000_000,
+            &SimConfig::default(),
+        );
+        // 缺失时注入 client_metadata，其余字段不动（不强制 stream/store）
+        let out = prepare_compact_body(
+            &serde_json::json!({"model": "m", "input": []}),
+            &ident,
+            &SimConfig::default(),
+        );
+        assert!(out["client_metadata"].is_object());
+        assert!(out.get("stream").is_none());
+        // 入站已有 client_metadata 一律保留
+        let kept = prepare_compact_body(
+            &serde_json::json!({"client_metadata": {"session_id": "s-1"}}),
+            &ident,
+            &SimConfig::default(),
+        );
+        assert_eq!(kept["client_metadata"]["session_id"], "s-1");
+        // 关闭指纹/关闭 body 模拟时不注入
+        let off = SimConfig {
+            enabled: false,
+            ..SimConfig::default()
+        };
+        let plain = prepare_compact_body(&serde_json::json!({"model": "m"}), &ident, &off);
+        assert!(plain.get("client_metadata").is_none());
+    }
 
     fn fake_jwt(payload: &serde_json::Value) -> String {
         use base64::Engine;

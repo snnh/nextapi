@@ -81,7 +81,8 @@ src/
 ├── presets.rs       # 供应商预设（12 个内置预设 + 一键接入 provision + media_base_url /
 │                     # protocol_base_urls / models_path 处理；含百度/腾讯/阿里 Token Plan 专属根地址）
 ├── embed.rs         # 前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
-├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/images/* + 视频 501 占位）
+├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/responses/compact
+│                    # 直接转发 + /v1/images/* + 视频 501 占位）
 │                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
 ├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细；
@@ -134,7 +135,7 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - **计价**：`cost = matched_price × quantity`；价格规则按「上游 + 模型名」绑定，**模型名取上游实际模型名**（`upstream_model`：路由 `override_model` 改写后的名字；未改写 = 入口名）——按别名/入口名查价属回归（v0.3.3 修复）；未设价格即不计价（记 NULL）；分段有序第一命中（时间 ∧ 上下文长度条件），无命中回落 `base_price`；CNY/USD 双币种快照 + `price_used`/`fx_snapshot` 入账；展示统一舍入 6 位小数；视频秒数向上取整至少 1 秒。
 - **模型名三段语义**：`requested_model`（客户端原始名，仅别名命中时记录）→ `model`（网关侧入口名，别名解析后）→ `upstream_model`（`override_model` 改写后真正发往上游的名字，仅与入口名不同时记录）；白名单/路由按 `model`，计价按 `upstream_model ?? model`，日志页展示「入口名 → 上游名」。
 - **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。
-- **Codex 渠道**：`kind='codex'` 走 OAuth（auth.json）→ Responses；出站默认按官方客户端做**指纹模拟**（UA/originator/session-id/thread-id/x-client-request-id/x-codex-window-id/x-codex-turn-metadata + body 补齐 client_metadata/include/prompt_cache_key/reasoning/parallel_tool_calls/tool_choice；用户 overrides 与入站既有值优先）；传输默认 `auto`（先 Responses WebSocket，握手/首事件失败回落 HTTP SSE，代理下自动只用 HTTP），可用上游 `extra.codex_transport`（auto/ws/http）与 `extra.codex_fingerprint`（false 关闭或对象覆盖）调整。
+- **Codex 渠道**：`kind='codex'` 走 OAuth（auth.json）→ Responses；出站默认按官方客户端做**指纹模拟**（UA/originator/session-id/thread-id/x-client-request-id/x-codex-window-id/x-codex-turn-metadata + body 补齐 client_metadata/include/prompt_cache_key/reasoning/parallel_tool_calls/tool_choice；用户 overrides 与入站既有值优先）；传输默认 `auto`（先 Responses WebSocket，握手/首事件失败回落 HTTP SSE，代理下自动只用 HTTP），可用上游 `extra.codex_transport`（auto/ws/http）与 `extra.codex_fingerprint`（false 关闭或对象覆盖）调整。服务端 compact（`/v1/responses/compact`，兼收单数拼写）为**直接转发**通道：不进 IR，候选限 codex/支持 responses 的上游，codex 仅 HTTP、body 只补 client_metadata，上游 404 故障转移、其余 4xx 原样回错（客户端自行回落本地压缩），日志 `protocol_in=openai_responses_compact`。
 
 ## 工作约定
 

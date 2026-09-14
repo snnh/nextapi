@@ -19,6 +19,14 @@
   （UUIDv7 形态，保证粘性路由与提示缓存亲和）。上游 `extra.codex_fingerprint` 可传
   `false` 关闭或对象覆盖 `user_agent`/`originator`/`installation_id`/`simulate_body`。
 - 上游表单（codex 渠道）新增「传输方式」与「指纹模拟 / User-Agent」配置项。
+- **Responses 服务端 compact 直接转发**：新增 `POST /v1/responses/compact`（兼收单数
+  拼写 `/v1/response/compact`）——Codex CLI 的服务端上下文压缩端点。不进 IR 转换层，
+  body 原样转发（仅 override_model 模型名改写 + 用户 overrides）；候选限 codex 渠道或
+  声明支持 openai_responses 的上游；codex 渠道仅 HTTP 传输（compact 无 WS 形态），
+  指纹头照旧注入、body 只补缺失的 client_metadata（不强制 stream/store）；SSE/JSON
+  按客户端 stream 标志透传并照常 usage 记账/计价；上游 404（端点不支持）故障转移到
+  下一候选，其余 4xx 原样回错由客户端自行回落本地压缩。日志 `protocol_in` 独立记为
+  `openai_responses_compact`。
 
 ## [0.3.4] - 2026-09-13
 
