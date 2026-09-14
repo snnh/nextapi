@@ -98,6 +98,39 @@
             </div>
           </div>
         </el-form-item>
+
+        <!-- Codex 传输方式：auto=WS 优先（官方 CLI 行为），失败自动回落 HTTP -->
+        <el-form-item label="传输方式">
+          <el-select v-model="form.codexTransport" style="width: 260px">
+            <el-option label="auto（WebSocket 优先，失败回落 HTTP）" value="auto" />
+            <el-option label="WebSocket（仅 WS）" value="ws" />
+            <el-option label="HTTP SSE" value="http" />
+          </el-select>
+          <div class="hint">
+            官方 CLI 首选 Responses WebSocket（<span class="mono">wss://…/responses</span>，单帧
+            <span class="mono">response.create</span>）；v1 不走代理，走代理的上游请选 HTTP。
+          </div>
+        </el-form-item>
+
+        <!-- 官方客户端指纹模拟：预设开启，避免上游按非官方流量区别对待 -->
+        <el-form-item label="指纹模拟">
+          <el-switch v-model="form.codexFingerprint" />
+          <span class="hint" style="margin-left: 8px">
+            模拟官方客户端请求头（User-Agent / originator / session-id / x-client-request-id /
+            x-codex-window-id / x-codex-turn-metadata）与请求体字段（client_metadata / include /
+            prompt_cache_key / reasoning / parallel_tool_calls / tool_choice）；已有值一律保留。
+          </span>
+        </el-form-item>
+        <el-form-item v-if="form.codexFingerprint" label="User-Agent">
+          <el-input
+            v-model="form.codexUserAgent"
+            :placeholder="CODEX_DEFAULT_USER_AGENT"
+            autocomplete="off"
+            data-lpignore="true"
+            data-1p-ignore
+          />
+          <div class="hint">留空使用内置预设；上游按 UA 区分客户端时可在此覆盖。</div>
+        </el-form-item>
       </template>
       <el-form-item v-else label="API Key" prop="api_key">
         <div v-if="isEdit" class="api-key-block">
@@ -456,6 +489,8 @@ const IMAGE_PROTOCOLS = PROTOCOL_OPTIONS.filter((o) => o.value.startsWith('image
 
 /** Codex 渠道默认值（与后端 upstream/codex.rs 常量一致） */
 const CODEX_DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex'
+const CODEX_DEFAULT_USER_AGENT =
+  'codex-tui/0.153.4 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.153.4)'
 
 const visible = ref(false)
 const saving = ref(false)
@@ -516,6 +551,12 @@ interface FormState {
   hasOauth: boolean
   oauthAccountId: string
   oauthExpiresAt: string
+  /** Codex 传输方式（extra.codex_transport；auto=WS 优先，失败回落 HTTP） */
+  codexTransport: 'auto' | 'ws' | 'http'
+  /** Codex 指纹模拟开关（extra.codex_fingerprint；预设开启） */
+  codexFingerprint: boolean
+  /** Codex 自定义 User-Agent（留空=内置预设） */
+  codexUserAgent: string
 }
 
 function defaultForm(): FormState {
@@ -547,6 +588,9 @@ function defaultForm(): FormState {
     hasOauth: false,
     oauthAccountId: '',
     oauthExpiresAt: '',
+    codexTransport: 'auto',
+    codexFingerprint: true,
+    codexUserAgent: '',
   }
 }
 
@@ -947,6 +991,10 @@ function open(upstream?: UpstreamOut) {
     base.hasOauth = upstream.has_oauth
     base.oauthAccountId = upstream.oauth_account_id ?? ''
     base.oauthExpiresAt = upstream.oauth_expires_at ?? ''
+    base.codexTransport = upstream.extra?.codex_transport ?? 'auto'
+    const fp = upstream.extra?.codex_fingerprint
+    base.codexFingerprint = fp === false ? false : (fp?.enabled ?? true)
+    base.codexUserAgent = (fp && typeof fp === 'object' ? fp.user_agent : '') ?? ''
   }
   Object.assign(form, base)
   extraSnapshot.value = upstream?.extra
@@ -991,6 +1039,26 @@ function buildExtra(): UpstreamExtra {
     extra.capabilities = caps
   } else {
     delete extra.capabilities
+  }
+  // Codex 传输方式：auto 为预设，不落 extra
+  if (form.codexTransport && form.codexTransport !== 'auto') {
+    extra.codex_transport = form.codexTransport
+  } else {
+    delete extra.codex_transport
+  }
+  // Codex 指纹模拟：开启且未自定义 UA = 预设，不落 extra；关闭写 false。
+  // 保留快照里 UI 未管理的键（如 API 直配的 originator / simulate_body）。
+  if (!form.codexFingerprint) {
+    extra.codex_fingerprint = false
+  } else {
+    const prev = extraSnapshot.value?.codex_fingerprint
+    const next: Record<string, unknown> = prev && typeof prev === 'object' ? { ...prev } : {}
+    const ua = form.codexUserAgent.trim()
+    if (ua) next.user_agent = ua
+    else delete next.user_agent
+    delete next.enabled
+    if (Object.keys(next).length) extra.codex_fingerprint = next as never
+    else delete extra.codex_fingerprint
   }
   return extra
 }

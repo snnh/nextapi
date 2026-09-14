@@ -188,6 +188,25 @@ export interface UpstreamExtra {
     vision?: boolean | null
     max_context?: number | null
   }
+  /**
+   * Codex 渠道传输方式：auto（缺省预设，WebSocket 优先、失败回落 HTTP SSE）
+   * / ws（仅 WS）/ http（仅 HTTP SSE）。
+   */
+  codex_transport?: 'auto' | 'ws' | 'http' | null
+  /**
+   * Codex 渠道官方客户端指纹模拟：缺省预设开启（内置 codex-tui UA/头 + 请求体字段补齐）；
+   * false 关闭；对象覆盖单项（user_agent/originator/installation_id/simulate_body）。
+   */
+  codex_fingerprint?:
+    | false
+    | {
+        enabled?: boolean
+        user_agent?: string | null
+        originator?: string | null
+        installation_id?: string | null
+        simulate_body?: boolean
+      }
+    | null
 }
 
 export interface UpstreamIn {

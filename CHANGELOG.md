@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Codex 渠道 WebSocket 传输（预设 auto：WS 优先，失败回落 HTTP）**：对齐官方 CLI 的
+  Responses-over-WebSocket 链路——`{ws|wss}://…/responses` 握手（`openai-beta:
+  responses_websockets=2026-02-06` 类 beta 头 + 鉴权 + 指纹头）、单帧
+  `{"type":"response.create", …}`；服务端事件帧重编码为 SSE 复用既有透传/转换/打点链路，
+  非流式入口读尽事件取 `response.completed`；握手/首个事件前失败计入可重试/故障转移，
+  auto 模式回落 HTTP。上游 `extra.codex_transport` = `auto`（默认）/`ws`/`http`；
+  代理下的上游自动只用 HTTP（v1 限制）。
+- **Codex 官方客户端指纹模拟（预设开启）**：出站请求补齐官方 codex-tui 形态的请求头
+  （`User-Agent`/`originator`/`session-id`/`thread-id`/`x-client-request-id`/
+  `x-codex-window-id`/`x-codex-turn-metadata`）与请求体 Codex 专属字段
+  （`client_metadata`/`include`/`prompt_cache_key`/`reasoning`/`parallel_tool_calls`/
+  `tool_choice`）；入站真实 Codex CLI 的既有值、用户 overrides 一律优先（不覆盖）。
+  会话/安装标识优先复用入站 `client_metadata`，否则按 (Key, 入口模型) 确定性派生
+  （UUIDv7 形态，保证粘性路由与提示缓存亲和）。上游 `extra.codex_fingerprint` 可传
+  `false` 关闭或对象覆盖 `user_agent`/`originator`/`installation_id`/`simulate_body`。
+- 上游表单（codex 渠道）新增「传输方式」与「指纹模拟 / User-Agent」配置项。
+
 ## [0.3.4] - 2026-09-13
 
 ### Changed

@@ -5,6 +5,7 @@
 //! - 敏感头（Host/Cookie/Proxy-*）不透传；其余头按白名单默认放行（M3：仅转发 content-type/accept）。
 
 pub mod codex;
+pub mod codex_ws;
 pub mod usage;
 
 use bytes::Bytes;
@@ -604,15 +605,36 @@ pub fn rewrite_sse_payload(data: &str, model: &str) -> String {
     }
 }
 
+/// 上游流式响应体：HTTP SSE 或 WS 事件转 SSE 字节流（codex 渠道）。
+pub enum StreamSource {
+    Http(reqwest::Response),
+    Bytes(ByteStream),
+}
+
+/// 上游字节流（错误以 `String` 表达，便于 HTTP/WS 两条来源统一）。
+pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send + 'static>>;
+
+impl StreamSource {
+    /// 统一为字节流：HTTP 响应体错误转字符串，保持 SSE 解析入口单一。
+    pub fn into_byte_stream(self) -> ByteStream {
+        match self {
+            StreamSource::Http(resp) => {
+                Box::pin(resp.bytes_stream().map(|r| r.map_err(|e| e.to_string())))
+            }
+            StreamSource::Bytes(s) => s,
+        }
+    }
+}
+
 /// 透传 SSE 改写流：把上游字节流解析为 SSE 事件，改写每个 chunk JSON 的
 /// `model`（回写网关模型名），`id` 及其余字段原样透传；
 /// 单行解析失败该行原样放行，不中断流。
 pub fn sse_passthrough_stream(
-    resp: reqwest::Response,
+    src: StreamSource,
     gateway_model: String,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
     let state = PassthroughState {
-        stream: Box::pin(resp.bytes_stream()),
+        stream: src.into_byte_stream(),
         parser: SseParser::new(),
         queue: VecDeque::new(),
         done: false,
@@ -650,7 +672,7 @@ pub fn sse_passthrough_stream(
 }
 
 struct PassthroughState {
-    stream: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static>>,
+    stream: ByteStream,
     parser: SseParser,
     queue: VecDeque<Result<Bytes, std::io::Error>>,
     done: bool,
@@ -660,13 +682,13 @@ struct PassthroughState {
 /// 转换 SSE 流：上游协议事件 → IR chunk → 入口协议事件编码。
 /// 降级项无法跨流回传响应头（首字节已发），只记 warning 日志。
 pub fn sse_convert_stream(
-    resp: reqwest::Response,
+    src: StreamSource,
     from: Protocol,
     to: Protocol,
     gateway_model: String,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
     let state = ConvertState {
-        stream: Box::pin(resp.bytes_stream()),
+        stream: src.into_byte_stream(),
         parser: SseParser::new(),
         queue: VecDeque::new(),
         done: false,
@@ -732,7 +754,7 @@ pub fn sse_convert_stream(
 }
 
 struct ConvertState {
-    stream: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static>>,
+    stream: ByteStream,
     parser: SseParser,
     queue: VecDeque<Result<Bytes, std::io::Error>>,
     done: bool,

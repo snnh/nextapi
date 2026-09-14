@@ -115,7 +115,85 @@ struct Outbound {
 /// 执行结果。
 enum ExecOutcome {
     Json(serde_json::Value),
-    Stream(reqwest::Response),
+    Stream(upstream::StreamSource),
+}
+
+/// Codex 渠道（kind='codex'）请求上下文：OAuth 凭证 + 指纹身份 + 整形后的请求。
+struct CodexCtx {
+    token: String,
+    account: String,
+    sim: crate::upstream::codex::SimConfig,
+    ident: crate::upstream::codex::Identity,
+    /// HTTP 出站头（鉴权 + 实验头 + Accept + 指纹模拟）
+    http_headers: reqwest::header::HeaderMap,
+    /// 整形后的 Responses 请求体
+    body: serde_json::Value,
+}
+
+/// Codex WS 执行：握手头单独构造（openai-beta 用 responses_websockets 值），
+/// 载荷补 `type=response.create`；流式返回 SSE 字节流，非流式读尽聚合。
+async fn codex_ws_exec(
+    ctx: &CodexCtx,
+    ws_url: &str,
+    base_headers: &reqwest::header::HeaderMap,
+    stream: bool,
+    connect_timeout_ms: i32,
+    idle_timeout_ms: i32,
+) -> Result<ExecOutcome, UpstreamError> {
+    use crate::upstream::codex_ws;
+    let mut h = base_headers.clone();
+    crate::upstream::codex::apply_ws_headers(
+        &mut h,
+        &ctx.token,
+        &ctx.account,
+        &ctx.sim,
+        &ctx.ident,
+    );
+    let body = codex_ws::prepare_ws_body(&ctx.body, chrono::Utc::now().timestamp_millis());
+    let mut req = codex_ws::WsRequest::new(ws_url.to_string(), h, body);
+    // 连接超时取上游超时并封顶 30s：握手阶段挂死不应拖长故障转移时间。
+    req.connect_timeout = Some(if connect_timeout_ms > 0 {
+        Duration::from_millis(connect_timeout_ms as u64).min(Duration::from_secs(30))
+    } else {
+        codex_ws::DEFAULT_CONNECT_TIMEOUT
+    });
+    req.idle_timeout = (idle_timeout_ms > 0).then(|| Duration::from_millis(idle_timeout_ms as u64));
+    if stream {
+        let bytes = codex_ws::execute_stream(req).await?;
+        Ok(ExecOutcome::Stream(upstream::StreamSource::Bytes(bytes)))
+    } else {
+        codex_ws::execute_nonstream(req)
+            .await
+            .map(ExecOutcome::Json)
+    }
+}
+
+/// HTTP 上游执行：流式直连 SSE；非流式按 `codex_aggregate` 决定「流式收取 + 聚合」或普通 JSON。
+async fn exec_http(
+    client: &reqwest::Client,
+    url: &str,
+    headers: reqwest::header::HeaderMap,
+    body: &serde_json::Value,
+    stream: bool,
+    timeout_ms: i32,
+    stream_timeout_ms: i32,
+    codex_aggregate: bool,
+) -> Result<ExecOutcome, UpstreamError> {
+    if stream {
+        upstream::execute_stream(client, url, headers, body, stream_timeout_ms)
+            .await
+            .map(|r| ExecOutcome::Stream(upstream::StreamSource::Http(r)))
+    } else if codex_aggregate {
+        // Codex 后端仅流式：非流式入口走流式收取 + 聚合 response.completed 帧。
+        let resp = upstream::execute_stream(client, url, headers, body, timeout_ms).await?;
+        crate::upstream::codex::aggregate_stream_to_json(resp)
+            .await
+            .map(ExecOutcome::Json)
+    } else {
+        upstream::execute_nonstream(client, url, headers, body, timeout_ms)
+            .await
+            .map(ExecOutcome::Json)
+    }
 }
 
 /// 候选失败原因。
@@ -1477,7 +1555,8 @@ async fn run_gateway(
         upstream::apply_header_overrides(&mut req_headers, overrides.as_ref());
         // no_proxy 合并规则（PLAN §5.9）：目标 URL 命中全局 proxy.no_proxy 或所选代理
         // 自身 no_proxy 任一列表 → 直连池。
-        let client = {
+        // via_proxy：本次请求实际经代理 —— WS 传输 v1 不支持代理，用于传输选择。
+        let (client, via_proxy) = {
             let mut lists: Vec<Vec<String>> = vec![state.hot.load().proxy.no_proxy.clone()];
             let eff_proxy_id = if upstream.use_proxy {
                 upstream
@@ -1492,11 +1571,14 @@ async fn run_gateway(
                 }
             }
             if upstream.use_proxy && upstream::no_proxy_match(&lists, &url) {
-                state.client_pools.direct_client()
+                (state.client_pools.direct_client(), false)
             } else {
-                state
-                    .client_pools
-                    .client_for(upstream, &snap, &default_proxy_id)
+                (
+                    state
+                        .client_pools
+                        .client_for(upstream, &snap, &default_proxy_id),
+                    upstream.use_proxy,
+                )
             }
         };
 
@@ -1514,49 +1596,111 @@ async fn run_gateway(
         };
         let mut idx: u32 = 0;
         loop {
-            // Codex 渠道（kind='codex'）：OAuth token 注入 + 请求整形（恒流式 Responses）。
+            // Codex 渠道（kind='codex'）：OAuth token 注入 + 指纹模拟 + 请求整形
+            // （恒流式 Responses）；传输可选 WS（预设 auto：WS 失败回落 HTTP）。
             // token 刷新失败 → 构造连接类错误走统一熔断/重试/故障转移路径。
             let is_codex = upstream.kind == "codex";
-            let mut codex_ctx: Option<(reqwest::header::HeaderMap, serde_json::Value)> = None;
+            let codex_transport = crate::upstream::codex::transport(&upstream.extra);
+            let mut codex_ctx: Option<CodexCtx> = None;
             let mut codex_err: Option<String> = None;
             if is_codex {
+                let sim = crate::upstream::codex::sim_config(&upstream.extra);
                 match crate::upstream::codex::ensure_token(&state, upstream).await {
                     Ok((tok, acct)) => {
+                        // 会话/安装标识：优先入站 client_metadata（真实 Codex CLI 透传），
+                        // 否则按 (Key, 入口模型) 确定性派生（粘性路由 + 提示缓存亲和）。
+                        let ident = crate::upstream::codex::Identity::resolve(
+                            Some(&outbound.body),
+                            upstream.id,
+                            &format!("{}:{}", key.id, up_model),
+                            key.created_at.timestamp_millis(),
+                            &sim,
+                        );
                         let mut h = req_headers.clone();
-                        crate::upstream::codex::apply_headers(&mut h, &tok, &acct);
-                        codex_ctx = Some((h, crate::upstream::codex::prepare_body(&outbound.body)));
+                        crate::upstream::codex::apply_headers(&mut h, &tok, &acct, &sim, &ident);
+                        let body =
+                            crate::upstream::codex::prepare_body(&outbound.body, &ident, &sim);
+                        codex_ctx = Some(CodexCtx {
+                            token: tok,
+                            account: acct,
+                            sim,
+                            ident,
+                            http_headers: h,
+                            body,
+                        });
                     }
                     Err(e) => codex_err = Some(e),
                 }
             }
+            // WS 可用性：codex + 非 http 传输 + 未走代理 + base_url 可转 ws(s)。
+            let codex_ws_url = if is_codex
+                && codex_transport != crate::upstream::codex::Transport::Http
+                && !via_proxy
+            {
+                crate::upstream::codex_ws::ws_url(&url)
+            } else {
+                None
+            };
 
             let exec_res: Result<ExecOutcome, UpstreamError> = if let Some(e) = codex_err {
                 Err(UpstreamError::Connect(format!("codex oauth: {e}")))
-            } else if stream {
-                let (h, b) = codex_ctx
-                    .clone()
-                    .unwrap_or_else(|| (req_headers.clone(), outbound.body.clone()));
-                upstream::execute_stream(&client, &url, h, &b, stream_timeout_ms)
-                    .await
-                    .map(ExecOutcome::Stream)
-            } else if let Some((h, b)) = codex_ctx {
-                // Codex 后端仅流式：非流式入口走流式收取 + 聚合 response.completed 帧
-                match upstream::execute_stream(&client, &url, h, &b, upstream.timeout_ms).await {
-                    Ok(resp) => crate::upstream::codex::aggregate_stream_to_json(resp)
+            } else if let (Some(ctx), Some(ws_url)) = (codex_ctx.as_ref(), codex_ws_url.as_deref())
+            {
+                match codex_ws_exec(
+                    ctx,
+                    ws_url,
+                    &req_headers,
+                    stream,
+                    upstream.timeout_ms,
+                    stream_timeout_ms,
+                )
+                .await
+                {
+                    Ok(outcome) => Ok(outcome),
+                    // auto：WS 失败回落 HTTP（同一候选内，不额外计重试）
+                    Err(e) if codex_transport == crate::upstream::codex::Transport::Auto => {
+                        tracing::warn!(
+                            "codex ws 传输失败（transport={}），回落 HTTP：{e}",
+                            codex_transport.as_str()
+                        );
+                        exec_http(
+                            &client,
+                            &url,
+                            ctx.http_headers.clone(),
+                            &ctx.body,
+                            stream,
+                            upstream.timeout_ms,
+                            stream_timeout_ms,
+                            /*codex_aggregate*/ true,
+                        )
                         .await
-                        .map(ExecOutcome::Json),
+                    }
                     Err(e) => Err(e),
                 }
+            } else if let Some(ctx) = codex_ctx.as_ref() {
+                exec_http(
+                    &client,
+                    &url,
+                    ctx.http_headers.clone(),
+                    &ctx.body,
+                    stream,
+                    upstream.timeout_ms,
+                    stream_timeout_ms,
+                    /*codex_aggregate*/ true,
+                )
+                .await
             } else {
-                upstream::execute_nonstream(
+                exec_http(
                     &client,
                     &url,
                     req_headers.clone(),
                     &outbound.body,
+                    stream,
                     upstream.timeout_ms,
+                    stream_timeout_ms,
+                    /*codex_aggregate*/ false,
                 )
                 .await
-                .map(ExecOutcome::Json)
             };
 
             match exec_res {
@@ -1656,7 +1800,7 @@ async fn run_gateway(
                         return record(&state.metrics, &lbl, start, true, outcome.response);
                     }
                 }
-                Ok(ExecOutcome::Stream(resp)) => {
+                Ok(ExecOutcome::Stream(src)) => {
                     state.breaker.on_success(&state.db, upstream).await;
                     // M11.3：成功即更新粘性 pin（仅开启时；pin 只在成功路径写入）
                     if gateway_cfg.sticky_routing {
@@ -1665,13 +1809,13 @@ async fn run_gateway(
                     let lbl = metrics_labels(&key, entry, &upstream.name);
                     let sbody = if matches!(outbound.mode, Mode::Convert(_)) {
                         Body::from_stream(upstream::sse_convert_stream(
-                            resp,
+                            src,
                             outbound.protocol,
                             entry_protocol,
                             model.clone(),
                         ))
                     } else {
-                        Body::from_stream(upstream::sse_passthrough_stream(resp, model.clone()))
+                        Body::from_stream(upstream::sse_passthrough_stream(src, model.clone()))
                     };
                     let mut ev = tmpl.clone();
                     ev.upstream_id = Some(upstream.id);
