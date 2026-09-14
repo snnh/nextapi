@@ -531,7 +531,15 @@ async fn test_upstream(
         // Codex 渠道用 OAuth 凭证（临期自动刷新），无 api_key
         match upstream::codex::ensure_token(&state, &up).await {
             Ok((token, account)) => {
-                upstream::codex::apply_headers(&mut headers, &token, &account);
+                let sim = upstream::codex::sim_config(&up.extra);
+                let ident = upstream::codex::Identity::resolve(
+                    None,
+                    up.id,
+                    "connectivity",
+                    chrono::Utc::now().timestamp_millis(),
+                    &sim,
+                );
+                upstream::codex::apply_headers(&mut headers, &token, &account, &sim, &ident);
                 headers.insert(
                     reqwest::header::ACCEPT,
                     reqwest::header::HeaderValue::from_static("application/json"),

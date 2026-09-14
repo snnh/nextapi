@@ -69,7 +69,15 @@ pub async fn fetch_upstream_models(
     if is_codex {
         // Codex 渠道：OAuth 凭证（临期自动刷新）+ 必需头；覆盖 SSE Accept 为 JSON
         let (token, account) = upstream::codex::ensure_token(state, up).await?;
-        upstream::codex::apply_headers(&mut headers, &token, &account);
+        let sim = upstream::codex::sim_config(&up.extra);
+        let ident = upstream::codex::Identity::resolve(
+            None,
+            up.id,
+            "models",
+            chrono::Utc::now().timestamp_millis(),
+            &sim,
+        );
+        upstream::codex::apply_headers(&mut headers, &token, &account, &sim, &ident);
         headers.insert(
             reqwest::header::ACCEPT,
             reqwest::header::HeaderValue::from_static("application/json"),

@@ -69,7 +69,10 @@ src/
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
 ├── upstream/codex.rs # Codex OAuth 渠道：auth.json 解析、ensure_token 临期刷新（single-flight
-│                     # + 轮换回写）、请求头注入、请求整形（恒流式）、流聚合回非流式
+│                     # + 轮换回写）、官方客户端指纹模拟（预设 UA/originator/会话头 + body 字段
+│                     # 补齐；extra.codex_fingerprint 可配）、传输选择（extra.codex_transport）
+├── upstream/codex_ws.rs # Codex Responses-over-WebSocket 传输（握手头、response.create 单帧、
+│                     # 事件→SSE 重编码、错误帧映射、非流式聚合；v1 不走代理）
 ├── netguard.rs      # SSRF 防护：私网段拦截 + DNS 钉住（URL 导入/媒体下载/代理探测）
 ├── idempotency.rs   # 计费幂等键（quota_usage 与日志写库的 request_id 去重）
 ├── media/           # 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
@@ -131,6 +134,7 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - **计价**：`cost = matched_price × quantity`；价格规则按「上游 + 模型名」绑定，**模型名取上游实际模型名**（`upstream_model`：路由 `override_model` 改写后的名字；未改写 = 入口名）——按别名/入口名查价属回归（v0.3.3 修复）；未设价格即不计价（记 NULL）；分段有序第一命中（时间 ∧ 上下文长度条件），无命中回落 `base_price`；CNY/USD 双币种快照 + `price_used`/`fx_snapshot` 入账；展示统一舍入 6 位小数；视频秒数向上取整至少 1 秒。
 - **模型名三段语义**：`requested_model`（客户端原始名，仅别名命中时记录）→ `model`（网关侧入口名，别名解析后）→ `upstream_model`（`override_model` 改写后真正发往上游的名字，仅与入口名不同时记录）；白名单/路由按 `model`，计价按 `upstream_model ?? model`，日志页展示「入口名 → 上游名」。
 - **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。
+- **Codex 渠道**：`kind='codex'` 走 OAuth（auth.json）→ Responses；出站默认按官方客户端做**指纹模拟**（UA/originator/session-id/thread-id/x-client-request-id/x-codex-window-id/x-codex-turn-metadata + body 补齐 client_metadata/include/prompt_cache_key/reasoning/parallel_tool_calls/tool_choice；用户 overrides 与入站既有值优先）；传输默认 `auto`（先 Responses WebSocket，握手/首事件失败回落 HTTP SSE，代理下自动只用 HTTP），可用上游 `extra.codex_transport`（auto/ws/http）与 `extra.codex_fingerprint`（false 关闭或对象覆盖）调整。
 
 ## 工作约定
 
