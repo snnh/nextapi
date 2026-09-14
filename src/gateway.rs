@@ -1968,6 +1968,518 @@ async fn gemini(
 }
 
 // ---------------------------------------------------------------------------
+// Responses 服务端 compact（Codex 上下文压缩）：直接转发，不走 IR 转换
+// ---------------------------------------------------------------------------
+
+/// 候选上游是否能服务 compact：codex 渠道（chatgpt 后端原生支持）
+/// 或声明支持 openai_responses 协议的上游（按 /responses/compact 透传）。
+fn compact_capable(up: &UpstreamRow) -> bool {
+    up.kind == "codex" || up.protocol_list().contains(&Protocol::OpenaiResponses)
+}
+
+/// POST /v1/responses/compact（兼收单数拼写 /v1/response/compact）：
+/// Codex 服务端上下文压缩端点的直接转发通道。
+///
+/// 与 run_gateway 的差异：
+/// - 不解析/转换协议：body 原样转发（仅模型名按 override_model 改写 + 用户 overrides），
+///   候选限「codex 渠道或支持 openai_responses 的上游」；
+/// - compact 无 max_tokens 语义，跳过 tpm_precheck；不支持幂等键；
+/// - codex 渠道仅 HTTP 传输（compact 无 WS 形态），指纹头照旧注入，
+///   body 只补 client_metadata（不强制 stream/store/instructions）；
+/// - 响应按客户端 stream 标志透传：SSE 走 tee 记账，JSON 原样回写模型名；
+/// - 上游 404（端点不支持）属候选级问题 → 故障转移到下一候选；其余 4xx 按
+///   客户端成因不转移，原样回错，由客户端（Codex CLI）自行回落本地压缩。
+async fn openai_responses_compact(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let start = Instant::now();
+    let entry_protocol = Protocol::OpenaiResponses;
+    let entry = Entry::OpenaiResponses;
+
+    // 1. Key 鉴权
+    let key = match authenticate_gateway_key(&state, &headers) {
+        Ok(k) => k,
+        Err(resp) => return *resp,
+    };
+    let snap = state.cache.snapshot();
+    let debug_active = key.debug_active();
+
+    // 2. 记账事件模板（protocol_in 独立取值，便于区分普通 responses 调用）
+    let mut tmpl = LogEvent {
+        request_id: request_id.clone(),
+        ts: chrono::Utc::now(),
+        key_id: Some(key.id),
+        model: String::new(),
+        requested_model: None,
+        upstream_model: None,
+        upstream_id: None,
+        protocol_in: "openai_responses_compact".to_string(),
+        protocol_out: entry_protocol.as_str().to_string(),
+        convert_mode: "none".into(),
+        stream: false,
+        status: 0,
+        error: None,
+        prompt_tokens: None,
+        completion_tokens: None,
+        cache_write_tokens: None,
+        cache_read_tokens: None,
+        latency_ms: None,
+        retry_count: 0,
+        ttfb_ms: None,
+        degraded: false,
+        usage_raw: None,
+        debug_payload: None,
+        cost_cny: None,
+        cost_usd: None,
+        pricing_source: None,
+        price_used: None,
+        fx_snapshot: None,
+        images: None,
+        image_size: None,
+        video_seconds: None,
+        video_resolution: None,
+        video_task_type: None,
+        request_headers: crate::logging::headers::summarize_request_headers(&headers),
+    };
+
+    let gateway_cfg = state.hot.load().gateway.clone();
+    let default_proxy_id = state.hot.load().proxy.default_proxy_id.clone();
+
+    // 3. body 解析 + 模型提取
+    let body_value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            log_fail(&state, &tmpl, start, 400, "请求体不是合法 JSON", 0);
+            return error_resp(entry_protocol, &request_id, 400, "请求体不是合法 JSON");
+        }
+    };
+    let model = match body_value["model"].as_str() {
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => {
+            log_fail(&state, &tmpl, start, 400, "model 缺失", 0);
+            return error_resp(entry_protocol, &request_id, 400, "model 缺失");
+        }
+    };
+    let (model, requested) = resolve_alias(&snap, &model);
+    tmpl.requested_model = requested;
+    tmpl.model = model.clone();
+    let stream = body_value["stream"].as_bool().unwrap_or(false);
+    tmpl.stream = stream;
+    let params_meta = crate::upstream::usage::request_params_meta(entry_protocol, &body_value);
+    tmpl.usage_raw = Some(serde_json::json!({ "params": params_meta.clone() }));
+    let debug_req: Option<(serde_json::Value, bool)> = if debug_active {
+        Some(crate::logging::redact::redact_and_truncate(
+            &body,
+            crate::logging::DEBUG_MAX_BYTES,
+        ))
+    } else {
+        None
+    };
+
+    // 4. 模型白名单
+    if !key.model_allowed(&model) {
+        log_fail(&state, &tmpl, start, 403, "禁止访问", 0);
+        return error_resp(entry_protocol, &request_id, 403, "禁止访问");
+    }
+
+    // 5. 限流 + 配额（compact 无 max_tokens 语义，跳过 tpm_precheck）
+    if let Err(e) = state
+        .limiter
+        .check_rpm(&key, gateway_cfg.default_rate_limit_rpm)
+    {
+        let msg = e.to_string();
+        log_fail(&state, &tmpl, start, e.status().as_u16(), &msg, 0);
+        let mut resp = error_resp(entry_protocol, &request_id, e.status().as_u16(), &msg);
+        if e.status().as_u16() == 429 {
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+        }
+        return resp;
+    }
+    let rl_status = state
+        .limiter
+        .rpm_status(&key, gateway_cfg.default_rate_limit_rpm);
+    {
+        let exceeded = match state
+            .quota_cache
+            .get(key.id, gateway_cfg.quota_check_cache_secs)
+        {
+            Some(v) => v,
+            None => match limit::check_quota(
+                &state.db,
+                &key,
+                &gateway_cfg.billing_timezone,
+                &gateway_cfg.quota_exceed_action,
+            )
+            .await
+            {
+                Ok(()) => {
+                    state.quota_cache.put(key.id, false);
+                    false
+                }
+                Err(ApiError::RateLimited) => {
+                    state.quota_cache.put(key.id, true);
+                    true
+                }
+                Err(e) => {
+                    log_fail(&state, &tmpl, start, 503, &format!("配额检查失败: {e}"), 0);
+                    return error_resp(
+                        entry_protocol,
+                        &request_id,
+                        503,
+                        "配额检查失败，请稍后重试",
+                    );
+                }
+            },
+        };
+        if exceeded {
+            log_fail(&state, &tmpl, start, 429, "请求过于频繁，请稍后再试", 0);
+            return error_resp(entry_protocol, &request_id, 429, "请求过于频繁，请稍后再试");
+        }
+    }
+
+    // 6. 路由决策：候选限 compact_capable
+    let matched = routing::match_routes(&model, &snap.routes);
+    if matched.is_empty() {
+        let lbl = metrics_labels(&key, entry, "");
+        log_fail(&state, &tmpl, start, 404, "模型未配置路由", 0);
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(entry_protocol, &request_id, 404, "模型未配置路由"),
+        );
+    }
+    let req_caps = required_caps(&body_value, stream);
+    let mut filtered: Vec<String> = Vec::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for route in matched {
+        if let Some(up) = snap.upstreams.get(&route.upstream_id).cloned() {
+            if !compact_capable(&up) {
+                filtered.push(format!("{} 不支持 compact", up.name));
+                continue;
+            }
+            let missing = up.capabilities().missing(req_caps);
+            if !missing.is_empty() {
+                filtered.push(format!("{} 缺 {}", up.name, missing.join("/")));
+                continue;
+            }
+            if up.enabled && state.breaker.allow(&up) {
+                candidates.push(Candidate {
+                    route,
+                    upstream: up,
+                });
+            }
+        }
+    }
+    if candidates.is_empty() {
+        let msg = if filtered.is_empty() {
+            "无可用上游".to_string()
+        } else {
+            format!("无可用上游（{}）", filtered.join("；"))
+        };
+        let lbl = metrics_labels(&key, entry, "");
+        log_fail(&state, &tmpl, start, 503, &msg, 0);
+        return record(
+            &state.metrics,
+            &lbl,
+            start,
+            true,
+            error_resp(entry_protocol, &request_id, 503, &msg),
+        );
+    }
+    // 排序 + 粘性（复用主链路结构；compact 恒透传，mode 固定 Passthrough）
+    let mut attempts: Vec<Attempt> = order_candidates(candidates)
+        .into_iter()
+        .map(|c| Attempt {
+            candidate: c,
+            mode: Mode::Passthrough,
+        })
+        .collect();
+    if gateway_cfg.sticky_routing {
+        if let Some(pin) = state.sticky.get(key.id, &model) {
+            reorder_pinned_first(&mut attempts, pin);
+        }
+    }
+
+    // 7. 候选循环：直接转发
+    let mut last_err: Option<Fail> = None;
+    let mut last_upstream: Option<String> = None;
+    let mut last_upstream_id: Option<Uuid> = None;
+    let mut last_upstream_model: Option<String> = None;
+    let mut last_debug: Option<serde_json::Value> = None;
+    let mut failed_candidates: u32 = 0;
+    let mut last_idx: u32 = 0;
+    'outer: for attempt in &attempts {
+        let route = &attempt.candidate.route;
+        let upstream = &attempt.candidate.upstream;
+        let up_model: String = route
+            .override_model
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| model.clone());
+        let overrides = upstream.overrides();
+
+        // 直接转发：仅模型名改写 + 用户 body 覆盖
+        let mut out_body = body_value.clone();
+        upstream::rewrite_body(&mut out_body, Some(&up_model), overrides.as_ref());
+        let url = format!(
+            "{}/responses/compact",
+            upstream.base_url_for(entry_protocol).trim_end_matches('/')
+        );
+        let mut req_headers = reqwest::header::HeaderMap::new();
+        req_headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        upstream::apply_auth(
+            &mut req_headers,
+            entry_protocol,
+            upstream.api_key_plain.as_deref(),
+        );
+        upstream::apply_header_overrides(&mut req_headers, overrides.as_ref());
+
+        // Codex 渠道：OAuth token + 指纹头；body 只补 client_metadata（不整形）。
+        // token 刷新失败 → 连接类错误走统一熔断/故障转移。
+        let mut codex_err: Option<String> = None;
+        if upstream.kind == "codex" {
+            let sim = crate::upstream::codex::sim_config(&upstream.extra);
+            match crate::upstream::codex::ensure_token(&state, upstream).await {
+                Ok((tok, acct)) => {
+                    let ident = crate::upstream::codex::Identity::resolve(
+                        Some(&out_body),
+                        upstream.id,
+                        &format!("{}:{}", key.id, up_model),
+                        key.created_at.timestamp_millis(),
+                        &sim,
+                    );
+                    crate::upstream::codex::apply_headers(
+                        &mut req_headers,
+                        &tok,
+                        &acct,
+                        &sim,
+                        &ident,
+                    );
+                    out_body =
+                        crate::upstream::codex::prepare_compact_body(&out_body, &ident, &sim);
+                }
+                Err(e) => codex_err = Some(e),
+            }
+        }
+
+        let (client, _via_proxy) = {
+            let mut lists: Vec<Vec<String>> = vec![state.hot.load().proxy.no_proxy.clone()];
+            let eff_proxy_id = if upstream.use_proxy {
+                upstream
+                    .proxy_id
+                    .or_else(|| uuid::Uuid::parse_str(&default_proxy_id).ok())
+            } else {
+                None
+            };
+            if let Some(pid) = eff_proxy_id {
+                if let Some(p) = snap.proxies.get(&pid) {
+                    lists.push(p.no_proxy.clone());
+                }
+            }
+            if upstream.use_proxy && upstream::no_proxy_match(&lists, &url) {
+                (state.client_pools.direct_client(), false)
+            } else {
+                (
+                    state
+                        .client_pools
+                        .client_for(upstream, &snap, &default_proxy_id),
+                    upstream.use_proxy,
+                )
+            }
+        };
+
+        let lock = route.lock_upstream;
+        let retry_limit = if lock { 0 } else { route.retries.max(0) as u32 };
+        let stream_timeout_ms: i32 = {
+            let secs = state.hot.load().gateway.stream_timeout_secs;
+            if secs == 0 {
+                0
+            } else {
+                (secs.saturating_mul(1000)).min(i32::MAX as u64) as i32
+            }
+        };
+        let mut idx: u32 = 0;
+        loop {
+            let exec_res: Result<ExecOutcome, UpstreamError> = if let Some(e) = &codex_err {
+                Err(UpstreamError::Connect(format!("codex oauth: {e}")))
+            } else {
+                exec_http(
+                    &client,
+                    &url,
+                    req_headers.clone(),
+                    &out_body,
+                    stream,
+                    upstream.timeout_ms,
+                    stream_timeout_ms,
+                    /*codex_aggregate*/ false,
+                )
+                .await
+            };
+
+            match exec_res {
+                Ok(ExecOutcome::Json(json)) => {
+                    state.breaker.on_success(&state.db, upstream).await;
+                    if gateway_cfg.sticky_routing {
+                        state.sticky.pin(key.id, &model, upstream.id);
+                    }
+                    let lbl = metrics_labels(&key, entry, &upstream.name);
+                    let usage = crate::upstream::usage::extract_json_usage(entry_protocol, &json);
+                    // 回写网关模型名（与主链路透传一致）
+                    let mut out = json;
+                    if let Some(obj) = out.as_object_mut() {
+                        if obj.contains_key("model") {
+                            obj.insert("model".into(), serde_json::Value::String(model.clone()));
+                        }
+                    }
+                    let mut ev = tmpl.clone();
+                    ev.upstream_id = Some(upstream.id);
+                    ev.upstream_model = (up_model != model).then(|| up_model.clone());
+                    ev.latency_ms = Some(start.elapsed().as_millis() as i32);
+                    ev.retry_count = (idx + failed_candidates) as i32;
+                    ev.status = 200;
+                    ev.prompt_tokens = usage.prompt_tokens;
+                    ev.completion_tokens = usage.completion_tokens;
+                    ev.cache_write_tokens = usage.cache_write_tokens;
+                    ev.cache_read_tokens = usage.cache_read_tokens;
+                    ev.usage_raw = Some(serde_json::json!({
+                        "params": params_meta.clone(),
+                        "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
+                    }));
+                    let total = usage
+                        .prompt_tokens
+                        .unwrap_or(0)
+                        .saturating_add(usage.completion_tokens.unwrap_or(0));
+                    if total > 0 {
+                        state
+                            .metrics
+                            .gateway_tokens
+                            .get_or_create(&lbl)
+                            .inc_by(total.max(0) as u64);
+                    }
+                    if let Some(payload) =
+                        debug_payload(&debug_req, &serde_json::to_vec(&out).unwrap_or_default())
+                    {
+                        ev.debug_payload = Some(payload);
+                    }
+                    state.log_sink.log(ev);
+                    let mut resp = json_rsp(StatusCode::OK, &request_id, None, out);
+                    add_ratelimit_headers(&mut resp, rl_status);
+                    return record(&state.metrics, &lbl, start, false, resp);
+                }
+                Ok(ExecOutcome::Stream(src)) => {
+                    state.breaker.on_success(&state.db, upstream).await;
+                    if gateway_cfg.sticky_routing {
+                        state.sticky.pin(key.id, &model, upstream.id);
+                    }
+                    let lbl = metrics_labels(&key, entry, &upstream.name);
+                    let sbody =
+                        Body::from_stream(upstream::sse_passthrough_stream(src, model.clone()));
+                    let mut ev = tmpl.clone();
+                    ev.upstream_id = Some(upstream.id);
+                    ev.upstream_model = (up_model != model).then(|| up_model.clone());
+                    let collect = Arc::new(Mutex::new(StreamCollect {
+                        text: String::new(),
+                        ttfb_ms: None,
+                    }));
+                    let retry_count = (idx + failed_candidates) as i32;
+                    let teed = tee_log_stream(
+                        sbody,
+                        state.clone(),
+                        ev,
+                        collect,
+                        start,
+                        entry_protocol,
+                        lbl.clone(),
+                        params_meta.clone(),
+                        debug_req.clone(),
+                        retry_count,
+                    );
+                    let mut resp = stream_rsp(&request_id, teed, None);
+                    add_ratelimit_headers(&mut resp, rl_status);
+                    return record(&state.metrics, &lbl, start, false, resp);
+                }
+                Err(e) => {
+                    let retryable = e.retryable(&route.retry_status_codes);
+                    if retryable {
+                        state.breaker.on_failure(&state.db, upstream).await;
+                    }
+                    // compact 特判：404 = 端点不支持，属候选级问题 → 故障转移；
+                    // 其余客户端成因 4xx 不转移（同 body 换候选必然同样失败）。
+                    let no_failover =
+                        e.client_causal() && !matches!(e, UpstreamError::Status(404, _));
+                    last_upstream = Some(upstream.name.clone());
+                    last_upstream_id = Some(upstream.id);
+                    last_upstream_model = (up_model != model).then(|| up_model.clone());
+                    {
+                        let resp_val = match &e {
+                            UpstreamError::Status(s, body) => serde_json::json!({
+                                "status": s,
+                                "body": serde_json::from_str::<serde_json::Value>(body)
+                                    .unwrap_or_else(|_| serde_json::Value::String(body.clone())),
+                            }),
+                            other => serde_json::json!({ "error": other.to_string() }),
+                        };
+                        last_debug = debug_fail_payload(&debug_req, Some(&out_body), resp_val);
+                    }
+                    last_err = Some(Fail::Upstream(e));
+                    let can_retry = retryable && !lock && idx < retry_limit;
+                    if can_retry {
+                        tokio::time::sleep(Duration::from_millis(100u64 << idx.min(30))).await;
+                        idx += 1;
+                        continue;
+                    }
+                    failed_candidates += 1;
+                    last_idx = idx;
+                    if lock || no_failover {
+                        break 'outer;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // 全部候选失败
+    let lbl = metrics_labels(&key, entry, last_upstream.as_deref().unwrap_or(""));
+    let (status, msg, jbody) = match &last_err {
+        Some(f) => {
+            let (s, body) = entry_error(entry_protocol, f);
+            (s, fail_message(f), body)
+        }
+        None => (
+            502,
+            "无可用上游".to_string(),
+            error_from_ir(
+                entry_protocol,
+                &IrError {
+                    status: 502,
+                    message: "无可用上游".into(),
+                    ..Default::default()
+                },
+            ),
+        ),
+    };
+    let mut ev = tmpl.clone();
+    ev.upstream_id = last_upstream_id;
+    ev.upstream_model = last_upstream_model;
+    ev.debug_payload = last_debug;
+    let retry_count = (last_idx + failed_candidates.saturating_sub(1)) as i32;
+    log_fail(&state, &ev, start, status, &msg, retry_count);
+    let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let resp = json_rsp(code, &request_id, None, jbody);
+    record(&state.metrics, &lbl, start, true, resp)
+}
+
+// ---------------------------------------------------------------------------
 // 图片通道（契约 m6-media §4）：图片生成 + 视频占位 + 图片任务查询转发
 // ---------------------------------------------------------------------------
 
@@ -2698,6 +3210,8 @@ async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
 /// 路由清单（PLAN.md §7.1）：
 /// - POST /v1/chat/completions        → OpenAI Chat
 /// - POST /v1/responses               → OpenAI Responses
+/// - POST /v1/responses/compact       → Responses 服务端上下文压缩（直接转发；
+///   兼收单数拼写 /v1/response/compact）
 /// - POST /v1/messages                → Anthropic Messages
 /// - GET  /v1/models                  → 网关可用模型列表（OpenAI 格式）
 /// - POST /v1beta/models/{*action}    → Gemini（action 形如 "model:generateContent"
@@ -2710,6 +3224,9 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/responses", post(openai_responses))
+        .route("/v1/responses/compact", post(openai_responses_compact))
+        // 单数拼写兼容（与官方路径 /v1/responses/compact 同 handler）
+        .route("/v1/response/compact", post(openai_responses_compact))
         .route("/v1/messages", post(anthropic))
         .route("/v1/models", get(list_models))
         .route("/v1beta/models/{*action}", post(gemini))
@@ -2737,6 +3254,40 @@ mod tests {
     use axum::http::HeaderMap;
     use chrono::Utc;
     use serde_json::json;
+
+    /// compact 候选判定：codex 渠道或声明 openai_responses 协议的上游可服务。
+    #[test]
+    fn compact_capable_rules() {
+        let mk_up = |kind: &str, protocols: Vec<&str>| UpstreamRow {
+            id: Uuid::new_v4(),
+            name: "u".into(),
+            kind: kind.into(),
+            base_url: "http://localhost".into(),
+            api_key_plain: None,
+            oauth_plain: None,
+            protocols: protocols.into_iter().map(str::to_string).collect(),
+            enabled: true,
+            timeout_ms: 300_000,
+            breaker_threshold: 5,
+            probe_model: None,
+            consecutive_failures: 0,
+            disabled_by: None,
+            cooldown_until: None,
+            use_proxy: false,
+            proxy_id: None,
+            extra: serde_json::json!({}),
+            model_sync: "manual".into(),
+            model_exclude: vec![],
+            models_cache: serde_json::json!([]),
+            models_fetched_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert!(compact_capable(&mk_up("codex", vec![])));
+        assert!(compact_capable(&mk_up("openai", vec!["openai_responses"])));
+        assert!(!compact_capable(&mk_up("openai", vec!["openai_chat"])));
+        assert!(!compact_capable(&mk_up("anthropic", vec!["anthropic"])));
+    }
 
     /// 粘性重排（M11.3）：pinned 在最优组 → 提首；跨组/不存在 → 不动。
     #[test]
