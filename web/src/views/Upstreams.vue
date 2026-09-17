@@ -39,17 +39,39 @@
             </el-empty>
           </div>
         </template>
-        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
+        <!-- 名称列：窄屏（≤768px）时把状态标签折到名称下方，省下一整列宽度 -->
+        <el-table-column
+          prop="name"
+          label="名称"
+          :min-width="isNarrow ? 130 : 160"
+          :show-overflow-tooltip="!isNarrow"
+        >
+          <template #default="{ row }">
+            <span>{{ row.name }}</span>
+            <template v-if="isNarrow">
+              <br />
+              <el-tag :type="statusMeta(row).type" size="small" class="status-inline">
+                {{ statusMeta(row).text }}
+              </el-tag>
+            </template>
+          </template>
+        </el-table-column>
 
-        <el-table-column label="类型" width="140">
+        <el-table-column v-if="!isNarrow" label="类型" width="140">
           <template #default="{ row }">
             <el-tag size="small" type="info">{{ row.kind }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column prop="base_url" label="Base URL" min-width="200" show-overflow-tooltip />
+        <el-table-column
+          v-if="!isNarrow"
+          prop="base_url"
+          label="Base URL"
+          min-width="200"
+          show-overflow-tooltip
+        />
 
-        <el-table-column label="协议" min-width="220">
+        <el-table-column v-if="!isNarrow" label="协议" min-width="220">
           <template #default="{ row }">
             <div class="tag-group">
               <template v-for="(proto, i) in row.protocols" :key="proto">
@@ -99,7 +121,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="凭证" width="100" align="center">
+        <el-table-column v-if="!isNarrow" label="凭证" width="100" align="center">
           <template #default="{ row }">
             <el-tooltip v-if="row.has_oauth" content="OAuth 凭证（到期自动刷新）" placement="top">
               <el-tag type="primary" size="small" effect="plain">OAuth</el-tag>
@@ -109,20 +131,20 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="代理" width="130">
+        <el-table-column v-if="!isNarrow" label="代理" width="130">
           <template #default="{ row }">
             <span v-if="row.use_proxy">{{ proxyName(row.proxy_id) }}</span>
             <span v-else>直连</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="状态" min-width="200">
+        <el-table-column v-if="!isNarrow" label="状态" min-width="200">
           <template #default="{ row }">
             <el-tag :type="statusMeta(row).type" size="small">{{ statusMeta(row).text }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column label="启用" width="80" align="center">
+        <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -132,22 +154,51 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="330" fixed="right">
+        <!-- 操作列：窄屏不再 fixed（否则 330px 固定列会吃掉整个视口，名称被挤成 0 宽），
+             并把按钮收进下拉菜单 -->
+        <el-table-column
+          label="操作"
+          :width="isNarrow ? 88 : 330"
+          :fixed="isNarrow ? false : 'right'"
+        >
           <template #default="{ row }">
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="row.has_api_key" size="small" @click="openReveal(row)">查看 Key</el-button>
-            <el-button size="small" :loading="testingId === row.id" @click="testUpstream(row)">
-              连通测试
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              :loading="deletingSet.has(row.id)"
-              :disabled="deletingSet.has(row.id)"
-              @click="removeUpstream(row)"
+            <el-dropdown
+              v-if="isNarrow"
+              trigger="click"
+              @command="(c: string) => onRowAction(c, row)"
             >
-              删除
-            </el-button>
+              <el-button size="small">
+                操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item v-if="row.has_api_key" command="reveal">
+                    查看 Key
+                  </el-dropdown-item>
+                  <el-dropdown-item command="test">连通测试</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <template v-else>
+              <el-button size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button v-if="row.has_api_key" size="small" @click="openReveal(row)">
+                查看 Key
+              </el-button>
+              <el-button size="small" :loading="testingId === row.id" @click="testUpstream(row)">
+                连通测试
+              </el-button>
+              <el-button
+                size="small"
+                type="danger"
+                :loading="deletingSet.has(row.id)"
+                :disabled="deletingSet.has(row.id)"
+                @click="removeUpstream(row)"
+              >
+                删除
+              </el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -235,9 +286,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CopyDocument, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
+import { CopyDocument, ArrowDown, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { authApi, presetApi, proxyApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -269,6 +320,11 @@ const expandedRows = reactive(new Set<string>())
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
 const testingId = ref('')
+/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单（与 Logs.vue 同款判定） */
+const isNarrow = ref(window.innerWidth <= 768)
+const onResize = () => {
+  isNarrow.value = window.innerWidth <= 768
+}
 const formDialogRef = ref<InstanceType<typeof UpstreamFormDialog>>()
 
 async function loadUpstreams() {
@@ -304,7 +360,20 @@ onMounted(() => {
   loadUpstreams()
   loadProxies()
   loadPresets()
+  window.addEventListener('resize', onResize)
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onResize)
+})
+
+/** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
+function onRowAction(command: string, row: UpstreamOut) {
+  if (command === 'edit') openEdit(row)
+  else if (command === 'reveal') openReveal(row)
+  else if (command === 'test') testUpstream(row)
+  else if (command === 'delete') removeUpstream(row)
+}
 
 /** 能力矩阵限制标签（M10.3）：显式「不支持」的能力 + 最大上下文。 */
 function capsTags(row: UpstreamOut): string[] {
@@ -546,6 +615,10 @@ function closeRevealSecret() {
 }
 .clickable {
   cursor: pointer;
+}
+/* 窄屏下折到名称下方的状态标签 */
+.status-inline {
+  margin-top: 4px;
 }
 .error-state {
   padding: 30px 16px;

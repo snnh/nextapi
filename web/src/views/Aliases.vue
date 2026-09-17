@@ -27,17 +27,18 @@
           <el-empty :description="emptyText" />
         </template>
 
-        <el-table-column label="别名" min-width="220">
+        <el-table-column label="别名" :min-width="isNarrow ? 120 : 220">
           <template #default="{ row }">
-            <CopyText :text="row.alias" :truncate="24" />
+            <CopyText :text="row.alias" :truncate="isNarrow ? 18 : 24" />
+            <div v-if="isNarrow" class="sub-line muted">→ {{ row.model }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="实际模型" min-width="220">
+        <el-table-column v-if="!isNarrow" label="实际模型" min-width="220">
           <template #default="{ row }">
             <CopyText :text="row.model" :truncate="24" />
           </template>
         </el-table-column>
-        <el-table-column label="启用" width="90" align="center">
+        <el-table-column label="启用" :width="isNarrow ? 70 : 90" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -46,21 +47,42 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="170">
+        <el-table-column v-if="!isNarrow" label="创建时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column
+          label="操作"
+          :width="isNarrow ? 88 : 150"
+          :fixed="isNarrow ? false : 'right'"
+        >
           <template #default="{ row }">
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button
-              link
-              type="danger"
-              :loading="deletingSet.has(row.id)"
-              :disabled="deletingSet.has(row.id)"
-              @click="remove(row)"
+            <el-dropdown
+              v-if="isNarrow"
+              trigger="click"
+              @command="(c: string) => onRowAction(c, row)"
             >
-              删除
-            </el-button>
+              <el-button size="small">
+                操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <template v-else>
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button
+                link
+                type="danger"
+                :loading="deletingSet.has(row.id)"
+                :disabled="deletingSet.has(row.id)"
+                @click="remove(row)"
+              >
+                删除
+              </el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -114,10 +136,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
 import { aliasApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { confirmDanger } from '@/utils/confirm'
@@ -134,6 +156,18 @@ const route = useRoute()
 const saving = ref(false)
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
+
+/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
+const isNarrow = ref(window.innerWidth <= 768)
+function onViewportResize() {
+  isNarrow.value = window.innerWidth <= 768
+}
+
+/** 窄屏操作列下拉菜单分发（桌面端仍是行内链接按钮） */
+function onRowAction(command: string, row: ModelAliasRow) {
+  if (command === 'edit') openEdit(row)
+  else if (command === 'delete') remove(row)
+}
 
 const formRef = ref<FormInstance>()
 const dlg = reactive({
@@ -306,6 +340,9 @@ onMounted(() => {
   if (qModel) keyword.value = qModel
   load()
 })
+
+onMounted(() => window.addEventListener('resize', onViewportResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 </script>
 
 <style scoped>
@@ -313,6 +350,13 @@ onMounted(() => {
   margin-top: 14px;
   display: flex;
   justify-content: flex-end;
+}
+/* 窄屏折到别名下方的实际模型名 */
+.sub-line {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
 }
 .error-state {
   padding: 30px 16px;

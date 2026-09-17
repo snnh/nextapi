@@ -30,32 +30,37 @@
         <template #empty>
           <el-empty :description="keyword.trim() ? '无匹配的代理' : '暂无代理'" :image-size="60" />
         </template>
-        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.name }}</template>
+        <el-table-column prop="name" label="名称" :min-width="isNarrow ? 120 : 160" :show-overflow-tooltip="!isNarrow">
+          <template #default="{ row }">
+            {{ row.name }}
+            <div v-if="isNarrow" class="sub-line muted">
+              {{ row.kind }} · <span class="mono">{{ row.host }}:{{ row.port }}</span>
+            </div>
+          </template>
         </el-table-column>
-        <el-table-column label="类型" width="100" align="center">
+        <el-table-column v-if="!isNarrow" label="类型" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="kindType(row.kind)" size="small" effect="plain">{{ row.kind }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="地址" min-width="170">
+        <el-table-column v-if="!isNarrow" label="地址" min-width="170">
           <template #default="{ row }">
             <span class="mono">{{ row.host }}:{{ row.port }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="用户名" min-width="120">
+        <el-table-column v-if="!isNarrow" label="用户名" min-width="120">
           <template #default="{ row }">
             <span v-if="row.username" class="mono">{{ row.username }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="密码" width="110" align="center">
+        <el-table-column v-if="!isNarrow" label="密码" width="110" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.has_password" type="success" size="small" effect="light">已设密码</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="直连名单" min-width="180">
+        <el-table-column v-if="!isNarrow" label="直连名单" min-width="180">
           <template #default="{ row }">
             <template v-if="row.no_proxy.length">
               <el-tag v-for="(t, i) in showNoProxy(row)" :key="i" size="small" style="margin-right: 4px">{{ t }}</el-tag>
@@ -69,7 +74,7 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="启用" width="80" align="center">
+        <el-table-column label="启用" :width="isNarrow ? 66 : 80" align="center">
           <template #default="{ row }">
             <el-switch
               :model-value="row.enabled"
@@ -78,13 +83,36 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <!-- 操作列：窄屏不再 fixed（200px 固定列会挤掉名称），按钮收进下拉菜单 -->
+        <el-table-column
+          label="操作"
+          :width="isNarrow ? 88 : 200"
+          :fixed="isNarrow ? false : 'right'"
+        >
           <template #default="{ row }">
-            <el-tooltip content="探测地址为运行参数 proxy.probe_url（系统设置-运行参数-代理）" placement="top">
-              <el-button size="small" :loading="testing.has(row.id)" @click="test(row)">测试</el-button>
-            </el-tooltip>
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" :loading="deleting.has(row.id)" @click="remove(row)">删除</el-button>
+            <el-dropdown
+              v-if="isNarrow"
+              trigger="click"
+              @command="(c: string) => onRowAction(c, row)"
+            >
+              <el-button size="small">
+                操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="test">测试连通</el-dropdown-item>
+                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <template v-else>
+              <el-tooltip content="探测地址为运行参数 proxy.probe_url（系统设置-运行参数-代理）" placement="top">
+                <el-button size="small" :loading="testing.has(row.id)" @click="test(row)">测试</el-button>
+              </el-tooltip>
+              <el-button size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button size="small" type="danger" :loading="deleting.has(row.id)" @click="remove(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -157,9 +185,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
 import { proxyApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { PROXY_KINDS } from '@/utils/consts'
@@ -172,6 +200,19 @@ const proxies = ref<ProxyOut[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const toggling = reactive(new Set<string>())
+
+/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
+const isNarrow = ref(window.innerWidth <= 768)
+function onViewportResize() {
+  isNarrow.value = window.innerWidth <= 768
+}
+
+/** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
+function onRowAction(command: string, row: ProxyOut) {
+  if (command === 'test') test(row)
+  else if (command === 'edit') openEdit(row)
+  else if (command === 'delete') void remove(row)
+}
 const testing = reactive(new Set<string>())
 const deleting = reactive(new Set<string>())
 // 列表搜索关键字（按名称 / host 客户端过滤）
@@ -456,6 +497,8 @@ async function submit() {
 }
 
 onMounted(load)
+onMounted(() => window.addEventListener('resize', onViewportResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 </script>
 
 <style scoped>
@@ -487,6 +530,13 @@ onMounted(load)
 }
 .muted {
   color: #c0c4cc;
+}
+/* 窄屏折到名称下方的副信息（类型 · 地址） */
+.sub-line {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
 }
 .tip-item {
   font-size: 12px;
