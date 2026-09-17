@@ -82,17 +82,20 @@
           </el-empty>
         </template>
 
-        <el-table-column label="对外模型名" min-width="230" show-overflow-tooltip>
+        <el-table-column label="对外模型名" :min-width="isNarrow ? 140 : 230" :show-overflow-tooltip="!isNarrow">
           <template #default="{ row }">
             <div class="cell-inline">
               <CopyText :text="row.model" :truncate="28" />
               <el-tag v-if="row.wildcard" size="small" type="warning" effect="plain">通配</el-tag>
               <el-tag v-if="row.autoManaged" size="small" type="primary" effect="plain">自动</el-tag>
             </div>
+            <div v-if="isNarrow && row.upstreamNames.length" class="sub-line muted">
+              {{ row.upstreamNames.join('、') }}
+            </div>
           </template>
         </el-table-column>
 
-        <el-table-column label="上游" min-width="210">
+        <el-table-column v-if="!isNarrow" label="上游" min-width="210">
           <template #default="{ row }">
             <div class="tag-group">
               <el-tag
@@ -116,14 +119,14 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="优先级" width="90" align="center">
+        <el-table-column v-if="!isNarrow" label="优先级" width="90" align="center">
           <template #default="{ row }">
             <span v-if="row.minPriority != null">{{ row.minPriority }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="路由" width="96" align="center">
+        <el-table-column v-if="!isNarrow" label="路由" width="96" align="center">
           <template #default="{ row }">
             <span :class="{ 'text-warn': row.enabledCount === 0 }">
               {{ row.enabledCount }}/{{ row.totalCount }}
@@ -131,7 +134,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="价格" width="118" align="center">
+        <el-table-column v-if="!isNarrow" label="价格" width="118" align="center">
           <template #default="{ row }">
             <el-tooltip :content="priceTooltip(row)" placement="top">
               <el-tag :type="priceTagType(row.priceState)" size="small" effect="plain">
@@ -141,14 +144,14 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="别名" width="80" align="center">
+        <el-table-column v-if="!isNarrow" label="别名" width="80" align="center">
           <template #default="{ row }">
             <span v-if="row.aliases.length">{{ row.aliases.length }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="状态" width="120" align="center">
+        <el-table-column label="状态" :width="isNarrow ? 92 : 120" align="center">
           <template #default="{ row }">
             <el-tooltip :content="row.healthText" placement="top">
               <el-tag :type="healthTagType(row.health)" size="small" effect="plain">
@@ -158,7 +161,12 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="90" fixed="right" align="center">
+        <el-table-column
+          label="操作"
+          :width="isNarrow ? 68 : 90"
+          :fixed="isNarrow ? false : 'right'"
+          align="center"
+        >
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">详情</el-button>
           </template>
@@ -173,7 +181,7 @@
           <el-empty description="暂无模型路由，点击左上角「新增规则」创建" />
         </template>
 
-        <el-table-column label="模型模式" min-width="220" show-overflow-tooltip>
+        <el-table-column label="模型模式" :min-width="isNarrow ? 150 : 220" :show-overflow-tooltip="!isNarrow">
           <template #default="{ row }">
             <div class="cell-inline">
               <CopyText :text="row.model_pattern" :truncate="24" />
@@ -186,26 +194,27 @@
               </el-tooltip>
               <el-tag v-if="isRowDirty(row)" size="small" type="warning" effect="plain">未保存</el-tag>
             </div>
+            <div v-if="isNarrow" class="sub-line muted">{{ row.upstreamName }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="上游" min-width="180" show-overflow-tooltip>
+        <el-table-column v-if="!isNarrow" label="上游" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <CopyText :text="row.upstreamName" :truncate="24" />
           </template>
         </el-table-column>
 
-        <el-table-column label="覆盖模型名" min-width="140" show-overflow-tooltip>
+        <el-table-column v-if="!isNarrow" label="覆盖模型名" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.override_model">{{ row.override_model }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="priority" label="优先级" width="90" align="center" />
-        <el-table-column prop="weight" label="权重" width="80" align="center" />
+        <el-table-column v-if="!isNarrow" prop="priority" label="优先级" width="90" align="center" />
+        <el-table-column v-if="!isNarrow" prop="weight" label="权重" width="80" align="center" />
 
-        <el-table-column label="启用" width="80" align="center">
+        <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
           <template #default="{ row }">
             <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
               {{ row.enabled ? '启用' : '禁用' }}
@@ -213,11 +222,11 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="重试次数" width="90" align="center">
+        <el-table-column v-if="!isNarrow" label="重试次数" width="90" align="center">
           <template #default="{ row }">{{ row.retries }}</template>
         </el-table-column>
 
-        <el-table-column label="重试状态码" min-width="180">
+        <el-table-column v-if="!isNarrow" label="重试状态码" min-width="180">
           <template #default="{ row }">
             <div v-if="row.retry_status_codes && row.retry_status_codes.length" class="tag-group">
               <el-tag
@@ -234,27 +243,49 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="锁定上游" width="90" align="center">
+        <el-table-column v-if="!isNarrow" label="锁定上游" width="90" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.lock_upstream" size="small" type="warning">锁定</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="排序" width="70" align="center">
+        <el-table-column v-if="!isNarrow" label="排序" width="70" align="center">
           <template #default="{ row }">{{ row.sort_order }}</template>
         </el-table-column>
 
-        <el-table-column label="更新时间" width="180">
+        <el-table-column v-if="!isNarrow" label="更新时间" width="180">
           <template #default="{ row }">
             <span>{{ fmtTime(row.updatedAt) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" fixed="right">
-          <template #default="{ $index }">
-            <el-button size="small" @click="openEdit($index)">编辑</el-button>
-            <el-button size="small" type="danger" @click="removeRow($index)">删除</el-button>
+        <!-- 操作列：窄屏不再 fixed 并把两个按钮收进下拉菜单 -->
+        <el-table-column
+          label="操作"
+          :width="isNarrow ? 88 : 150"
+          :fixed="isNarrow ? false : 'right'"
+        >
+          <template #default="{ $index, row }">
+            <el-dropdown
+              v-if="isNarrow"
+              trigger="click"
+              @command="(c: string) => onRowAction(c, $index, row)"
+            >
+              <el-button size="small">
+                操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <template v-else>
+              <el-button size="small" @click="openEdit($index)">编辑</el-button>
+              <el-button size="small" type="danger" @click="removeRow($index)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -359,10 +390,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
 import { aliasApi, pricingApi, routeApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
@@ -403,6 +434,18 @@ const aliases = ref<ModelAliasRow[]>([])
 const serverCommit = ref<RouteOut[]>([])
 /** 本地草稿（可编辑工作副本） */
 const drafts = ref<RouteRow[]>([])
+
+/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
+const isNarrow = ref(window.innerWidth <= 768)
+function onViewportResize() {
+  isNarrow.value = window.innerWidth <= 768
+}
+
+/** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
+function onRowAction(command: string, index: number, _row: RouteRow) {
+  if (command === 'edit') openEdit(index)
+  else if (command === 'delete') removeRow(index)
+}
 
 // —— 模型视图状态 ——
 const router = useRouter()
@@ -629,6 +672,8 @@ async function loadData() {
 }
 
 onMounted(loadData)
+onMounted(() => window.addEventListener('resize', onViewportResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 
 // —— 弹窗打开 / 回填 ——
 function openCreate() {
@@ -937,6 +982,13 @@ function computeDiff(): { added: number; modified: number; deleted: number } {
 }
 .muted {
   color: #c0c4cc;
+}
+/* 窄屏折到主行下方的副信息（上游名等） */
+.sub-line {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
 }
 .text-warn {
   color: #e6a23c;

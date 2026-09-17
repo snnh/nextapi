@@ -164,7 +164,7 @@
         <el-table-column prop="ts" label="时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.ts) }}</template>
         </el-table-column>
-        <el-table-column label="request_id" width="200">
+        <el-table-column v-if="!isNarrow" label="request_id" width="200">
           <template #default="{ row }">
             <CopyText :text="row.request_id" :truncate="16" />
           </template>

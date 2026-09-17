@@ -41,16 +41,24 @@
               <template #default="{ row }">
                 <div class="rule-expand">
                   <el-table :data="row.rules" size="small">
-                    <el-table-column label="计价单位" min-width="150">
-                      <template #default="{ row: r }">{{ UNIT_LABEL(r.unit) }}</template>
+                    <el-table-column label="计价单位" :min-width="isNarrow ? 110 : 150">
+                      <template #default="{ row: r }">
+                        {{ UNIT_LABEL(r.unit) }}
+                        <template v-if="isNarrow && !r.enabled">
+                          <br />
+                          <el-tag size="small" type="info" effect="plain" class="sub-line">
+                            已停用
+                          </el-tag>
+                        </template>
+                      </template>
                     </el-table-column>
-                    <el-table-column label="币种" width="70" align="center">
+                    <el-table-column v-if="!isNarrow" label="币种" width="70" align="center">
                       <template #default="{ row: r }">{{ r.currency }}</template>
                     </el-table-column>
-                    <el-table-column label="基础单价" min-width="110" align="right">
+                    <el-table-column label="基础单价" :min-width="isNarrow ? 96 : 110" align="right">
                       <template #default="{ row: r }"><span class="mono">{{ fmtMoney(r.base_price) }}</span></template>
                     </el-table-column>
-                    <el-table-column label="分段" width="90" align="center">
+                    <el-table-column v-if="!isNarrow" label="分段" width="90" align="center">
                       <template #default="{ row: r }">
                         <el-tooltip v-if="r.segments && r.segments.length" placement="top">
                           <template #content>
@@ -61,7 +69,7 @@
                         <span v-else class="hint">—</span>
                       </template>
                     </el-table-column>
-                    <el-table-column label="维度" min-width="120">
+                    <el-table-column v-if="!isNarrow" label="维度" min-width="120">
                       <template #default="{ row: r }">
                         <el-tooltip v-if="r.dimensions && Object.keys(r.dimensions).length" placement="top">
                           <template #content>
@@ -72,7 +80,7 @@
                         <span v-else class="hint">—</span>
                       </template>
                     </el-table-column>
-                    <el-table-column label="启用" width="70" align="center">
+                    <el-table-column v-if="!isNarrow" label="启用" width="70" align="center">
                       <template #default="{ row: r }">
                         <el-switch
                           v-model="r.enabled"
@@ -82,28 +90,63 @@
                         />
                       </template>
                     </el-table-column>
-                    <el-table-column label="有效期" min-width="200">
+                    <el-table-column v-if="!isNarrow" label="有效期" min-width="200">
                       <template #default="{ row: r }">{{ effectiveRange(r) }}</template>
                     </el-table-column>
-                    <el-table-column label="操作" width="150" fixed="right">
+                    <el-table-column
+                      label="操作"
+                      :width="isNarrow ? 84 : 150"
+                      :fixed="isNarrow ? false : 'right'"
+                    >
                       <template #default="{ row: r }">
-                        <el-button size="small" @click="openEdit(r)">高级编辑</el-button>
-                        <el-button size="small" type="danger" @click="removeRule(r)">删除</el-button>
+                        <el-dropdown
+                          v-if="isNarrow"
+                          trigger="click"
+                          @command="(c: string) => onRuleAction(c, r)"
+                        >
+                          <el-button size="small">
+                            操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                          </el-button>
+                          <template #dropdown>
+                            <el-dropdown-menu>
+                              <el-dropdown-item command="edit">高级编辑</el-dropdown-item>
+                              <el-dropdown-item command="toggle">
+                                {{ r.enabled ? '停用' : '启用' }}
+                              </el-dropdown-item>
+                              <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                            </el-dropdown-menu>
+                          </template>
+                        </el-dropdown>
+                        <template v-else>
+                          <el-button size="small" @click="openEdit(r)">高级编辑</el-button>
+                          <el-button size="small" type="danger" @click="removeRule(r)">删除</el-button>
+                        </template>
                       </template>
                     </el-table-column>
                   </el-table>
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="模型" min-width="220">
+            <el-table-column label="模型" :min-width="isNarrow ? 160 : 220">
               <template #default="{ row }">
                 <CopyText :text="row.model_id" :truncate="28" />
+                <!-- 窄屏：把各计价单位单价折到模型名下方（否则单位列全被隐藏后价格无处可看） -->
+                <div v-if="isNarrow" class="sub-line">
+                  <template v-for="u in TOKEN_UNITS" :key="u">
+                    <span v-if="row.unitMap[u]" class="price-line">
+                      {{ UNIT_SHORT[u] }} {{ fmtMoney(row.unitMap[u].base_price) }}
+                      {{ row.unitMap[u].currency }}/1M
+                    </span>
+                  </template>
+                  <span v-if="row.otherCount" class="price-line">其他 {{ row.otherCount }} 条</span>
+                </div>
               </template>
             </el-table-column>
-            <el-table-column label="上游" min-width="140" show-overflow-tooltip>
+            <el-table-column v-if="!isNarrow" label="上游" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
             </el-table-column>
-            <el-table-column v-for="u in TOKEN_UNITS" :key="u" min-width="120" align="right">
+            <template v-if="!isNarrow">
+              <el-table-column v-for="u in TOKEN_UNITS" :key="u" min-width="120" align="right">
               <template #header>
                 <el-tooltip :content="UNIT_LABEL(u)" placement="top">
                   <span>{{ UNIT_SHORT[u] }} /1M</span>
@@ -134,15 +177,36 @@
                 <span v-else class="hint">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="其他" width="90" align="center">
+            </template>
+            <el-table-column v-if="!isNarrow" label="其他" width="90" align="center">
               <template #default="{ row }">
                 <el-tag v-if="row.otherCount" size="small" type="info" effect="plain">{{ row.otherCount }} 条</el-tag>
                 <span v-else class="hint">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column
+              label="操作"
+              :width="isNarrow ? 88 : 150"
+              :fixed="isNarrow ? false : 'right'"
+            >
               <template #default="{ row }">
-                <el-button size="small" type="primary" @click="openModelPrice(row)">编辑定价</el-button>
+                <el-dropdown
+                  v-if="isNarrow"
+                  trigger="click"
+                  @command="(c: string) => onModelAction(c, row)"
+                >
+                  <el-button size="small">
+                    操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="edit">编辑定价</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button v-else size="small" type="primary" @click="openModelPrice(row)">
+                  编辑定价
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -314,10 +378,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Download, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting, View } from '@element-plus/icons-vue'
+import { Download, ArrowDown, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting, View } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { pricingApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -346,6 +410,24 @@ import FxPanel from '@/components/pricing/FxPanel.vue'
 const upstreams = ref<UpstreamOut[]>([])
 const pageLoading = ref(false)
 const route = useRoute()
+
+/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
+const isNarrow = ref(window.innerWidth <= 768)
+function onViewportResize() {
+  isNarrow.value = window.innerWidth <= 768
+}
+
+/** 窄屏模型聚合行操作分发 */
+function onModelAction(command: string, row: ModelGroup) {
+  if (command === 'edit') openModelPrice(row)
+}
+
+/** 窄屏规则行操作分发（含启用切换，避免窄屏丢失该功能） */
+function onRuleAction(command: string, row: RuleItem) {
+  if (command === 'edit') openEdit(row)
+  else if (command === 'delete') void removeRule(row)
+  else if (command === 'toggle') void toggleEnabled(row, !row.enabled)
+}
 
 const activeTab = ref('rules')
 const formDialogRef = ref<InstanceType<typeof RuleFormDialog>>()
@@ -726,6 +808,9 @@ onMounted(() => {
     pageLoading.value = false
   })
 })
+
+onMounted(() => window.addEventListener('resize', onViewportResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 </script>
 
 <style scoped>
@@ -770,6 +855,16 @@ onMounted(() => {
   font-size: 12px;
   line-height: 1.6;
   white-space: nowrap;
+}
+/* 窄屏折到主行下方的副信息（单价行 / 已停用标记） */
+.sub-line {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.price-line + .price-line::before {
+  content: ' · ';
+  color: #c0c4cc;
 }
 .rule-expand {
   padding: 4px 16px 8px 48px;

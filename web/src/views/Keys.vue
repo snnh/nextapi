@@ -31,14 +31,27 @@
           />
         </template>
 
-        <el-table-column label="名称" min-width="140">
+        <!-- 名称列：窄屏（≤768px）时把前缀与过期标记折到名称下方，省下列宽 -->
+        <el-table-column label="名称" :min-width="isNarrow ? 130 : 140">
           <template #default="{ row }">
             <span v-if="row.name && row.name.trim()">{{ row.name }}</span>
             <span v-else class="muted">(未命名)</span>
+            <template v-if="isNarrow">
+              <br />
+              <span class="mono sub-line">{{ row.prefix }}</span>
+              <el-tag
+                v-if="row.expires_at && isExpired(row.expires_at)"
+                size="small"
+                type="danger"
+                class="sub-line"
+              >
+                已过期
+              </el-tag>
+            </template>
           </template>
         </el-table-column>
 
-        <el-table-column label="前缀" width="190">
+        <el-table-column v-if="!isNarrow" label="前缀" width="190">
           <template #default="{ row }">
             <el-tooltip content="sk-nx- 前缀，仅识别用" placement="top">
               <span class="mono">{{ row.prefix }}</span>
@@ -46,7 +59,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="启用" width="80" align="center">
+        <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -56,7 +69,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="模型白名单" min-width="220">
+        <el-table-column v-if="!isNarrow" label="模型白名单" min-width="220">
           <template #default="{ row }">
             <template v-if="!row.models || row.models.length === 0">
               <el-tag size="small" type="info">全部模型</el-tag>
@@ -74,20 +87,20 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="限流" min-width="130">
+        <el-table-column v-if="!isNarrow" label="限流" min-width="130">
           <template #default="{ row }">
             <span>{{ rateText(row) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="配额" min-width="170">
+        <el-table-column v-if="!isNarrow" label="配额" min-width="170">
           <template #default="{ row }">
             <span v-if="row.quota_limit != null">{{ quotaText(row) }}</span>
             <span v-else>—</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="到期时间" width="190">
+        <el-table-column v-if="!isNarrow" label="到期时间" width="190">
           <template #default="{ row }">
             <template v-if="row.expires_at">
               <span>{{ fmtTime(row.expires_at) }}</span>
@@ -97,7 +110,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="调试" width="130">
+        <el-table-column v-if="!isNarrow" label="调试" width="130">
           <template #default="{ row }">
             <template v-if="row.debug_enabled">
               <el-tooltip v-if="row.debug_expires_at" :content="`调试记录到期：${fmtTime(row.debug_expires_at)}`" placement="top">
@@ -109,28 +122,57 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="最近使用" width="180">
+        <el-table-column v-if="!isNarrow" label="最近使用" width="180">
           <template #default="{ row }">
             <span>{{ fmtTime(row.last_used_at) }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="260" fixed="right">
+        <!-- 操作列：窄屏不再 fixed（260px 固定列会挤掉名称），按钮收进下拉菜单 -->
+        <el-table-column
+          label="操作"
+          :width="isNarrow ? 88 : 260"
+          :fixed="isNarrow ? false : 'right'"
+        >
           <template #default="{ row }">
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" :loading="rotatingId === row.id" @click="rotateKey(row)">轮换</el-button>
-            <el-tooltip content="完整 Key 仅创建/轮换时展示一次，此处仅复制前缀用于识别" placement="top">
-              <el-button size="small" @click="copyPrefix(row)">复制前缀</el-button>
-            </el-tooltip>
-            <el-button
-              size="small"
-              type="danger"
-              :loading="deletingSet.has(row.id)"
-              :disabled="deletingSet.has(row.id)"
-              @click="removeKey(row)"
+            <el-dropdown
+              v-if="isNarrow"
+              trigger="click"
+              @command="(c: string) => onRowAction(c, row)"
             >
-              删除
-            </el-button>
+              <el-button size="small">
+                操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item command="rotate">轮换</el-dropdown-item>
+                  <el-dropdown-item command="copy">复制前缀</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <template v-else>
+              <el-button size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button size="small" :loading="rotatingId === row.id" @click="rotateKey(row)">
+                轮换
+              </el-button>
+              <el-tooltip
+                content="完整 Key 仅创建/轮换时展示一次，此处仅复制前缀用于识别"
+                placement="top"
+              >
+                <el-button size="small" @click="copyPrefix(row)">复制前缀</el-button>
+              </el-tooltip>
+              <el-button
+                size="small"
+                type="danger"
+                :loading="deletingSet.has(row.id)"
+                :disabled="deletingSet.has(row.id)"
+                @click="removeKey(row)"
+              >
+                删除
+              </el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -319,7 +361,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { CopyDocument, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { CopyDocument, ArrowDown, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { keyApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -359,6 +401,17 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 const pagerLayout = computed(() =>
   narrowViewport.value ? 'total, prev, pager, next' : 'total, sizes, prev, pager, next',
 )
+
+/** 窄屏列布局开关（复用上面同一断点判定） */
+const isNarrow = computed(() => narrowViewport.value)
+
+/** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
+function onRowAction(command: string, row: ApiKeyRow) {
+  if (command === 'edit') openEdit(row)
+  else if (command === 'rotate') rotateKey(row)
+  else if (command === 'copy') copyPrefix(row)
+  else if (command === 'delete') removeKey(row)
+}
 
 const filteredKeys = computed<ApiKeyRow[]>(() => {
   const q = searchText.value.trim().toLowerCase()
@@ -806,6 +859,11 @@ function gotoModels() {
 <style scoped>
 .muted {
   color: #c0c4cc;
+}
+/* 窄屏折到名称下方的副行（前缀 / 已过期标记） */
+.sub-line {
+  margin-top: 4px;
+  font-size: 12px;
 }
 .search-input {
   width: 240px;
