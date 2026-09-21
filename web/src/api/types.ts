@@ -277,6 +277,30 @@ export interface ModelSyncReport {
 // presets（/api/presets）
 // ---------------------------------------------------------------------------
 
+/** 业务空间专属域名地域（阿里云百炼） */
+export interface WorkspaceDomainRegion {
+  id: string
+  name: string
+}
+
+/** 业务空间专属域名模板：占位符 {workspaceId} / {region} 由接入时传值替换 */
+export interface WorkspaceDomain {
+  base_url: string
+  media_base_url: string | null
+  protocol_base_urls: Record<string, string>
+  regions: WorkspaceDomainRegion[]
+  hint: string
+}
+
+/** 统一接入域名（静态，无需参数；如千问AI平台 maas.qianwenaiapi.com） */
+export interface UnifiedDomain {
+  label: string
+  base_url: string
+  media_base_url: string | null
+  protocol_base_urls: Record<string, string>
+  hint: string
+}
+
 export interface Preset {
   name: string
   display_name: string
@@ -286,12 +310,21 @@ export interface Preset {
   media_base_url: string | null
   /** 分协议 base_url 覆盖（多根供应商，如 DeepSeek 的 Anthropic 根） */
   protocol_base_urls?: Record<string, string>
+  /** 业务空间专属域名模板（阿里云百炼；缺省表示该预设不支持） */
+  workspace_domain?: WorkspaceDomain
+  /** 统一接入域名（缺省表示该预设不支持） */
+  unified_domain?: UnifiedDomain
   description: string
 }
 
 export interface ProvisionReq {
   api_key: string
   name?: string | null
+  /** 接入域名：shared（缺省）/ unified / workspace */
+  domain?: 'shared' | 'unified' | 'workspace'
+  /** 业务空间专属域名参数（domain=workspace 时必填） */
+  workspace_id?: string
+  region?: string
 }
 
 export interface ProvisionResp {

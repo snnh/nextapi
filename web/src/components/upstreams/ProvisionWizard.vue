@@ -77,16 +77,47 @@
           clearable
         />
       </el-form-item>
+      <el-form-item v-if="domainChoices.length > 1" label="接入域名">
+        <el-radio-group v-model="domainMode">
+          <el-radio-button v-for="d in domainChoices" :key="d.value" :value="d.value">
+            {{ d.label }}
+          </el-radio-button>
+        </el-radio-group>
+      </el-form-item>
+      <template v-if="useWorkspace">
+        <el-form-item label="Workspace ID" required>
+          <el-input
+            v-model="workspaceId"
+            placeholder="如 llm-xxxxxx（控制台「业务空间详情」或 API Key 弹窗的 API Host）"
+            autocomplete="off"
+            clearable
+          />
+        </el-form-item>
+        <el-form-item label="地域" required>
+          <el-select v-model="region" style="width: 100%">
+            <el-option
+              v-for="r in workspaceDomain?.regions ?? []"
+              :key="r.id"
+              :label="`${r.name}（${r.id}）`"
+              :value="r.id"
+            />
+          </el-select>
+        </el-form-item>
+      </template>
       <el-form-item label="Base URL">
-        <el-input :model-value="picked?.base_url" readonly />
+        <el-input :model-value="baseUrlPreview" readonly />
       </el-form-item>
       <el-form-item
-        v-for="(url, proto) in picked?.protocol_base_urls"
+        v-for="(url, proto) in protocolBaseUrlPreviews"
         :key="proto"
         :label="`${PROTOCOL_LABEL(String(proto))} 地址`"
       >
         <el-input :model-value="String(url)" readonly />
       </el-form-item>
+      <el-form-item v-if="mediaBaseUrlPreview" label="媒体地址（图像原生）">
+        <el-input :model-value="mediaBaseUrlPreview" readonly />
+      </el-form-item>
+      <div v-if="domainHint" class="hint domain-hint">{{ domainHint }}</div>
       <div v-if="conflict" class="hint conflict">
         名称「{{ name }}」已存在，请修改名称后重试。
       </div>
@@ -195,6 +226,7 @@ import { PROTOCOL_LABEL } from '@/utils/consts'
 import type {
   ModelSyncReport,
   Preset,
+  ProvisionReq,
   ProvisionResp,
   UpstreamModelItem,
 } from '@/api/types'
@@ -229,6 +261,101 @@ const apiKey = ref('')
 const submitting = ref(false)
 const conflict = ref(false)
 const result = ref<ProvisionResp | null>(null)
+
+// —— 接入域名（共享 / 统一域名 / 业务空间专属域名；预设未声明时不展示选择器）——
+type DomainMode = 'shared' | 'unified' | 'workspace'
+const domainMode = ref<DomainMode>('shared')
+const workspaceId = ref('')
+const region = ref('')
+
+const workspaceDomain = computed(() => picked.value?.workspace_domain ?? null)
+const unifiedDomain = computed(() => picked.value?.unified_domain ?? null)
+const useWorkspace = computed(() => !!workspaceDomain.value && domainMode.value === 'workspace')
+
+/** 域名选项：共享域名恒有；统一域名 / 业务空间专属域名按预设声明追加 */
+const domainChoices = computed<{ value: DomainMode; label: string }[]>(() => {
+  const out: { value: DomainMode; label: string }[] = [{ value: 'shared', label: '共享域名' }]
+  if (unifiedDomain.value) {
+    out.push({ value: 'unified', label: `${unifiedDomain.value.label}（推荐）` })
+  }
+  if (workspaceDomain.value) {
+    out.push({ value: 'workspace', label: '业务空间专属域名' })
+  }
+  return out
+})
+
+const domainHint = computed(() => {
+  if (useWorkspace.value) return workspaceDomain.value?.hint ?? ''
+  if (domainMode.value === 'unified') return unifiedDomain.value?.hint ?? ''
+  if (domainChoices.value.length > 1) {
+    return '百炼共享域名（dashscope.aliyuncs.com）自 2026-09-30 起不再迭代新特性，建议改用上方的统一域名或业务空间专属域名。'
+  }
+  return ''
+})
+
+/** 模板渲染：替换 {workspaceId} / {region} 占位符（与后端 render_domain 一致） */
+function renderTpl(tpl: string): string {
+  return tpl.split('{workspaceId}').join(workspaceId.value.trim()).split('{region}').join(region.value)
+}
+
+/** 选择预设/打开时重置域名状态；有专属域名模板时默认选第一个地域 */
+function initDomain(p: Preset | null) {
+  domainMode.value = 'shared'
+  workspaceId.value = ''
+  region.value = p?.workspace_domain?.regions[0]?.id ?? ''
+}
+
+/** 当前模式的目标地址（shared 返回 null = 用预设默认；统一域名静态；专属域名渲染占位符） */
+const activeDomain = computed<{
+  base_url: string
+  media_base_url: string | null
+  protocol_base_urls: Record<string, string>
+} | null>(() => {
+  if (domainMode.value === 'unified' && unifiedDomain.value) {
+    const u = unifiedDomain.value
+    return {
+      base_url: u.base_url,
+      media_base_url: u.media_base_url,
+      protocol_base_urls: u.protocol_base_urls,
+    }
+  }
+  if (useWorkspace.value && workspaceDomain.value) {
+    const w = workspaceDomain.value
+    const roots: Record<string, string> = {}
+    for (const [proto, tpl] of Object.entries(w.protocol_base_urls)) {
+      roots[proto] = renderTpl(tpl)
+    }
+    return {
+      base_url: renderTpl(w.base_url),
+      media_base_url: w.media_base_url ? renderTpl(w.media_base_url) : null,
+      protocol_base_urls: roots,
+    }
+  }
+  return null
+})
+
+const baseUrlPreview = computed(() => {
+  const p = picked.value
+  if (!p) return ''
+  return activeDomain.value?.base_url ?? p.base_url
+})
+
+const protocolBaseUrlPreviews = computed<Record<string, string>>(() => {
+  const p = picked.value
+  if (!p) return {}
+  const out: Record<string, string> = { ...(p.protocol_base_urls ?? {}) }
+  for (const [proto, url] of Object.entries(activeDomain.value?.protocol_base_urls ?? {})) {
+    out[proto] = url
+  }
+  return out
+})
+
+const mediaBaseUrlPreview = computed(() => {
+  const p = picked.value
+  if (!p) return ''
+  if (activeDomain.value) return activeDomain.value.media_base_url ?? ''
+  return p.media_base_url ?? ''
+})
 
 // —— 模型发现与同步 ——
 const modelsLoading = ref(false)
@@ -268,11 +395,13 @@ watch(
     models.value = []
     modelsErr.value = ''
     syncReport.value = null
+    initDomain(p)
   },
 )
 
 function pick(p: Preset) {
   picked.value = p
+  initDomain(p)
   if (!name.value.trim()) name.value = p.name
 }
 
@@ -289,6 +418,7 @@ function reset() {
   modelsErr.value = ''
   syncRunning.value = false
   syncReport.value = null
+  initDomain(null)
 }
 
 /** 接入：创建上游 + 自动连通测试，成功后自动进入模型发现 */
@@ -302,13 +432,33 @@ async function submit() {
     ElMessage.warning('请填写 API Key')
     return
   }
+  const wsId = workspaceId.value.trim()
+  if (domainMode.value === 'workspace') {
+    // 与后端 validate_workspace_id 同口径（1-63、首尾非连字符、仅字母数字连字符）
+    if (!/^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(wsId)) {
+      ElMessage.warning('Workspace ID 非法：仅字母、数字与连字符，长度 1-63，首尾不能是连字符')
+      return
+    }
+    if (!region.value) {
+      ElMessage.warning('请选择业务空间所在地域')
+      return
+    }
+  }
   submitting.value = true
   conflict.value = false
   try {
-    const resp = await presetApi.provision(picked.value.name, {
+    const body: ProvisionReq = {
       api_key: apiKey.value,
       name: name.value.trim(),
-    })
+    }
+    if (domainChoices.value.length > 1) {
+      body.domain = domainMode.value
+    }
+    if (domainMode.value === 'workspace') {
+      body.workspace_id = wsId
+      body.region = region.value
+    }
+    const resp = await presetApi.provision(picked.value.name, body)
     result.value = resp
     step.value = 2
     emit('saved')
@@ -435,6 +585,13 @@ function gotoRoutes() {
   color: #6b7280;
   font-size: 12px;
   line-height: 1.7;
+}
+.domain-hint {
+  margin: -6px 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f4f8ff;
+  color: #4b5563;
 }
 .conflict {
   color: #e6a23c;

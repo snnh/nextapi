@@ -281,7 +281,12 @@
     </el-dialog>
 
     <!-- 新建 / 编辑弹窗 -->
-    <UpstreamFormDialog ref="formDialogRef" :proxies="proxies" @saved="loadUpstreams" />
+    <UpstreamFormDialog
+      ref="formDialogRef"
+      :proxies="proxies"
+      :presets="presets"
+      @saved="loadUpstreams"
+    />
   </div>
 </template>
 

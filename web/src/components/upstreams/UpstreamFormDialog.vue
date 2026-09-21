@@ -46,6 +46,44 @@
         <el-input v-model="form.base_url" placeholder="如 https://api.openai.com/v1" clearable />
       </el-form-item>
 
+      <!-- 百炼共享域名 → 统一域名 / 业务空间专属域名（迁移助手；阿里云公告 2026-09-30 起共享域名不再迭代新特性） -->
+      <el-form-item v-if="(workspaceDomain || unifiedDomain) && isSharedDashscope" label="百炼域名">
+        <div class="ws-block">
+          <div class="hint">
+            当前为共享域名：阿里云百炼 dashscope.aliyuncs.com 自 2026-09-30 起不再迭代新特性，建议改用统一域名或业务空间专属域名。
+          </div>
+          <div v-if="unifiedDomain" class="ws-row">
+            <el-button @click="applyUnifiedDomain">
+              改用 {{ unifiedDomain.label }}（无需 Workspace ID）
+            </el-button>
+          </div>
+          <div v-if="workspaceDomain" class="hint">或使用业务空间专属域名（{WorkspaceId}.{region}.maas.aliyuncs.com）：</div>
+          <div v-if="workspaceDomain" class="ws-row">
+            <el-input
+              v-model="wsId"
+              placeholder="Workspace ID（如 llm-xxxxxx）"
+              autocomplete="off"
+              clearable
+              class="ws-id"
+            />
+            <el-select v-model="wsRegion" placeholder="选择地域" class="ws-region">
+              <el-option
+                v-for="r in workspaceDomain?.regions ?? []"
+                :key="r.id"
+                :label="`${r.name}（${r.id}）`"
+                :value="r.id"
+              />
+            </el-select>
+            <el-button :disabled="!wsId.trim() || !wsRegion" @click="applyWorkspaceDomain">
+              填入专属域名
+            </el-button>
+          </div>
+          <div class="hint">
+            将写入 Base URL / 媒体地址 / Anthropic 分协议地址；如需通过 Anthropic 协议调用，请在「协议」中一并勾选。
+          </div>
+        </div>
+      </el-form-item>
+
       <el-form-item label="分协议地址">
         <div class="pbu-block">
           <div v-for="proto in pbuProtocols" :key="proto" class="pbu-row">
@@ -472,17 +510,20 @@ import { errMsg } from '@/api/http'
 import type {
   ModelSyncReport,
   Overrides,
+  Preset,
   ProtocolName,
   ProxyOut,
   UpstreamExtra,
   UpstreamIn,
   UpstreamModelItem,
   UpstreamOut,
+  UnifiedDomain,
+  WorkspaceDomain,
 } from '@/api/types'
 import OverridesEditor from './OverridesEditor.vue'
 import ProtocolPriorityEditor from './ProtocolPriorityEditor.vue'
 
-defineProps<{ proxies: ProxyOut[] }>()
+const props = defineProps<{ proxies: ProxyOut[]; presets?: Preset[] }>()
 const emit = defineEmits<{ (e: 'saved'): void }>()
 
 const IMAGE_PROTOCOLS = PROTOCOL_OPTIONS.filter((o) => o.value.startsWith('images_')).map((o) => o.value)
@@ -884,6 +925,77 @@ const pbuProtocols = computed<ProtocolName[]>(() => {
   return STANDARD_PROTOCOLS.filter((p) => set.has(p))
 })
 
+/**
+ * 百炼共享域名助手：阿里云百炼共享域名（dashscope.aliyuncs.com 等）自 2026-09-30 起不再
+ * 迭代新特性，建议迁移到业务空间专属域名 {WorkspaceId}.{region}.maas.aliyuncs.com。
+ * 模板来自后端预设（presets.rs workspace_domain），此处只做渲染与回填。
+ */
+const SHARED_DASHSCOPE_HOSTS = [
+  'dashscope.aliyuncs.com',
+  'dashscope-intl.aliyuncs.com',
+  'dashscope-us.aliyuncs.com',
+  'cn-hongkong.dashscope.aliyuncs.com',
+]
+
+/** 当前 base_url 是否仍为百炼共享域名（Token Plan / 专属域名不再提示） */
+const isSharedDashscope = computed(() => {
+  try {
+    return SHARED_DASHSCOPE_HOSTS.includes(new URL(form.base_url).hostname)
+  } catch {
+    return false
+  }
+})
+
+/** 专属域名模板：按 kind 匹配预设（当前仅阿里云百炼提供） */
+const workspaceDomain = computed<WorkspaceDomain | null>(
+  () =>
+    props.presets?.find((p) => p.kind === form.kind && p.workspace_domain)?.workspace_domain ?? null,
+)
+
+/** 统一域名模板（千问AI平台；无需参数） */
+const unifiedDomain = computed<UnifiedDomain | null>(
+  () =>
+    props.presets?.find((p) => p.kind === form.kind && p.unified_domain)?.unified_domain ?? null,
+)
+
+const wsId = ref('')
+const wsRegion = ref('')
+
+/** 一键改用统一域名（maas.qianwenaiapi.com，百炼 API Key 通用，无需 Workspace ID） */
+function applyUnifiedDomain() {
+  const uni = unifiedDomain.value
+  if (!uni) return
+  form.base_url = uni.base_url
+  if (uni.media_base_url) form.media_base_url = uni.media_base_url
+  for (const [proto, url] of Object.entries(uni.protocol_base_urls)) {
+    form.protocolBaseUrls[proto] = url
+  }
+  ElMessage.success(`已改用 ${uni.label}（百炼 API Key 通用），请确认后保存`)
+}
+
+/** 把 Workspace ID + 地域渲染进 Base URL / 媒体地址 / 分协议地址（提交前仍可手动调整） */
+function applyWorkspaceDomain() {
+  const tpl = workspaceDomain.value
+  if (!tpl) return
+  const id = wsId.value.trim()
+  if (!/^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(id)) {
+    ElMessage.warning('Workspace ID 非法：仅字母、数字与连字符，长度 1-63，首尾不能是连字符')
+    return
+  }
+  if (!wsRegion.value) {
+    ElMessage.warning('请选择地域')
+    return
+  }
+  const render = (s: string) =>
+    s.split('{workspaceId}').join(id).split('{region}').join(wsRegion.value)
+  form.base_url = render(tpl.base_url)
+  if (tpl.media_base_url) form.media_base_url = render(tpl.media_base_url)
+  for (const [proto, t] of Object.entries(tpl.protocol_base_urls)) {
+    form.protocolBaseUrls[proto] = render(t)
+  }
+  ElMessage.success('已填入业务空间专属域名，请确认后保存')
+}
+
 function computePriority(selected: ProtocolName[], base?: ProtocolName[]): ProtocolName[] {
   const selSet = new Set(selected)
   const baseArr: ProtocolName[] = base?.length ? base : [...DEFAULT_PRIORITY]
@@ -1007,6 +1119,9 @@ function open(upstream?: UpstreamOut) {
   manualInput.value = ''
   manualPending.value = []
   codexTipShown.value = false
+  // 百炼专属域名助手：复位输入，地域默认取模板首个
+  wsId.value = ''
+  wsRegion.value = workspaceDomain.value?.regions[0]?.id ?? ''
   visible.value = true
   // 回填完成后记录脏检查基线
   dirty.snapshot()
@@ -1183,6 +1298,24 @@ defineExpose({ open })
 }
 .pbu-block {
   width: 100%;
+}
+.ws-block {
+  width: 100%;
+}
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.ws-id {
+  flex: 1;
+  min-width: 200px;
+  max-width: 300px;
+}
+.ws-region {
+  width: 200px;
 }
 .pbu-row {
   display: grid;

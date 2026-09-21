@@ -79,7 +79,8 @@ src/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
 ├── presets.rs       # 供应商预设（12 个内置预设 + 一键接入 provision + media_base_url /
-│                     # protocol_base_urls / models_path 处理；含百度/腾讯/阿里 Token Plan 专属根地址）
+│                     # protocol_base_urls / models_path 处理；含百度/腾讯/阿里 Token Plan 专属根地址；
+│                     # dashscope 含阿里云百炼统一域名 unified_domain / 业务空间专属域名 workspace_domain）
 ├── embed.rs         # 前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/responses/compact
 │                    # 直接转发 + /v1/images/* + 视频 501 占位）
@@ -136,13 +137,20 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - **模型名三段语义**：`requested_model`（客户端原始名，仅别名命中时记录）→ `model`（网关侧入口名，别名解析后）→ `upstream_model`（`override_model` 改写后真正发往上游的名字，仅与入口名不同时记录）；白名单/路由按 `model`，计价按 `upstream_model ?? model`，日志页展示「入口名 → 上游名」。
 - **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。
 - **Codex 渠道**：`kind='codex'` 走 OAuth（auth.json）→ Responses；出站默认按官方客户端做**指纹模拟**（UA/originator/session-id/thread-id/x-client-request-id/x-codex-window-id/x-codex-turn-metadata + body 补齐 client_metadata/include/prompt_cache_key/reasoning/parallel_tool_calls/tool_choice；用户 overrides 与入站既有值优先）；传输默认 `auto`（先 Responses WebSocket，握手/首事件失败回落 HTTP SSE，代理下自动只用 HTTP），可用上游 `extra.codex_transport`（auto/ws/http）与 `extra.codex_fingerprint`（false 关闭或对象覆盖）调整。服务端 compact（`/v1/responses/compact`，兼收单数拼写）为**直接转发**通道：不进 IR，候选限 codex/支持 responses 的上游，codex 仅 HTTP、body 只补 client_metadata，上游 404 故障转移、其余 4xx 原样回错（客户端自行回落本地压缩），日志 `protocol_in=openai_responses_compact`。
+- **usage 口径**：四协议原始字段的缓存语义不同——Chat `prompt_tokens`、Responses/Codex `input_tokens`、Gemini `promptTokenCount` 含缓存命中，Anthropic `input_tokens` 不含 `cache_read`；入库统一归为「未缓存输入」（`usage_logs.prompt_tokens`），历史数据不回填；字段缺失 / cached 大于 prompt / 负值等脏数据一律钳制或忽略，不得 panic。
+- **请求与响应保真**：流式 `id` 一律保真（透传、转换、非流式聚合均不改写）；`max_tokens` 不主动注入（Anthropic 必填，缺省 65536 并记录降级；两字段并存取 `max_completion_tokens`）；Responses 输入中 assistant 只接受 `output_text`/`refusal`，user 用 `input_text`。
+- **上游多根**：`base_url` 为主根，`extra.protocol_base_urls` 按协议覆盖、`extra.media_base_url` 为图像原生根、`extra.models_path` 为模型列表路径；URL 拼接统一走 `UpstreamRow` 的既有方法（如 `models_url()`），不在调用点手拼。
+- **Anthropic 兼容根写到 `/v1`**：`endpoint_path` 只拼 `/messages`，故覆盖根须写到 `…/apps/anthropic/v1`（官方 SDK base_url 为 `…/apps/anthropic` + `/v1/messages`，两者等价）。
+- **供应商地址不可跨套餐复用**：各 Token Plan 的 Base URL 独立——千帆 Token Plan 必须用订阅专属 Key（普通千帆 Key 会 401）、模型列表在 `/v1/models`；阿里百炼 Token Plan 仅华北 2 地域（国际站是另一套地址）。
 
 ## 工作约定
 
 - 文档与注释使用**中文**。
 - 实现与设计文档冲突时先确认是改文档还是改实现，不擅自扩散改动范围。
+- 前端 API 调用统一走 `apiBase()` 拼接前缀，不手写 `/api`（构建前自检脚本会拦截 `/api/api/...` 双拼，v0.3.1 事故）。
 - 前端 secret 输入框（上游 API Key / 代理密码 / Token 等）必须带 `autocomplete="new-password"` 与 `data-lpignore`/`data-1p-ignore` 标记：浏览器自动填充会把管理后台登录密码写进 Key 框并在保存其它字段时静默覆盖（v0.3.2 事故，务必遵守）。
 - 增删 `usage_logs` / `media_tasks` 表列时，必须同步更新 `logging::LOG_COLS`+`LOG_ARRAY_TYPES`、`entities` 行结构与 `admin/logs.rs` 查询列（sqlx 运行时校验，编译期不检查）。
+- **本文件会随仓库公开**：只写项目技术内容，不写部署环境细节（主机 / 宿主路径 / 端口映射 / 凭据 / 内网与代理信息）；这类信息写到 `.owc/memory.md`（已 gitignore，不随仓库发布）。
 
 ## 安全考虑
 
