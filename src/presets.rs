@@ -26,7 +26,69 @@ pub struct Preset {
     /// 模型列表路径覆盖（provision 时写入 upstreams.extra.models_path；默认 /models，
     /// 如千帆 Token Plan 的模型列表在 /v1/models 而 /models 不存在）
     pub models_path: Option<&'static str>,
+    /// 业务空间专属域名（阿里云百炼：{WorkspaceId}.{region}.maas.aliyuncs.com）。
+    /// 接入时可传 workspace_id + region 走专属域名；缺省仍用上面的共享域名。
+    pub workspace_domain: Option<WorkspaceDomain>,
+    /// 统一接入域名（如千问AI平台 maas.qianwenaiapi.com：无需 Workspace ID，百炼 Key 通用）。
+    pub unified_domain: Option<UnifiedDomain>,
     pub description: &'static str,
+}
+
+/// 业务空间专属域名地域（id 进 URL，name 供前端展示）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RegionSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+}
+
+/// 统一接入域名（静态，无占位符；各协议路径与共享域名一致）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnifiedDomain {
+    /// 前端选项名（如「千问AI平台统一域名」）
+    pub label: &'static str,
+    pub base_url: &'static str,
+    pub media_base_url: Option<&'static str>,
+    pub protocol_base_urls: &'static [(&'static str, &'static str)],
+    pub hint: &'static str,
+}
+
+/// 业务空间专属域名模板：占位符 `{workspaceId}` / `{region}` 由接入时传入值替换。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WorkspaceDomain {
+    /// OpenAI 兼容根模板（如 https://{workspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1）
+    pub base_url: &'static str,
+    /// 图像原生根模板（阿里 DashScope 原生：域名 + /api/v1/...，故模板不含 /api/v1）
+    pub media_base_url: Option<&'static str>,
+    /// 分协议根模板（Anthropic 等独立根）
+    pub protocol_base_urls: &'static [(&'static str, &'static str)],
+    /// 支持的地域列表（region 校验白名单，防任意值注入域名）
+    pub regions: &'static [RegionSpec],
+    /// 前端展示的迁移提示
+    pub hint: &'static str,
+}
+
+/// 业务空间专属域名入参（provision 可选项）。
+#[derive(Debug, Clone, Copy)]
+pub struct WorkspaceInput<'a> {
+    pub workspace_id: &'a str,
+    pub region: &'a str,
+}
+
+/// 接入域名选择（provision 可选项；缺省 = 预设默认共享域名）。
+#[derive(Debug, Clone, Copy)]
+pub enum DomainChoice<'a> {
+    /// 预设默认共享域名
+    Default,
+    /// 统一接入域名（如千问AI平台 maas.qianwenaiapi.com，无需 Workspace ID）
+    Unified,
+    /// 业务空间专属域名（需 workspace_id + region）
+    Workspace(WorkspaceInput<'a>),
+}
+
+/// 接入目标（base_url 与 extra）：共享域名取预设字段，专属域名按模板渲染。
+pub struct ProvisionTarget {
+    pub base_url: String,
+    pub extra: serde_json::Value,
 }
 
 /// 全部预设（12 个）
@@ -36,17 +98,69 @@ static PRESETS: [Preset; 12] = [
         display_name: "阿里云百炼 DashScope",
         kind: "aliyun",
         base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        // 文本走 OpenAI 兼容；图像走 DashScope 原生（同步 Qwen-Image + 异步万相）
+        // 文本走 OpenAI 兼容（Chat/Responses 同根）；Anthropic 兼容独立根 /apps/anthropic；
+        // 图像走 DashScope 原生（同步 Qwen-Image + 异步万相）
         protocols: &[
             "openai_chat",
+            "openai_responses",
+            "anthropic",
             "images_dashscope_sync",
             "images_dashscope_async",
         ],
         media_base_url: Some("https://dashscope.aliyuncs.com"),
-        protocol_base_urls: None,
+        // Anthropic 兼容的 SDK base_url 为 /apps/anthropic，实际端点为 /apps/anthropic/v1/messages，
+        // 故覆盖根写到 /v1（endpoint_path 只拼 /messages）
+        protocol_base_urls: Some(&[("anthropic", "https://dashscope.aliyuncs.com/apps/anthropic/v1")]),
         models_path: None,
+        // 业务空间专属域名（推荐）：共享域名 dashscope.aliyuncs.com 自 2026-09-30 起停止新特性
+        workspace_domain: Some(WorkspaceDomain {
+            base_url: "https://{workspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1",
+            media_base_url: Some("https://{workspaceId}.{region}.maas.aliyuncs.com"),
+            protocol_base_urls: &[(
+                "anthropic",
+                "https://{workspaceId}.{region}.maas.aliyuncs.com/apps/anthropic/v1",
+            )],
+            regions: &[
+                RegionSpec {
+                    id: "cn-beijing",
+                    name: "华北2（北京）",
+                },
+                RegionSpec {
+                    id: "ap-southeast-1",
+                    name: "新加坡",
+                },
+                RegionSpec {
+                    id: "cn-hongkong",
+                    name: "中国香港",
+                },
+                RegionSpec {
+                    id: "ap-northeast-1",
+                    name: "日本（东京）",
+                },
+                RegionSpec {
+                    id: "eu-central-1",
+                    name: "德国（法兰克福）",
+                },
+                RegionSpec {
+                    id: "us-east-1",
+                    name: "美国（弗吉尼亚）",
+                },
+            ],
+            hint: "业务空间专属域名（推荐）：{WorkspaceId} 在百炼控制台「业务空间详情」或 API Key 弹窗的 API Host 中查看，替换后调用方式不变。共享域名 dashscope.aliyuncs.com 自 2026-09-30 起不再迭代新特性。",
+        }),
+        // 千问AI平台统一域名：无 Workspace ID、百炼 API Key 通用（路径与共享域名一致）
+        unified_domain: Some(UnifiedDomain {
+            label: "千问AI平台统一域名",
+            base_url: "https://maas.qianwenaiapi.com/compatible-mode/v1",
+            media_base_url: Some("https://maas.qianwenaiapi.com"),
+            protocol_base_urls: &[(
+                "anthropic",
+                "https://maas.qianwenaiapi.com/apps/anthropic/v1",
+            )],
+            hint: "千问AI平台统一域名（maas.qianwenaiapi.com）：无需 Workspace ID，百炼 API Key 通用，路径与共享域名一致。",
+        }),
         description:
-            "阿里云百炼：文本走 OpenAI 兼容；图像走 DashScope 原生（Qwen-Image 同步 + 万相异步）。",
+            "阿里云百炼：文本走 OpenAI 兼容（Chat/Responses）；Anthropic 兼容独立根；图像走 DashScope 原生（Qwen-Image 同步 + 万相异步）。建议接入时选用业务空间专属域名或千问AI平台统一域名。",
     },
     Preset {
         name: "qianfan",
@@ -57,6 +171,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description: "百度千帆：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -73,6 +189,8 @@ static PRESETS: [Preset; 12] = [
         )]),
         // 模型列表在 /v1/models（/models 不存在，若不覆盖探测与模型拉取会 404）
         models_path: Some("/v1/models"),
+        workspace_domain: None,
+        unified_domain: None,
         description:
             "百度千帆 Token Plan（订阅套餐，需专属 API Key）：OpenAI 兼容 Chat/Responses 与 Anthropic 兼容，接入即用。",
     },
@@ -85,6 +203,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description: "月之暗面 Kimi：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -97,6 +217,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: Some(&[("anthropic", "https://tokenhub.tencentmaas.com/v1")]),
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description:
             "腾讯云 TokenHub：混元及第三方模型，OpenAI 兼容 Chat/Responses 与 Anthropic 兼容，接入即用。",
     },
@@ -113,6 +235,8 @@ static PRESETS: [Preset; 12] = [
             "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
         )]),
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description:
             "腾讯云 Token Plan（个人版，订阅专属 Key：sk-tp- 开头）：OpenAI 兼容与 Anthropic 兼容，接入即用。",
     },
@@ -129,6 +253,8 @@ static PRESETS: [Preset; 12] = [
             "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1",
         )]),
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description:
             "阿里云百炼 Token Plan（个人版/团队版，订阅专属 Key：sk-sp- 开头）：OpenAI 兼容 Chat/Responses 与 Anthropic 兼容。",
     },
@@ -141,6 +267,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description: "智谱 GLM：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -152,6 +280,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description: "字节火山方舟：OpenAI 兼容对话，接入即用。",
     },
     Preset {
@@ -163,6 +293,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description: "OpenRouter：OpenAI Chat/Responses 兼容聚合站，模型路由 + 联网搜索透传。",
     },
     Preset {
@@ -175,6 +307,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description: "Zenmux：四协议兼容聚合站，zenmux/auto 自动路由、跨协议调用。",
     },
     Preset {
@@ -187,6 +321,8 @@ static PRESETS: [Preset; 12] = [
         media_base_url: None,
         protocol_base_urls: Some(&[("anthropic", "https://api.deepseek.com/anthropic/v1")]),
         models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
         description:
             "DeepSeek 官方：原生支持 OpenAI Chat/Responses 与 Anthropic 三协议（Anthropic 走独立 /anthropic 根，已内置映射）。",
     },
@@ -210,19 +346,66 @@ pub fn media_base_url(up: &UpstreamRow) -> &str {
         .unwrap_or(&up.base_url)
 }
 
-/// 预设 → upstreams.extra（media_base_url / protocol_base_urls / models_path；仅写入 Some 项）。
-fn preset_extra(preset: &Preset) -> serde_json::Value {
-    let mut extra = serde_json::Map::new();
-    if let Some(m) = preset.media_base_url {
-        extra.insert(
-            "media_base_url".to_string(),
-            serde_json::Value::String(m.to_string()),
-        );
+/// 预设 → 接入目标（base_url + extra：media_base_url / protocol_base_urls / models_path）。
+///
+/// 共享域名取预设字段；传 `workspace`（业务空间专属域名）时按预设模板渲染并对同协议根
+/// 覆盖共享根；预设不支持（`workspace_domain` 为 None）→ 400。
+pub fn provision_target(
+    preset: &Preset,
+    domain: DomainChoice<'_>,
+) -> Result<ProvisionTarget, ApiError> {
+    let mut base_url = preset.base_url.to_string();
+    let mut media = preset.media_base_url.map(str::to_string);
+    let mut protocol_urls: Vec<(String, String)> = preset
+        .protocol_base_urls
+        .map(|pbu| {
+            pbu.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    match domain {
+        DomainChoice::Default => {}
+        DomainChoice::Unified => {
+            let uni = preset.unified_domain.as_ref().ok_or_else(|| {
+                ApiError::bad_request(format!("预设 `{}` 不支持统一接入域名", preset.name))
+            })?;
+            base_url = uni.base_url.to_string();
+            media = uni.media_base_url.map(str::to_string);
+            merge_roots(&mut protocol_urls, uni.protocol_base_urls, None);
+        }
+        DomainChoice::Workspace(ws) => {
+            let dom = preset.workspace_domain.as_ref().ok_or_else(|| {
+                ApiError::bad_request(format!("预设 `{}` 不支持业务空间专属域名", preset.name))
+            })?;
+            validate_workspace_id(ws.workspace_id)?;
+            if !dom.regions.iter().any(|r| r.id == ws.region) {
+                return Err(ApiError::bad_request(format!(
+                    "地域 `{}` 不在预设 `{}` 的业务空间专属域名支持范围内",
+                    ws.region, preset.name
+                )));
+            }
+            base_url = render_domain(dom.base_url, ws.workspace_id, ws.region);
+            media = dom
+                .media_base_url
+                .map(|t| render_domain(t, ws.workspace_id, ws.region));
+            merge_roots(
+                &mut protocol_urls,
+                dom.protocol_base_urls,
+                Some((ws.workspace_id, ws.region)),
+            );
+        }
     }
-    if let Some(pbu) = preset.protocol_base_urls {
-        let map: serde_json::Map<String, serde_json::Value> = pbu
-            .iter()
-            .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
+
+    let mut extra = serde_json::Map::new();
+    if let Some(m) = media {
+        extra.insert("media_base_url".to_string(), serde_json::Value::String(m));
+    }
+    if !protocol_urls.is_empty() {
+        let map: serde_json::Map<String, serde_json::Value> = protocol_urls
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
             .collect();
         extra.insert(
             "protocol_base_urls".to_string(),
@@ -235,22 +418,68 @@ fn preset_extra(preset: &Preset) -> serde_json::Value {
             serde_json::Value::String(mp.to_string()),
         );
     }
-    serde_json::Value::Object(extra)
+    Ok(ProvisionTarget {
+        base_url,
+        extra: serde_json::Value::Object(extra),
+    })
+}
+
+/// 协议根合并：按协议覆盖已有根（同 key 覆盖，新增协议追加）；`render` 为 Some 时渲染占位符。
+fn merge_roots(
+    target: &mut Vec<(String, String)>,
+    roots: &[(&'static str, &'static str)],
+    render: Option<(&str, &str)>,
+) {
+    for (k, tpl) in roots {
+        let url = match render {
+            Some((ws, region)) => render_domain(tpl, ws, region),
+            None => tpl.to_string(),
+        };
+        match target.iter_mut().find(|(pk, _)| pk == k) {
+            Some(slot) => slot.1 = url,
+            None => target.push((k.to_string(), url)),
+        }
+    }
+}
+
+/// 渲染专属域名模板：替换 `{workspaceId}` / `{region}` 占位符。
+fn render_domain(tpl: &str, workspace_id: &str, region: &str) -> String {
+    tpl.replace("{workspaceId}", workspace_id)
+        .replace("{region}", region)
+}
+
+/// 纯函数：校验业务空间 ID（进 URL 的子域名段）——仅字母/数字/连字符、长度 1..=63、
+/// 首尾非连字符，防 URL 注入。可单测。
+fn validate_workspace_id(id: &str) -> Result<(), ApiError> {
+    let ok = !id.is_empty()
+        && id.len() <= 63
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !id.starts_with('-')
+        && !id.ends_with('-');
+    if !ok {
+        return Err(ApiError::bad_request(
+            "workspace_id 非法：仅允许字母、数字与连字符，长度 1-63，且首尾不能是连字符",
+        ));
+    }
+    Ok(())
 }
 
 /// 一键接入：创建 upstream（加密 key + 缓存刷新 + 审计）→ 连通性探测（不阻断）。
 ///
+/// `domain` 选择接入域名（缺省共享域名；统一域名 / 业务空间专属域名见预设声明）。
 /// 返回 `{upstream: {...}, test: {ok, status?, latency_ms, error?}}`。
-/// name 冲突（UNIQUE）→ 409 ApiError::conflict；api_key 空白 → 400。
+/// name 冲突（UNIQUE）→ 409 ApiError::conflict；api_key 空白 / 域名参数非法 → 400。
 pub async fn provision(
     state: &AppState,
     preset: &Preset,
     api_key: &str,
     upstream_name: Option<&str>,
+    domain: DomainChoice<'_>,
     admin: &str,
 ) -> ApiResult<serde_json::Value> {
-    // 参数校验：api_key 空白 → 400
+    // 参数校验：api_key 空白 → 400；域名参数非法 → 400（在插入前 fail-fast）
     validate_provision_key(api_key)?;
+    let target = provision_target(preset, domain)?;
 
     // name 缺省 = preset.name
     let name = upstream_name
@@ -270,7 +499,7 @@ pub async fn provision(
         .encrypt(api_key)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    let extra = preset_extra(preset);
+    let extra = target.extra;
 
     let protocols: Vec<String> = preset.protocols.iter().map(|s| s.to_string()).collect();
 
@@ -284,7 +513,7 @@ pub async fn provision(
     )
     .bind(&name)
     .bind(preset.kind)
-    .bind(preset.base_url)
+    .bind(&target.base_url)
     .bind(&api_key_enc)
     .bind(&protocols)
     .bind(300_000)
@@ -299,7 +528,7 @@ pub async fn provision(
         .reload(&state.db, &state.crypto)
         .await
         .map_err(ApiError::internal)?;
-    auth_audit(state, admin, &name, preset).await?;
+    auth_audit(state, admin, &name, preset, domain).await?;
 
     // 连通性探测：刷新后从快照取回新建上游（含内存 api_key_plain）
     let snap = state.cache.snapshot();
@@ -318,18 +547,40 @@ fn validate_provision_key(api_key: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// 审计（复用 crate::auth::audit；object_type \"upstream\"，summary 含 preset 全量）。
-async fn auth_audit(state: &AppState, admin: &str, name: &str, preset: &Preset) -> ApiResult<()> {
+/// 审计（复用 crate::auth::audit；object_type \"upstream\"，summary 含 preset 全量 + 接入域名选择）。
+async fn auth_audit(
+    state: &AppState,
+    admin: &str,
+    name: &str,
+    preset: &Preset,
+    domain: DomainChoice<'_>,
+) -> ApiResult<()> {
     crate::auth::audit(
         state,
         admin,
         "preset.provision",
         "upstream",
         Some(name),
-        serde_json::json!({ "preset": preset }),
+        serde_json::json!({
+            "preset": preset,
+            "domain": audit_domain(domain),
+        }),
         None,
     )
     .await
+}
+
+/// 域名选择 → 审计摘要（workspace 选项带 workspace_id / region）。
+fn audit_domain(domain: DomainChoice<'_>) -> serde_json::Value {
+    match domain {
+        DomainChoice::Default => serde_json::json!({ "kind": "shared" }),
+        DomainChoice::Unified => serde_json::json!({ "kind": "unified" }),
+        DomainChoice::Workspace(ws) => serde_json::json!({
+            "kind": "workspace",
+            "workspace_id": ws.workspace_id,
+            "region": ws.region,
+        }),
+    }
 }
 
 /// 连通性探测（参考 upstreams.rs test_upstream）：client_for + GET {base_url}/models + 10s 超时。
@@ -458,11 +709,57 @@ mod tests {
             dash.protocols,
             &[
                 "openai_chat",
+                "openai_responses",
+                "anthropic",
                 "images_dashscope_sync",
                 "images_dashscope_async"
             ]
         );
         assert_eq!(dash.media_base_url, Some("https://dashscope.aliyuncs.com"));
+        // 共享域名的 Anthropic 兼容根（SDK base_url /apps/anthropic + /v1/messages）
+        let dash_anthropic: &[(&str, &str)] = &[(
+            "anthropic",
+            "https://dashscope.aliyuncs.com/apps/anthropic/v1",
+        )];
+        assert_eq!(dash.protocol_base_urls, Some(dash_anthropic));
+        // 业务空间专属域名模板（阿里云百炼迁移公告 2026-09-30）
+        let wd = dash
+            .workspace_domain
+            .as_ref()
+            .expect("dashscope 应有专属域名模板");
+        assert_eq!(
+            wd.base_url,
+            "https://{workspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1"
+        );
+        assert_eq!(
+            wd.media_base_url,
+            Some("https://{workspaceId}.{region}.maas.aliyuncs.com")
+        );
+        assert_eq!(wd.regions.len(), 6);
+        assert!(wd.regions.iter().any(|r| r.id == "cn-beijing"));
+        // 统一接入域名（千问AI平台；无需 Workspace ID，百炼 Key 通用）
+        let uni = dash
+            .unified_domain
+            .as_ref()
+            .expect("dashscope 应有统一域名");
+        assert_eq!(
+            uni.base_url,
+            "https://maas.qianwenaiapi.com/compatible-mode/v1"
+        );
+        assert_eq!(uni.media_base_url, Some("https://maas.qianwenaiapi.com"));
+        // 其余预设无专属/统一域名模板
+        for p in presets().iter().filter(|p| p.name != "dashscope") {
+            assert!(
+                p.workspace_domain.is_none(),
+                "预设 `{}` 不应有专属域名模板",
+                p.name
+            );
+            assert!(
+                p.unified_domain.is_none(),
+                "预设 `{}` 不应有统一域名",
+                p.name
+            );
+        }
 
         let zen = find("zenmux").unwrap();
         assert_eq!(
@@ -604,8 +901,9 @@ mod tests {
         ];
         for (name, chat_exp, anthropic_exp, models_exp) in cases {
             let p = find(name).unwrap();
-            let mut up = make_upstream(preset_extra(p));
-            up.base_url = p.base_url.to_string();
+            let target = provision_target(p, DomainChoice::Default).unwrap();
+            let mut up = make_upstream(target.extra);
+            up.base_url = target.base_url;
             assert_eq!(
                 up.base_url_for(Protocol::OpenaiChat),
                 p.base_url,
@@ -628,8 +926,9 @@ mod tests {
 
         // 千帆 Token Plan 的 Responses 入口（OpenAI 兼容根 + /responses）
         let p = find("qianfan_tokenplan").unwrap();
-        let mut up = make_upstream(preset_extra(p));
-        up.base_url = p.base_url.to_string();
+        let target = provision_target(p, DomainChoice::Default).unwrap();
+        let mut up = make_upstream(target.extra);
+        up.base_url = target.base_url;
         let responses = format!(
             "{}{}",
             up.base_url_for(Protocol::OpenaiResponses),
@@ -639,5 +938,134 @@ mod tests {
             responses,
             "https://qianfan.baidubce.com/v2/tokenplan/personal/responses"
         );
+    }
+
+    /// 阿里云百炼业务空间专属域名：模板渲染 → 实际请求 URL；非法入参被拒。
+    #[test]
+    fn dashscope_workspace_domain_renders_urls() {
+        use crate::protocol::ir::Protocol;
+        use crate::upstream::endpoint_path;
+
+        let p = find("dashscope").unwrap();
+        let ws = WorkspaceInput {
+            workspace_id: "llm-abc123",
+            region: "cn-beijing",
+        };
+        let target = provision_target(p, DomainChoice::Workspace(ws)).unwrap();
+        assert_eq!(
+            target.base_url,
+            "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        );
+        let mut up = make_upstream(target.extra);
+        up.base_url = target.base_url;
+
+        // Chat / Responses 同根
+        assert_eq!(
+            format!(
+                "{}{}",
+                up.base_url_for(Protocol::OpenaiChat),
+                endpoint_path(Protocol::OpenaiChat, "m", false)
+            ),
+            "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+        );
+        assert_eq!(
+            format!(
+                "{}{}",
+                up.base_url_for(Protocol::OpenaiResponses),
+                endpoint_path(Protocol::OpenaiResponses, "m", false)
+            ),
+            "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/responses"
+        );
+        // Anthropic 兼容独立根
+        assert_eq!(
+            format!(
+                "{}{}",
+                up.base_url_for(Protocol::Anthropic),
+                endpoint_path(Protocol::Anthropic, "m", false)
+            ),
+            "https://llm-abc123.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages"
+        );
+        // 模型列表 = OpenAI 兼容根 + /models
+        assert_eq!(
+            up.models_url(),
+            "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models"
+        );
+        // 图像原生根：域名 + /api/v1/...（渲染后不含 /api/v1）
+        assert_eq!(
+            media_base_url(&up),
+            "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+        );
+
+        // 非法 workspace_id：空 / 首尾连字符 / 含点或斜杠 / 超长 → 400
+        for bad in ["", "-abc", "abc-", "a.b", "a/b", "a b"] {
+            let ws = WorkspaceInput {
+                workspace_id: bad,
+                region: "cn-beijing",
+            };
+            assert!(
+                provision_target(p, DomainChoice::Workspace(ws)).is_err(),
+                "workspace_id `{bad}` 应被拒"
+            );
+        }
+        let long = "a".repeat(64);
+        assert!(provision_target(
+            p,
+            DomainChoice::Workspace(WorkspaceInput {
+                workspace_id: &long,
+                region: "cn-beijing",
+            })
+        )
+        .is_err());
+
+        // 不支持的地域 → 400；不支持的预设 → 400
+        assert!(provision_target(
+            p,
+            DomainChoice::Workspace(WorkspaceInput {
+                workspace_id: "llm-abc123",
+                region: "cn-shanghai",
+            })
+        )
+        .is_err());
+        assert!(provision_target(
+            find("kimi").unwrap(),
+            DomainChoice::Workspace(WorkspaceInput {
+                workspace_id: "llm-abc123",
+                region: "cn-beijing",
+            })
+        )
+        .is_err());
+
+        // 统一域名（千问AI平台 maas.qianwenaiapi.com）：静态渲染，无需 Workspace ID，百炼 Key 通用
+        let uni = provision_target(p, DomainChoice::Unified).unwrap();
+        assert_eq!(
+            uni.base_url,
+            "https://maas.qianwenaiapi.com/compatible-mode/v1"
+        );
+        let mut up_u = make_upstream(uni.extra);
+        up_u.base_url = uni.base_url;
+        assert_eq!(
+            format!(
+                "{}{}",
+                up_u.base_url_for(Protocol::OpenaiChat),
+                endpoint_path(Protocol::OpenaiChat, "m", false)
+            ),
+            "https://maas.qianwenaiapi.com/compatible-mode/v1/chat/completions"
+        );
+        assert_eq!(
+            format!(
+                "{}{}",
+                up_u.base_url_for(Protocol::Anthropic),
+                endpoint_path(Protocol::Anthropic, "m", false)
+            ),
+            "https://maas.qianwenaiapi.com/apps/anthropic/v1/messages"
+        );
+        assert_eq!(
+            up_u.models_url(),
+            "https://maas.qianwenaiapi.com/compatible-mode/v1/models"
+        );
+        assert_eq!(media_base_url(&up_u), "https://maas.qianwenaiapi.com");
+
+        // 无统一域名的预设 → 400
+        assert!(provision_target(find("kimi").unwrap(), DomainChoice::Unified).is_err());
     }
 }

@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **阿里云百炼接入域名适配（共享域名 → 统一域名 / 业务空间专属域名）**：百炼共享域名
+  （`dashscope.aliyuncs.com`）自 2026-09-30 起不再迭代新特性。
+  - 预设 `dashscope` 新增两个接入域名选项：**千问AI平台统一域名**
+    `https://maas.qianwenaiapi.com/compatible-mode/v1`（推荐，无需 Workspace ID，百炼 API Key
+    通用，Anthropic 根 `/apps/anthropic/v1`、图像原生根同域名）与**业务空间专属域名**
+    `{WorkspaceId}.{region}.maas.aliyuncs.com`（6 个地域：北京/新加坡/中国香港/东京/法兰克福/
+    弗吉尼亚；媒体地址与 Anthropic 根按模板派生）。
+  - `POST /api/presets/{name}/provision` 新增 `domain` 参数（`shared` 缺省 / `unified` /
+    `workspace`）+ `workspace_id` / `region`：后端按预设声明的域名选项生成 base_url /
+    媒体地址 / 分协议地址并校验（Workspace ID 仅字母数字连字符、首尾非连字符；region 必须
+    在预设支持列表内；选项不匹配 → 400）。接入向导新增「接入域名」选择与实时 URL 预览。
+  - 上游编辑对话框新增「百炼域名」迁移助手：对仍在使用共享域名的阿里云百炼上游，可一键
+    改用统一域名，或填入 Workspace ID + 地域生成专属域名（含 Base URL / 媒体地址 /
+    Anthropic 分协议地址；提交前仍可手动调整）。
+  - `dashscope` 预设补充 `openai_responses` 与 `anthropic` 协议：文本三协议（Chat/Responses
+    同根 + Anthropic 独立根 `https://dashscope.aliyuncs.com/apps/anthropic/v1`）。
+- `/api/presets` 输出 `workspace_domain` 与 `unified_domain`（模板 / 地域 / 提示），供前端渲染
+  域名选择与 URL 预览。
+
+### 迁移指引（存量上游）
+1. 上游列表 → 编辑阿里云百炼上游；
+2. 「百炼域名」处二选一：
+   - **改用统一域名**：一键把 Base URL / 媒体地址 / Anthropic 分协议地址切到
+     `maas.qianwenaiapi.com`（无需 Workspace ID）；
+   - **业务空间专属域名**：填入 Workspace ID（控制台「业务空间详情」或 API Key 弹窗的
+     API Host，形如 `llm-xxxxxx`）与地域后点「填入专属域名」；
+3. 如需 Anthropic 协议调用，在「协议」中勾选 `anthropic`；
+4. 保存后确认连通性（专属域名仅接受同业务空间所属 API Key；统一域名按平台要求使用对应 Key）。
+
+> 说明：API Key 与地域、业务空间绑定；统一域名（maas.qianwenaiapi.com）与共享域名同一套百炼
+> API Key，专属域名仅接受同业务空间所属 API Key。两种域名均不改变调用方式；`dashscope_tokenplan`
+> （Token Plan）与其它预设地址不受本次公告影响。
+
 ## [0.3.6] - 2026-09-17
 
 ### Fixed
