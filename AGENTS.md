@@ -67,6 +67,8 @@ src/
 ├── routing/mod.rs   # 模型通配匹配、优先级分组 + 加权随机、熔断状态机（含半开探活/指数退避）
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
+│   ├── devin/       # Devin Connect 渠道：proto wire 编解码 + Responses↔Devin 转换 +
+│   │                # CLI 形态请求（工具循环三形态消息）+ PKCE 兑换 + GetUserStatus 探测
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
 ├── upstream/codex.rs # Codex OAuth 渠道：auth.json 解析、ensure_token 临期刷新（single-flight
 │                     # + 轮换回写）、官方客户端指纹模拟（预设 UA/originator/会话头 + body 字段

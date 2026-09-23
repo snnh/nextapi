@@ -58,6 +58,26 @@ pub async fn fetch_upstream_models(
             .client_for(up, &snap, &hot.proxy.default_proxy_id)
     };
     let is_codex = up.kind == "codex";
+    // Devin 渠道：GetUserStatus 模型目录（unary protobuf，已按计划门控过滤）
+    if up.kind == "devin" {
+        let Some(tok) = up
+            .api_key_plain
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        else {
+            return Err("devin 渠道缺少 session token（api_key）".into());
+        };
+        let base = if up.base_url.trim().is_empty() {
+            upstream::devin::DEFAULT_BASE_URL
+        } else {
+            up.base_url.trim()
+        };
+        let info = upstream::devin::user_status(&client, base, tok, 15000)
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(info.models);
+    }
     let proto = up
         .protocol_list()
         .first()

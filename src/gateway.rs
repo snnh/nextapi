@@ -130,6 +130,13 @@ struct CodexCtx {
     body: serde_json::Value,
 }
 
+/// Devin 渠道（kind='devin'）请求上下文：session token + CLI 形态 Connect 请求体。
+struct DevinCtx {
+    token: String,
+    /// GetChatMessageRequest 信封帧字节（`convert::build_chat_request` 产物）
+    body: bytes::Bytes,
+}
+
 /// Codex WS 执行：握手头单独构造（openai-beta 用 responses_websockets 值），
 /// 载荷补 `type=response.create`；流式返回 SSE 字节流，非流式读尽聚合。
 async fn codex_ws_exec(
@@ -1632,6 +1639,30 @@ async fn run_gateway(
                     Err(e) => codex_err = Some(e),
                 }
             }
+            // Devin 渠道（kind='devin'）：session token + devin CLI 形态 Connect 请求；
+            // 出站协议恒为 Responses（上游为 Devin Connect 协议，内部转换为
+            // Responses 事件/JSON，透传与转换路径通用）。
+            let is_devin = upstream.kind == "devin";
+            let mut devin_ctx: Option<DevinCtx> = None;
+            let mut devin_err: Option<String> = None;
+            if is_devin {
+                match upstream.api_key_plain.as_deref().map(str::trim) {
+                    Some(tok) if !tok.is_empty() => {
+                        match crate::upstream::devin::convert::build_chat_request(
+                            &outbound.body, &up_model, tok,
+                        ) {
+                            Ok(b) => {
+                                devin_ctx = Some(DevinCtx {
+                                    token: tok.to_string(),
+                                    body: b,
+                                })
+                            }
+                            Err(e) => devin_err = Some(e),
+                        }
+                    }
+                    _ => devin_err = Some("devin 渠道缺少 session token（api_key）".into()),
+                }
+            }
             // WS 可用性：codex + 非 http 传输 + 未走代理 + base_url 可转 ws(s)。
             let codex_ws_url = if is_codex
                 && codex_transport != crate::upstream::codex::Transport::Http
@@ -1642,7 +1673,40 @@ async fn run_gateway(
                 None
             };
 
-            let exec_res: Result<ExecOutcome, UpstreamError> = if let Some(e) = codex_err {
+            let exec_res: Result<ExecOutcome, UpstreamError> = if let Some(e) = devin_err {
+                Err(UpstreamError::Connect(format!("devin: {e}")))
+            } else if let Some(ctx) = devin_ctx.as_ref() {
+                // 超时语义对齐 codex：流式取 gateway.stream_timeout_secs，非流式取 per-upstream
+                let base = if upstream.base_url.trim().is_empty() {
+                    crate::upstream::devin::DEFAULT_BASE_URL
+                } else {
+                    upstream.base_url.trim()
+                };
+                if stream {
+                    crate::upstream::devin::execute_stream(
+                        &client,
+                        base,
+                        &ctx.token,
+                        ctx.body.clone(),
+                        &up_model,
+                        stream_timeout_ms,
+                    )
+                    .await
+                    .map(upstream::StreamSource::Bytes)
+                    .map(ExecOutcome::Stream)
+                } else {
+                    crate::upstream::devin::execute_nonstream(
+                        &client,
+                        base,
+                        &ctx.token,
+                        ctx.body.clone(),
+                        &up_model,
+                        upstream.timeout_ms,
+                    )
+                    .await
+                    .map(ExecOutcome::Json)
+                }
+            } else if let Some(e) = codex_err {
                 Err(UpstreamError::Connect(format!("codex oauth: {e}")))
             } else if let (Some(ctx), Some(ws_url)) = (codex_ctx.as_ref(), codex_ws_url.as_deref())
             {

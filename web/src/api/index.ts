@@ -114,6 +114,21 @@ export const upstreamApi = {
   /** Codex：手动刷新 OAuth access_token */
   refreshOAuth: (id: string) =>
     http.post<{ ok: boolean; account_id: string }>(`/api/upstreams/${id}/oauth/refresh`).then((r) => r.data),
+  /** Devin CLI PKCE：生成授权会话（无状态；verifier 由前端暂存） */
+  devinPkceStart: () =>
+    http
+      .post<{ authorize_url: string; state: string; code_verifier: string }>(
+        '/api/upstreams/devin/pkce/start',
+      )
+      .then((r) => r.data),
+  /** Devin CLI PKCE：授权码 + code_verifier 兑换 session token */
+  devinPkceExchange: (body: { code: string; code_verifier: string; base_url?: string }) =>
+    http
+      .post<{ token: string; webapp_host: string; api_url: string }>(
+        '/api/upstreams/devin/pkce/exchange',
+        body,
+      )
+      .then((r) => r.data),
   /** 手动模式：为勾选模型创建手动路由 */
   addModelRoutes: (id: string, models: string[]) =>
     http.post<ModelSyncReport>(`/api/upstreams/${id}/models/routes`, { models }).then((r) => r.data),
