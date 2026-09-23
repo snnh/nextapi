@@ -418,6 +418,45 @@ pub struct StatusInfo {
     pub models: Vec<String>,
 }
 
+/// 连通性探测 → 统一 JSON（admin 上游测试与预设一键接入共用同一形状）。
+///
+/// 无 session token（尚未授权）时返回 `ok:false` 而非报错：预设接入允许先建渠道后授权。
+pub async fn probe_status(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: Option<&str>,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    let base = if base_url.trim().is_empty() {
+        DEFAULT_BASE_URL
+    } else {
+        base_url.trim()
+    };
+    let started = std::time::Instant::now();
+    let res = match token.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(tok) => user_status(client, base, tok, timeout_ms as i32).await,
+        None => Err(UpstreamError::Status(
+            400,
+            "尚未完成 Devin 授权：请用「Devin 授权」以 Devin 账号换取会话凭证".to_string(),
+        )),
+    };
+    let latency_ms = started.elapsed().as_millis() as u64;
+    match res {
+        Ok(info) => serde_json::json!({
+            "ok": true,
+            "status": 200,
+            "latency_ms": latency_ms,
+            "account": info.account_id,
+            "email": info.email,
+            "plan": info.plan,
+            "models": info.models.len(),
+        }),
+        Err(e) => {
+            serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })
+        }
+    }
+}
+
 /// 拉登录状态与模型目录（unary）。
 pub async fn user_status(
     client: &reqwest::Client,

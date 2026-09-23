@@ -19,6 +19,12 @@
   - `POST /api/upstreams/{id}/test`：GetUserStatus 真实探测（账号/邮箱/套餐/可用模型数）；
     模型同步走模型目录并按**计划门控**过滤（Free 计划仅个别模型可用，锁定模型调用返回
     `failed_precondition/permission_denied` 并附套餐提示）。
+- **Devin 预设一键接入**：供应商预设新增 `devin`（第 13 个，`auth_kind='oauth'`）——
+  免 API Key 接入 Devin CLI OAuth 渠道：基础地址/协议（Responses 优先）预填，
+  `POST /api/presets/{name}/provision` 对该预设允许空凭证（先建渠道、凭证由授权流程后置写入，
+  存储 NULL），连通性探测复用 GetUserStatus（未授权返回「尚未完成 Devin 授权」提示而非报错）。
+  接入向导识别 OAuth 预设：以「Devin 授权」（PKCE 开始授权 → 粘贴授权码 → 兑换凭证）替代 API Key
+  输入框；未授权的渠道跳过模型发现并提示先授权。
 - **管理端登录有效期可配置**：新增热参数 `gateway.admin_login_expire_minutes`
   （分钟，1–43200，默认 1440 = 24 小时，原固定 1 小时），WebUI「设置 → 运行参数 →
   登录有效期」可改、即时生效（仅对新签发 token 生效）；登录响应新增 `expires_in`（秒）。

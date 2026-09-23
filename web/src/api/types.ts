@@ -234,6 +234,11 @@ export interface TestResp {
   status?: number
   latency_ms: number
   error?: string
+  /** Devin 渠道探测附带（GetUserStatus）：账号 / 邮箱 / 套餐 / 可用模型数 */
+  account?: string
+  email?: string
+  plan?: string
+  models?: number
 }
 
 /** 查看上游明文 API Key（管理员二次验证后，仅本次展示） */
@@ -305,6 +310,8 @@ export interface Preset {
   name: string
   display_name: string
   kind: string
+  /** 鉴权方式：api_key（默认，接入需填 Key）/ oauth（Devin：免 Key，走授权流程） */
+  auth_kind?: 'api_key' | 'oauth'
   base_url: string
   protocols: ProtocolName[]
   media_base_url: string | null
@@ -318,7 +325,8 @@ export interface Preset {
 }
 
 export interface ProvisionReq {
-  api_key: string
+  /** OAuth 预设（Devin）可省略 */
+  api_key?: string
   name?: string | null
   /** 接入域名：shared（缺省）/ unified / workspace */
   domain?: 'shared' | 'unified' | 'workspace'
