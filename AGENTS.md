@@ -70,6 +70,8 @@ src/
 │   ├── devin/       # Devin Connect 渠道：proto wire 编解码 + Responses↔Devin 转换 +
 │   │                # CLI 形态请求（工具循环三形态消息）+ PKCE 兑换 + GetUserStatus 探测
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
+├── upstream/quota.rs # 上游额度快照（codex：x-codex-* 响应头解析，网关旁路抓头 + 节流落库；
+│                    # devin：GetUserStatus 额度块）→ upstreams.extra.quota
 ├── upstream/codex.rs # Codex OAuth 渠道：auth.json 解析、ensure_token 临期刷新（single-flight
 │                     # + 轮换回写）、官方客户端指纹模拟（预设 UA/originator/会话头 + body 字段
 │                     # 补齐；extra.codex_fingerprint 可配）、传输选择（extra.codex_transport）
@@ -104,7 +106,8 @@ src/
     ├── mod.rs       # /api 路由聚合
     ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
     ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持；
-                     # codex 渠道 auth_json 创建 + /{id}/oauth/refresh 手动刷新）
+                     # codex 渠道 auth_json 创建 + /{id}/oauth/refresh 手动刷新
+                     # + /{id}/quota 额度快照读取/探测（codex 响应头 / devin GetUserStatus））
     ├── model_sync.rs # /api/upstreams/{id}/models 拉取（协议/codex 适配）+ 同步引擎
                      #（auto 全量对账仅动 managed_by='auto' 托管路由；manual 勾选创建）+ 周期任务
     ├── routes.rs    # /api/model-routes 批量替换

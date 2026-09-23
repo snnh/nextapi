@@ -185,14 +185,21 @@ async fn exec_http(
     timeout_ms: i32,
     stream_timeout_ms: i32,
     codex_aggregate: bool,
+    quota_sink: Option<&QuotaSink<'_>>,
 ) -> Result<ExecOutcome, UpstreamError> {
     if stream {
-        upstream::execute_stream(client, url, headers, body, stream_timeout_ms)
-            .await
-            .map(|r| ExecOutcome::Stream(upstream::StreamSource::Http(r)))
+        let resp = upstream::execute_stream(client, url, headers, body, stream_timeout_ms).await?;
+        // M12.1：codex 额度头旁路抓取（不影响响应流）
+        if let Some(sink) = quota_sink {
+            sink.capture(resp.headers());
+        }
+        Ok(ExecOutcome::Stream(upstream::StreamSource::Http(resp)))
     } else if codex_aggregate {
         // Codex 后端仅流式：非流式入口走流式收取 + 聚合 response.completed 帧。
         let resp = upstream::execute_stream(client, url, headers, body, timeout_ms).await?;
+        if let Some(sink) = quota_sink {
+            sink.capture(resp.headers());
+        }
         crate::upstream::codex::aggregate_stream_to_json(resp)
             .await
             .map(ExecOutcome::Json)
@@ -200,6 +207,18 @@ async fn exec_http(
         upstream::execute_nonstream(client, url, headers, body, timeout_ms)
             .await
             .map(ExecOutcome::Json)
+    }
+}
+
+/// 额度抓头回调：把 codex 响应的 `x-codex-*` 头异步写入 `upstreams.extra.quota`。
+struct QuotaSink<'a> {
+    state: &'a AppState,
+    upstream_id: uuid::Uuid,
+}
+
+impl QuotaSink<'_> {
+    fn capture(&self, headers: &reqwest::header::HeaderMap) {
+        crate::upstream::quota::capture_codex_headers(self.state, self.upstream_id, headers);
     }
 }
 
@@ -1607,6 +1626,11 @@ async fn run_gateway(
             // （恒流式 Responses）；传输可选 WS（预设 auto：WS 失败回落 HTTP）。
             // token 刷新失败 → 构造连接类错误走统一熔断/重试/故障转移路径。
             let is_codex = upstream.kind == "codex";
+            // codex 额度头抓取上下文（kind 非 codex 时不建，避免无谓开销）
+            let quota_sink = is_codex.then(|| QuotaSink {
+                state: &state,
+                upstream_id: upstream.id,
+            });
             let codex_transport = crate::upstream::codex::transport(&upstream.extra);
             let mut codex_ctx: Option<CodexCtx> = None;
             let mut codex_err: Option<String> = None;
@@ -1736,6 +1760,7 @@ async fn run_gateway(
                             upstream.timeout_ms,
                             stream_timeout_ms,
                             /*codex_aggregate*/ true,
+                            quota_sink.as_ref(),
                         )
                         .await
                     }
@@ -1751,6 +1776,7 @@ async fn run_gateway(
                     upstream.timeout_ms,
                     stream_timeout_ms,
                     /*codex_aggregate*/ true,
+                    quota_sink.as_ref(),
                 )
                 .await
             } else {
@@ -1763,6 +1789,7 @@ async fn run_gateway(
                     upstream.timeout_ms,
                     stream_timeout_ms,
                     /*codex_aggregate*/ false,
+                    None,
                 )
                 .await
             };
@@ -2371,6 +2398,11 @@ async fn openai_responses_compact(
                 (secs.saturating_mul(1000)).min(i32::MAX as u64) as i32
             }
         };
+        // codex 额度头抓取（compact 直连路径同样回带 x-codex-*）
+        let quota_sink = (upstream.kind == "codex").then(|| QuotaSink {
+            state: &state,
+            upstream_id: upstream.id,
+        });
         let mut idx: u32 = 0;
         loop {
             let exec_res: Result<ExecOutcome, UpstreamError> = if let Some(e) = &codex_err {
@@ -2385,6 +2417,7 @@ async fn openai_responses_compact(
                     upstream.timeout_ms,
                     stream_timeout_ms,
                     /*codex_aggregate*/ false,
+                    quota_sink.as_ref(),
                 )
                 .await
             };

@@ -409,13 +409,64 @@ pub fn pkce_start() -> PkceStart {
 /// Devin Web 授权入口（CLI PKCE）。
 pub const APP_AUTH_URL: &str = "https://app.devin.ai/auth/cli/continue";
 
-/// GetUserStatus 结果（连通性 + 模型目录）。
+/// GetUserStatus 结果（连通性 + 模型目录 + 额度）。
+#[derive(Debug, Clone)]
 pub struct StatusInfo {
     pub account_id: String,
     pub email: String,
     pub plan: String,
     /// 可用模型 uid（已按计划门控过滤：带 f33 门控的条目剔除）。
     pub models: Vec<String>,
+    /// 额度块（plan 块 f13 携带；缺失 → None）
+    pub quota: Option<QuotaInfo>,
+}
+
+/// 额度信息（GetUserStatus 的 plan 块，字段号实测）。
+///
+/// - 日/周额度：`f13.f9` / `f13.f8`（实测 500 / 2500，与官方文档「日额度大于周额度
+///   的 1/7」一致）；
+/// - 百分比对：`f13.f14` / `f13.f15`（实测 99 / 100，即额度用量百分数）；
+/// - 重置时刻：`f13.f17`（次日 08:00 UTC ≈ 太平洋日历日零点）/ `f13.f18`（次周日同时刻）。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct QuotaInfo {
+    pub weekly_quota: i64,
+    pub daily_quota: i64,
+    pub percent_value: i64,
+    pub percent_total: i64,
+    pub daily_reset_at: i64,
+    pub weekly_reset_at: i64,
+}
+
+/// StatusInfo → 额度快照 JSON（与 codex 快照同槽位：`upstreams.extra.quota`）。
+///
+/// `percent_value/percent_total` 原样保留（上游语义：额度百分数对），前端按「xx/100」展示。
+pub fn quota_snapshot(info: &StatusInfo) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    out.insert("kind".into(), serde_json::json!("devin"));
+    out.insert(
+        "captured_at".into(),
+        serde_json::json!(chrono::Utc::now().timestamp()),
+    );
+    out.insert("source".into(), serde_json::json!("probe"));
+    out.insert("plan".into(), serde_json::json!(info.plan));
+    out.insert("account".into(), serde_json::json!(info.account_id));
+    out.insert("email".into(), serde_json::json!(info.email));
+    out.insert(
+        "available_models".into(),
+        serde_json::json!(info.models.len()),
+    );
+    if let Some(q) = info.quota {
+        out.insert("daily_quota".into(), serde_json::json!(q.daily_quota));
+        out.insert("weekly_quota".into(), serde_json::json!(q.weekly_quota));
+        out.insert("percent_value".into(), serde_json::json!(q.percent_value));
+        out.insert("percent_total".into(), serde_json::json!(q.percent_total));
+        out.insert("daily_reset_at".into(), serde_json::json!(q.daily_reset_at));
+        out.insert(
+            "weekly_reset_at".into(),
+            serde_json::json!(q.weekly_reset_at),
+        );
+    }
+    serde_json::Value::Object(out)
 }
 
 /// 连通性探测 → 统一 JSON（admin 上游测试与预设一键接入共用同一形状）。
@@ -450,6 +501,14 @@ pub async fn probe_status(
             "email": info.email,
             "plan": info.plan,
             "models": info.models.len(),
+            "quota": info.quota.map(|q| serde_json::json!({
+                "daily_quota": q.daily_quota,
+                "weekly_quota": q.weekly_quota,
+                "percent_value": q.percent_value,
+                "percent_total": q.percent_total,
+                "daily_reset_at": q.daily_reset_at,
+                "weekly_reset_at": q.weekly_reset_at,
+            })),
         }),
         Err(e) => {
             serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })
@@ -504,6 +563,25 @@ pub async fn user_status(
         })
         .unwrap_or_default();
 
+    // plan 块（f13）里的额度字段：f8 周额度 / f9 日额度 / f14-f15 百分比对 /
+    // f17 每日重置 / f18 每周重置（epoch 秒）
+    let quota = proto::get(&uf, 13)
+        .and_then(|v| v.as_bytes())
+        .and_then(|b| proto::decode(b).ok())
+        .and_then(|pf| {
+            let num = |f: u32| proto::get(&pf, f).and_then(|v| v.as_uint()).unwrap_or(0) as i64;
+            let q = QuotaInfo {
+                weekly_quota: num(8),
+                daily_quota: num(9),
+                percent_value: num(14),
+                percent_total: num(15),
+                daily_reset_at: num(17),
+                weekly_reset_at: num(18),
+            };
+            // 全 0 → 上游未给额度块
+            (q != QuotaInfo::default()).then_some(q)
+        });
+
     let mut models = Vec::new();
     // f33 模型目录包装 { f1: repeated 条目(251) , f2: 展示分组, f3: 版本 }；
     // 条目 { f22: model_uid, f33: 计划门控("Upgrade to Pro…") } —— 带门控的不可用
@@ -527,6 +605,7 @@ pub async fn user_status(
         email: proto::get(&uf, 7).and_then(|v| v.as_str()).unwrap_or("").to_string(),
         plan,
         models,
+        quota,
     })
 }
 

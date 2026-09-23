@@ -19,6 +19,19 @@
   - `POST /api/upstreams/{id}/test`：GetUserStatus 真实探测（账号/邮箱/套餐/可用模型数）；
     模型同步走模型目录并按**计划门控**过滤（Free 计划仅个别模型可用，锁定模型调用返回
     `failed_precondition/permission_denied` 并附套餐提示）。
+- **上游额度探测（Codex / Devin）**：管理端新增 `GET/POST /api/upstreams/{id}/quota` +
+  上游列表「额度」弹窗，展示各渠道额度窗口与重置时间。
+  - **Codex**：ChatGPT 订阅额度（官方 CLI `/status` 同源）——读取响应头
+    `x-codex-plan-type` / `x-codex-active-limit` / `x-codex-{primary,secondary}-used-percent` /
+    `-window-minutes` / `-reset-at` / `-reset-after-seconds` / `-primary-over-secondary-limit-percent` /
+    `x-codex-credits-{has-credits,balance,unlimited}`。**真实流量旁路自动抓头**
+    （每次请求后台落库，内容未变且 60s 内不重复写），也可点「立即探测」发一次极小请求即时取
+    （5 分钟内已有快照则直接复用，不消耗额度）；429 等错误响应的额度头同样被采集。
+  - **Devin**：`GetUserStatus` plan 块的额度字段（实测）：日额度 `f9` / 周额度 `f8` /
+    百分数对 `f14`-`f15` / 每日重置 `f17` / 每周重置 `f18`（08:00 UTC ≈ 太平洋日历日零点），
+    附账号、套餐与可用模型数；探测不消耗额度。
+  - 快照存 `upstreams.extra.quota`（含 `source=live|probe` 与采集时间），前端按渠道渲染窗口、
+    百分比、重置时间与积分状态。
 - **Devin 预设一键接入**：供应商预设新增 `devin`（第 13 个，`auth_kind='oauth'`）——
   免 API Key 接入 Devin CLI OAuth 渠道：基础地址/协议（Responses 优先）预填，
   `POST /api/presets/{name}/provision` 对该预设允许空凭证（先建渠道、凭证由授权流程后置写入，
