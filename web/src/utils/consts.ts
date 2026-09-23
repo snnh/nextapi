@@ -96,6 +96,7 @@ export const UPSTREAM_KINDS = [
   'zenmux',
   'deepseek',
   'codex',
+  'devin',
   'custom',
 ]
 

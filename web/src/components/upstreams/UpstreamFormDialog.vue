@@ -204,6 +204,43 @@
         />
       </el-form-item>
 
+      <!-- Devin 渠道：CLI PKCE 无头授权 → session token -->
+      <el-form-item v-if="isDevin" label="Devin 授权">
+        <div class="api-key-block">
+          <div class="hint">
+            凭证为 devin CLI 的 session token（<span class="mono">devin-session-token$…</span>）：
+            点击「开始授权」在浏览器登录 Devin 账号完成授权，把页面给出的授权码粘贴回来兑换，
+            token 自动填入上方 API Key（保存后加密存储）。token 过期后重新授权即可（本期不自动刷新）。
+          </div>
+          <div class="oauth-state">
+            <el-button size="small" :loading="devinAuthLoading" @click="devinStartAuth">
+              开始授权
+            </el-button>
+            <el-input
+              v-model="devinCode"
+              size="small"
+              class="devin-code"
+              placeholder="粘贴授权码（code）"
+              clearable
+            />
+            <el-button
+              size="small"
+              type="primary"
+              :loading="devinExchangeLoading"
+              :disabled="!devinCode.trim()"
+              @click="devinExchange"
+            >
+              兑换并填入
+            </el-button>
+          </div>
+          <div class="hint">
+            也可手动粘贴本机 devin CLI 的
+            <span class="mono">~/.local/share/devin/credentials.toml</span> 中的
+            <span class="mono">windsurf_api_key</span> 到上方 API Key。
+          </div>
+        </div>
+      </el-form-item>
+
       <el-form-item label="协议" prop="protocols">
         <el-select
           v-model="form.protocols"
@@ -530,6 +567,8 @@ const IMAGE_PROTOCOLS = PROTOCOL_OPTIONS.filter((o) => o.value.startsWith('image
 
 /** Codex 渠道默认值（与后端 upstream/codex.rs 常量一致） */
 const CODEX_DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex'
+/** Devin 渠道默认值（与后端 upstream/devin/mod.rs 常量一致） */
+const DEVIN_DEFAULT_BASE_URL = 'https://server.codeium.com'
 const CODEX_DEFAULT_USER_AGENT =
   'codex-tui/0.153.4 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.153.4)'
 
@@ -559,6 +598,7 @@ const MODEL_TAG: Record<UpstreamModelItem['status'], 'success' | 'info' | 'warni
 const KIND_HINTS: Record<string, string> = {
   openai_compatible: 'OpenAI 兼容接口（多数国产 / 聚合渠道）',
   codex: 'ChatGPT Codex OAuth 渠道（粘贴 auth.json）',
+  devin: 'Devin OAuth 渠道（CLI PKCE 授权 → Responses 接口）',
   custom: '自定义类型标识',
 }
 
@@ -639,6 +679,56 @@ const isCodex = computed(() => form.kind === 'codex')
 const oauthRefreshing = ref(false)
 /** codex 预填提示每次弹窗只提示一次 */
 const codexTipShown = ref(false)
+
+// ---- Devin 渠道：CLI PKCE 无头授权（verifier 仅暂存内存，兑换后即弃） ----
+const isDevin = computed(() => form.kind === 'devin')
+const devinPkce = ref<{ state: string; code_verifier: string } | null>(null)
+const devinCode = ref('')
+const devinAuthLoading = ref(false)
+const devinExchangeLoading = ref(false)
+/** devin 预填提示每次弹窗只提示一次 */
+const devinTipShown = ref(false)
+
+/** 第一步：生成 PKCE 会话并在新窗口打开 Devin 授权页 */
+async function devinStartAuth() {
+  devinAuthLoading.value = true
+  try {
+    const r = await upstreamApi.devinPkceStart()
+    devinPkce.value = { state: r.state, code_verifier: r.code_verifier }
+    window.open(r.authorize_url, '_blank')
+    ElMessage.info('已在新窗口打开 Devin 授权页；完成授权后把页面给出的授权码粘贴回来兑换')
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    devinAuthLoading.value = false
+  }
+}
+
+/** 第二步：授权码 + verifier 兑换 session token 并填入 API Key */
+async function devinExchange() {
+  if (!devinPkce.value) {
+    ElMessage.warning('请先点击「开始授权」')
+    return
+  }
+  const code = devinCode.value.trim()
+  if (!code) return
+  devinExchangeLoading.value = true
+  try {
+    const r = await upstreamApi.devinPkceExchange({
+      code,
+      code_verifier: devinPkce.value.code_verifier,
+      base_url: form.base_url.trim() || undefined,
+    })
+    form.api_key = r.token
+    devinCode.value = ''
+    devinPkce.value = null
+    ElMessage.success('兑换成功，session token 已填入 API Key（保存后加密存储）')
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    devinExchangeLoading.value = false
+  }
+}
 
 /** auth.json 简单预检：非空但无法解析为含 tokens 的 JSON 时提示（不阻断提交） */
 const authJsonInvalid = computed(() => {
@@ -1036,6 +1126,22 @@ watch(
       if (prefilled && !codexTipShown.value) {
         codexTipShown.value = true
         ElMessage.info('已预填 Codex 官方后端地址与 Responses 协议，可按需修改')
+      }
+    }
+    // 切到 devin：预填官方基址与 Responses 协议（openai_responses 优先）
+    if (k === 'devin') {
+      let prefilled = false
+      if (!form.base_url.trim() || form.base_url === DEVIN_DEFAULT_BASE_URL) {
+        if (form.base_url !== DEVIN_DEFAULT_BASE_URL) prefilled = true
+        form.base_url = DEVIN_DEFAULT_BASE_URL
+      }
+      if (!form.protocols.length) {
+        form.protocols = ['openai_responses']
+        prefilled = true
+      }
+      if (prefilled && !devinTipShown.value) {
+        devinTipShown.value = true
+        ElMessage.info('已预填 Devin 官方基址与 Responses 协议，可按需修改')
       }
     }
   },

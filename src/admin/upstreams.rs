@@ -36,8 +36,61 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", get(list_upstreams).post(create_upstream))
         .route("/{id}", put(update_upstream).delete(delete_upstream))
         .route("/{id}/test", post(test_upstream))
+        .route("/devin/pkce/start", post(devin_pkce_start))
+        .route("/devin/pkce/exchange", post(devin_pkce_exchange))
         .route("/{id}/oauth/refresh", post(refresh_oauth))
         .route("/{id}/reveal-key", post(reveal_upstream_key))
+}
+
+/// POST /devin/pkce/start：生成 Devin CLI PKCE 授权会话（无状态）。
+///
+/// 响应携带授权 URL（浏览器打开完成授权）与 code_verifier（前端暂存，兑换时回传）。
+async fn devin_pkce_start() -> Json<serde_json::Value> {
+    let s = crate::upstream::devin::pkce_start();
+    Json(serde_json::json!({
+        "authorize_url": s.authorize_url,
+        "state": s.state,
+        "code_verifier": s.code_verifier,
+    }))
+}
+
+/// POST /devin/pkce/exchange：授权码 + code_verifier → session token。
+///
+/// token 即上游凭证（`devin-session-token$…`），由前端填入 api_key 字段加密保存；
+/// 本接口不落库、不记日志。token 过期处理本期不做（过期报错）。
+#[derive(Debug, Deserialize)]
+struct DevinPkceExchangeReq {
+    code: String,
+    code_verifier: String,
+    /// 可选自定义基址（默认官方）
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+async fn devin_pkce_exchange(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DevinPkceExchangeReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let code = body.code.trim();
+    let verifier = body.code_verifier.trim();
+    if code.is_empty() || verifier.is_empty() {
+        return Err(ApiError::bad_request("code 与 code_verifier 均不能为空"));
+    }
+    let base = body
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(crate::upstream::devin::DEFAULT_BASE_URL);
+    let client = state.client_pools.direct_client();
+    let r = crate::upstream::devin::exchange_pkce(&client, base, code, verifier, 15000)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "token": r.token,
+        "webapp_host": r.webapp_host,
+        "api_url": r.api_url,
+    })))
 }
 
 /// upstreams 表行（含加密列；对外绝不输出 api_key_enc）。
@@ -250,6 +303,15 @@ async fn create_upstream(
     if is_codex && body.protocols.is_none() {
         body.protocols = Some(vec!["openai_responses".to_string()]);
     }
+    // Devin 渠道（kind='devin'）：默认官方基址 + Responses 入口；
+    // 凭证为 devin CLI 的 session token（api_key 加密存储，PKCE 兑换后粘贴）
+    let is_devin = body.kind.as_deref() == Some("devin");
+    if is_devin && body.base_url.trim().is_empty() {
+        body.base_url = crate::upstream::devin::DEFAULT_BASE_URL.to_string();
+    }
+    if is_devin && body.protocols.is_none() {
+        body.protocols = Some(vec!["openai_responses".to_string()]);
+    }
 
     validate_upstream(
         &body.name,
@@ -343,7 +405,14 @@ async fn update_upstream(
 
     let name = body.name.unwrap_or(row.name.clone());
     let kind = body.kind.unwrap_or(row.kind.clone());
-    let base_url = body.base_url.unwrap_or(row.base_url.clone());
+    let base_url = {
+        let b = body.base_url.unwrap_or(row.base_url.clone());
+        if kind == "devin" && b.trim().is_empty() {
+            crate::upstream::devin::DEFAULT_BASE_URL.to_string()
+        } else {
+            b
+        }
+    };
     let protocols = body.protocols.unwrap_or_else(|| row.protocols.clone());
     let enabled = body.enabled.unwrap_or(row.enabled);
     let timeout_ms = body.timeout_ms.unwrap_or(row.timeout_ms);
@@ -519,6 +588,34 @@ async fn test_upstream(
         state
             .client_pools
             .client_for(&up, &snap, &state.hot.load().proxy.default_proxy_id);
+
+    // Devin 渠道：GetUserStatus 真实探测（返回账号/套餐/可用模型数）
+    if up.kind == "devin" {
+        let started = std::time::Instant::now();
+        let res = match up.api_key_plain.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            Some(tok) => {
+                let base = if up.base_url.trim().is_empty() {
+                    crate::upstream::devin::DEFAULT_BASE_URL
+                } else {
+                    up.base_url.trim()
+                };
+                crate::upstream::devin::user_status(&client, base, tok, 10000).await
+            }
+            None => Err(crate::upstream::UpstreamError::Status(
+                400,
+                "缺少 session token（api_key）".to_string(),
+            )),
+        };
+        let latency_ms = started.elapsed().as_millis() as u64;
+        return Ok(Json(match res {
+            Ok(info) => serde_json::json!({
+                "ok": true, "status": 200, "latency_ms": latency_ms,
+                "account": info.account_id, "email": info.email, "plan": info.plan,
+                "models": info.models.len(),
+            }),
+            Err(e) => serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
+        }));
+    }
     let proto = up
         .protocol_list()
         .first()

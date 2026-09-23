@@ -3,6 +3,22 @@
 ## [未发布]
 
 ### Added
+- **Devin OAuth 渠道（kind='devin'）**：以 devin CLI 形式接入上游 Devin Connect 协议
+  （`GetChatMessage`，protobuf over HTTP + 5 字节信封帧），对外转发为标准接口
+  （OpenAI Responses 优先；其余三协议经 IR 互通）。协议字段号全部一手逆向 + 真实流量实证
+  （含官方 CLI exec 工具循环双向捕获），端到端实测：流式/非流式/工具调用/工具循环多轮/
+  Chat 入口转换均通过。
+  - 凭证为 devin CLI 的 session token（`devin-session-token$…`，存 api_key 加密 + 掩码）；
+    管理后台内置 **CLI PKCE 无头授权**（`POST /api/upstreams/devin/pkce/start` → 浏览器授权 →
+    `…/pkce/exchange` 兑换 token 自动填表）。token 过期本期不自动刷新（过期报错 + 提示）。
+  - 转换：Responses `instructions/input/tools` → CLI 形态请求（Metadata 指纹 / 头提示词 /
+    消息三形态：user·assistant(f6 工具调用+f11 文本)·tool 结果(f3+f7) / 采样配置 / 工具定义 /
+    轨迹与会话代号）；响应帧 → 标准 Responses SSE 事件或非流式 JSON。
+  - usage 口径实测映射：Devin 未缓存输入/缓存命中/输出 → 标准 `input_tokens(含缓存)/
+    cached_tokens/output_tokens`（计价/计量口径兼容既有 P0 归一）。
+  - `POST /api/upstreams/{id}/test`：GetUserStatus 真实探测（账号/邮箱/套餐/可用模型数）；
+    模型同步走模型目录并按**计划门控**过滤（Free 计划仅个别模型可用，锁定模型调用返回
+    `failed_precondition/permission_denied` 并附套餐提示）。
 - **管理端登录有效期可配置**：新增热参数 `gateway.admin_login_expire_minutes`
   （分钟，1–43200，默认 1440 = 24 小时，原固定 1 小时），WebUI「设置 → 运行参数 →
   登录有效期」可改、即时生效（仅对新签发 token 生效）；登录响应新增 `expires_in`（秒）。
