@@ -122,6 +122,8 @@ pub struct GatewayCfg {
     pub log_debug_ttl_minutes: u64,
     /// 登录接口防爆破限速（次/分钟）
     pub admin_login_rate_limit_per_min: u32,
+    /// 管理端登录 JWT 有效期（分钟，1–43200）；仅影响新签发 token
+    pub admin_login_expire_minutes: u64,
     /// 转 Anthropic 缺省 max_tokens
     pub anthropic_default_max_tokens: u64,
     pub batch_insert_interval_ms: u64,
@@ -154,6 +156,7 @@ impl Default for GatewayCfg {
             log_aggregate_retention_days: 365,
             log_debug_ttl_minutes: 60,
             admin_login_rate_limit_per_min: 10,
+            admin_login_expire_minutes: 1440,
             anthropic_default_max_tokens: 65536,
             batch_insert_interval_ms: 500,
             quota_check_cache_secs: 3,

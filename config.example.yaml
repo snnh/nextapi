@@ -60,6 +60,8 @@ gateway:
   log_aggregate_retention_days: 365 # 汇总表保留建议值，不自动删除（0=永久）
   log_debug_ttl_minutes: 60         # 按 Key debug 模式最长开启时长（分钟）
   admin_login_rate_limit_per_min: 10 # 登录接口防爆破限速（次/分钟）
+  admin_login_expire_minutes: 1440  # 管理端登录 JWT 有效期（分钟，1–43200）。到期需重新登录
+                                    # （含 TOTP）。仅对新签发 token 生效，已发 token 到期时间不变。
   anthropic_default_max_tokens: 65536 # 转 Anthropic 缺省 max_tokens（64k）
   batch_insert_interval_ms: 500     # 批量写库批次间隔
   quota_check_cache_secs: 3         # 用量上限聚合结果缓存秒数

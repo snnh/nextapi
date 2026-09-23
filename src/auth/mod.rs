@@ -36,8 +36,8 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-/// 短期 access token 有效期（秒）：1 小时。
-pub const TOKEN_TTL_SECS: u64 = 3600;
+/// 登录 JWT 有效期上限（分钟）：30 天（下限 1 分钟）。
+pub const MAX_LOGIN_EXPIRE_MINUTES: u64 = 43200;
 
 /// 登录防爆破滑动窗口（秒）：1 分钟。
 const RATE_WINDOW_SECS: u64 = 60;
@@ -67,23 +67,25 @@ struct Claims {
 #[derive(Clone)]
 pub struct JwtService {
     secret: String,
-    ttl_secs: u64,
 }
 
 impl JwtService {
     pub fn new(secret: String) -> Self {
-        Self {
-            secret,
-            ttl_secs: TOKEN_TTL_SECS,
-        }
+        Self { secret }
     }
 
-    /// 签发管理员 token（HS256）。
-    pub fn issue(&self, username: &str, session_version: i32) -> anyhow::Result<String> {
+    /// 签发管理员 token（HS256）。有效期由调用方传入（热参数
+    /// `gateway.admin_login_expire_minutes`，clamp 1–43200 分钟后换算秒）。
+    pub fn issue(
+        &self,
+        username: &str,
+        session_version: i32,
+        ttl_secs: u64,
+    ) -> anyhow::Result<String> {
         let now = Utc::now().timestamp().max(0) as usize;
         let claims = Claims {
             sub: username.to_string(),
-            exp: now + self.ttl_secs as usize,
+            exp: now + ttl_secs as usize,
             iat: now,
             session_version,
         };
@@ -261,10 +263,17 @@ async fn login(
         }
     }
 
-    // 4. 签发 JWT，写登录成功审计
+    // 4. 签发 JWT（有效期取热参数，UI 可改、即时生效），写登录成功审计
+    let ttl_secs = state
+        .hot
+        .load()
+        .gateway
+        .admin_login_expire_minutes
+        .clamp(1, MAX_LOGIN_EXPIRE_MINUTES)
+        * 60;
     let token = state
         .jwt
-        .issue(&body.username, session_version)
+        .issue(&body.username, session_version, ttl_secs)
         .map_err(ApiError::internal)?;
     audit(
         &state,
@@ -277,7 +286,7 @@ async fn login(
     )
     .await?;
     Ok(Json(
-        serde_json::json!({ "token": token, "username": body.username }),
+        serde_json::json!({ "token": token, "username": body.username, "expires_in": ttl_secs }),
     ))
 }
 
@@ -1260,10 +1269,10 @@ mod tests {
     #[test]
     fn jwt_roundtrip() {
         let svc = JwtService::new("test-secret".into());
-        let token = svc.issue("admin", 0).unwrap();
+        let token = svc.issue("admin", 0, 3600).unwrap();
         assert_eq!(svc.verify(&token).unwrap(), "admin");
         assert_eq!(svc.verify_claims(&token).unwrap().session_version, 0);
-        let newer = svc.issue("admin", 1).unwrap();
+        let newer = svc.issue("admin", 1, 3600).unwrap();
         assert_eq!(svc.verify_claims(&newer).unwrap().session_version, 1);
         assert_ne!(token, newer);
         // 错误密钥校验失败
