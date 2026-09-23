@@ -35,6 +35,8 @@ pub struct AppState {
     pub client_pools: ClientPools,
     /// Codex token 刷新 single-flight 锁表（per-upstream）
     pub codex_locks: crate::upstream::codex::CodexLockTable,
+    /// 额度快照写入节流表（per-upstream：最近写入时间 + 内容指纹）
+    pub quota_last: crate::upstream::quota::QuotaThrottle,
     /// 最近一次加载的 YAML 配置（供 /api/config 导出）
     pub file_config: std::sync::RwLock<ConfigFile>,
     pub config_path: PathBuf,

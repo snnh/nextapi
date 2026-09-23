@@ -180,6 +180,7 @@ async fn main() -> anyhow::Result<()> {
         sticky: routing::StickyMap::default(),
         client_pools: upstream::ClientPools::new(),
         codex_locks: std::sync::Mutex::new(std::collections::HashMap::new()),
+        quota_last: std::sync::Mutex::new(std::collections::HashMap::new()),
         file_config: std::sync::RwLock::new(cfg.clone()),
         config_path: config_path.clone().into(),
         crypto,

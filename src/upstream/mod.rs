@@ -7,6 +7,7 @@
 pub mod codex;
 pub mod codex_ws;
 pub mod devin;
+pub mod quota;
 pub mod usage;
 
 use bytes::Bytes;

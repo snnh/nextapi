@@ -177,6 +177,9 @@
                     查看 Key
                   </el-dropdown-item>
                   <el-dropdown-item command="test">连通测试</el-dropdown-item>
+                  <el-dropdown-item v-if="quotaSupported(row)" command="quota">
+                    额度
+                  </el-dropdown-item>
                   <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -188,6 +191,9 @@
               </el-button>
               <el-button size="small" :loading="testingId === row.id" @click="testUpstream(row)">
                 连通测试
+              </el-button>
+              <el-button v-if="quotaSupported(row)" size="small" @click="openQuota(row)">
+                额度
               </el-button>
               <el-button
                 size="small"
@@ -219,6 +225,9 @@
       @saved="loadUpstreams"
       @goto-routes="goConfigureRoutes"
     />
+
+    <!-- 额度探测（codex / devin） -->
+    <QuotaDialog v-model="quotaVisible" :row="quotaRow" />
 
     <!-- 查看明文 API Key（安全验证） -->
     <el-dialog
@@ -304,6 +313,7 @@ import { fmtTime } from '@/utils/format'
 import type { Preset, ProxyOut, UpstreamIn, UpstreamOut } from '@/api/types'
 import UpstreamFormDialog from '@/components/upstreams/UpstreamFormDialog.vue'
 import ProvisionWizard from '@/components/upstreams/ProvisionWizard.vue'
+import QuotaDialog from '@/components/upstreams/QuotaDialog.vue'
 
 const DISABLED_BY_LABELS: Record<string, string> = {
   manual: '手动禁用',
@@ -377,7 +387,22 @@ function onRowAction(command: string, row: UpstreamOut) {
   if (command === 'edit') openEdit(row)
   else if (command === 'reveal') openReveal(row)
   else if (command === 'test') testUpstream(row)
+  else if (command === 'quota') openQuota(row)
   else if (command === 'delete') removeUpstream(row)
+}
+
+// —— 额度探测（codex：响应头；devin：GetUserStatus）——
+const quotaVisible = ref(false)
+const quotaRow = ref<UpstreamOut | null>(null)
+
+/** 支持额度探测的渠道（与后端 quota_probe 的 supports_quota 同口径） */
+function quotaSupported(row: UpstreamOut): boolean {
+  return row.kind === 'codex' || row.kind === 'devin'
+}
+
+function openQuota(row: UpstreamOut) {
+  quotaRow.value = row
+  quotaVisible.value = true
 }
 
 /** 能力矩阵限制标签（M10.3）：显式「不支持」的能力 + 最大上下文。 */

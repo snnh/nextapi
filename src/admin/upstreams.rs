@@ -36,6 +36,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", get(list_upstreams).post(create_upstream))
         .route("/{id}", put(update_upstream).delete(delete_upstream))
         .route("/{id}/test", post(test_upstream))
+        .route("/{id}/quota", get(quota_get).post(quota_probe))
         .route("/devin/pkce/start", post(devin_pkce_start))
         .route("/devin/pkce/exchange", post(devin_pkce_exchange))
         .route("/{id}/oauth/refresh", post(refresh_oauth))
@@ -574,6 +575,211 @@ async fn delete_upstream(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// codex 额度探测的缓存有效期（秒）：期内直接复用快照，不再发上游请求（省额度）。
+const QUOTA_CACHE_SECS: i64 = 300;
+
+/// GET /{id}/quota：最近一次额度快照（真实流量旁路抓取或上次探测结果）。
+async fn quota_get(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminUsername,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let snap = state.cache.snapshot();
+    let up = snap.upstreams.get(&id).cloned().ok_or(ApiError::NotFound)?;
+    let quota = crate::upstream::quota::load(&state.db, id).await;
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "kind": up.kind,
+        "supported": supports_quota(&up.kind),
+        "quota": quota,
+    })))
+}
+
+/// POST /{id}/quota：主动探测上游额度。
+///
+/// - `codex`：发一次极小 Responses 请求（模型取 probe_model → 模型缓存首个 → 官方默认），
+///   从响应头解析 `x-codex-*`（ChatGPT 订阅额度：5h/周窗口已用百分比 + 重置时间 + 积分）；
+///   5 分钟内的既有快照直接复用（`probed=false`），避免无谓消耗。
+/// - `devin`：`GetUserStatus` 的 plan 块（日/周额度 + 百分数 + 重置时刻 + 可用模型数）。
+///
+/// 失败一律返回 `ok:false` + error（HTTP 200，与 /test 同风格），不打断前端。
+async fn quota_probe(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminUsername,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let snap = state.cache.snapshot();
+    let up = snap.upstreams.get(&id).cloned().ok_or(ApiError::NotFound)?;
+    let client =
+        state
+            .client_pools
+            .client_for(&up, &snap, &state.hot.load().proxy.default_proxy_id);
+    let cached = crate::upstream::quota::load(&state.db, id).await;
+    let started = std::time::Instant::now();
+
+    if !supports_quota(&up.kind) {
+        return Err(ApiError::bad_request(
+            "该渠道不支持额度探测（当前支持 codex / devin）",
+        ));
+    }
+
+    // codex：新鲜快照直接复用（不消耗额度）
+    if up.kind == "codex" {
+        if let Some(c) = cached.as_ref() {
+            if crate::upstream::quota::is_fresh(c, QUOTA_CACHE_SECS) {
+                return Ok(Json(serde_json::json!({
+                    "ok": true, "probed": false, "cached": true, "latency_ms": 0, "quota": c,
+                })));
+            }
+        }
+        let (token, account) = match crate::upstream::codex::ensure_token(&state, &up).await {
+            Ok(t) => t,
+            Err(e) => {
+                return Ok(Json(serde_json::json!({
+                    "ok": false, "probed": true, "latency_ms": started.elapsed().as_millis() as u64,
+                    "error": format!("codex oauth: {e}"), "quota": cached,
+                })))
+            }
+        };
+        let sim = crate::upstream::codex::sim_config(&up.extra);
+        let ident = crate::upstream::codex::Identity::resolve(
+            None,
+            up.id,
+            "quota-probe",
+            chrono::Utc::now().timestamp_millis(),
+            &sim,
+        );
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+        crate::upstream::codex::apply_headers(&mut headers, &token, &account, &sim, &ident);
+        // 极小请求：一句话输入 + 极小输出上限（只为拿响应头）
+        let body = crate::upstream::codex::prepare_body(
+            &serde_json::json!({
+                "model": quota_probe_model(&up),
+                "instructions": "Reply with OK.",
+                "input": [{
+                    "type": "message", "role": "user",
+                    "content": [{ "type": "input_text", "text": "ping" }],
+                }],
+                "stream": true,
+                "store": false,
+                "max_output_tokens": 16,
+            }),
+            &ident,
+            &sim,
+        );
+        let url = format!(
+            "{}{}",
+            up.base_url_for(Protocol::OpenaiResponses).trim_end_matches('/'),
+            "/responses"
+        );
+        let resp = match client
+            .post(&url)
+            .headers(headers)
+            .json(&body)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(Json(serde_json::json!({
+                    "ok": false, "probed": true,
+                    "latency_ms": started.elapsed().as_millis() as u64,
+                    "error": e.to_string(), "quota": cached,
+                })))
+            }
+        };
+        let status = resp.status().as_u16();
+        // 只需响应头（429 等错误响应同样带额度头）；body 不读，直接丢弃
+        let fresh = crate::upstream::quota::snapshot_from_codex_headers(resp.headers(), "probe");
+        drop(resp);
+        let latency_ms = started.elapsed().as_millis() as u64;
+        return Ok(Json(match fresh {
+            Some(s) => {
+                crate::upstream::quota::store(&state.db, id, &s).await;
+                serde_json::json!({
+                    "ok": true, "probed": true, "status": status,
+                    "latency_ms": latency_ms, "quota": s,
+                })
+            }
+            None => serde_json::json!({
+                "ok": false, "probed": true, "status": status, "latency_ms": latency_ms,
+                "error": "上游未返回 x-codex-* 额度头（可能非 ChatGPT 订阅账号，或端点不支持）",
+                "quota": cached,
+            }),
+        }));
+    }
+
+    // devin：GetUserStatus 读取额度块
+    let token = up
+        .api_key_plain
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let Some(tok) = token else {
+        return Ok(Json(serde_json::json!({
+            "ok": false, "probed": true, "latency_ms": 0,
+            "error": "尚未完成 Devin 授权：请先兑换 session token", "quota": cached,
+        })));
+    };
+    let base = if up.base_url.trim().is_empty() {
+        crate::upstream::devin::DEFAULT_BASE_URL
+    } else {
+        up.base_url.trim()
+    };
+    match crate::upstream::devin::user_status(&client, base, tok, 10_000).await {
+        Ok(info) => {
+            let s = crate::upstream::devin::quota_snapshot(&info);
+            crate::upstream::quota::store(&state.db, id, &s).await;
+            Ok(Json(serde_json::json!({
+                "ok": true, "probed": true, "status": 200,
+                "latency_ms": started.elapsed().as_millis() as u64, "quota": s,
+            })))
+        }
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false, "probed": true,
+            "latency_ms": started.elapsed().as_millis() as u64,
+            "error": e.to_string(), "quota": cached,
+        }))),
+    }
+}
+
+/// 渠道是否支持额度探测（codex：响应头；devin：GetUserStatus）。可单测。
+fn supports_quota(kind: &str) -> bool {
+    matches!(kind, "codex" | "devin")
+}
+
+/// codex 探测模型：probe_model → 模型缓存首个 → 官方默认（探测只为取额度头）。
+fn quota_probe_model(up: &crate::entities::UpstreamRow) -> String {
+    if let Some(m) = up
+        .probe_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        return m.to_string();
+    }
+    if let Some(m) = up
+        .models_cache
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| {
+            v.get("name")
+                .or_else(|| v.get("id"))
+                .and_then(|x| x.as_str())
+        })
+    {
+        if !m.trim().is_empty() {
+            return m.to_string();
+        }
+    }
+    "gpt-5.1-codex-mini".to_string()
+}
+
 /// POST /{id}/test：真实连通性测试（使用快照中解密后的 api_key_plain 加鉴权头）。
 async fn test_upstream(
     State(state): State<Arc<AppState>>,
@@ -916,6 +1122,54 @@ async fn fetch_upstream(state: &AppState, id: Uuid) -> ApiResult<UpstreamDbRow> 
 
 #[cfg(test)]
 mod tests {
+    use super::{quota_probe_model, supports_quota};
+
+    #[test]
+    fn quota_supported_kinds() {
+        assert!(supports_quota("codex"));
+        assert!(supports_quota("devin"));
+        assert!(!supports_quota("openai"));
+        assert!(!supports_quota("aliyun"));
+    }
+
+    #[test]
+    fn quota_probe_model_precedence() {
+        let mut up = crate::entities::UpstreamRow {
+            id: Uuid::new_v4(),
+            name: "up".into(),
+            kind: "codex".into(),
+            base_url: "https://chatgpt.com/backend-api/codex".into(),
+            api_key_plain: None,
+            oauth_plain: None,
+            protocols: vec!["openai_responses".into()],
+            enabled: true,
+            timeout_ms: 300_000,
+            breaker_threshold: 5,
+            probe_model: None,
+            consecutive_failures: 0,
+            disabled_by: None,
+            cooldown_until: None,
+            use_proxy: false,
+            proxy_id: None,
+            extra: serde_json::json!({}),
+            model_sync: "manual".into(),
+            model_exclude: vec![],
+            models_cache: serde_json::json!([{"name": "cached-model"}]),
+            models_fetched_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        // 缓存首个模型优先于官方默认
+        assert_eq!(quota_probe_model(&up), "cached-model");
+        // probe_model 优先于缓存
+        up.probe_model = Some("probe-model".into());
+        assert_eq!(quota_probe_model(&up), "probe-model");
+        // 无 probe_model 且缓存为空 → 官方默认（探测仅为取额度头）
+        up.probe_model = None;
+        up.models_cache = serde_json::json!([]);
+        assert_eq!(quota_probe_model(&up), "gpt-5.1-codex-mini");
+    }
+
     use super::*;
 
     #[test]

@@ -40,6 +40,7 @@ import type {
   ProxyTestResp,
   ProvisionReq,
   ProvisionResp,
+  QuotaResp,
   RouteItem,
   RouteOut,
   ModelAliasRow,
@@ -111,6 +112,12 @@ export const upstreamApi = {
   /** 自动模式：立即全量对账托管路由 */
   syncModels: (id: string) =>
     http.post<ModelSyncReport>(`/api/upstreams/${id}/models/sync`).then((r) => r.data),
+  /** 额度快照（读取最近一次：真实流量抓取或上次探测） */
+  getQuota: (id: string) =>
+    http.get<QuotaResp>(`/api/upstreams/${id}/quota`).then((r) => r.data),
+  /** 额度探测（codex：极小请求抓响应头；devin：GetUserStatus） */
+  probeQuota: (id: string) =>
+    http.post<QuotaResp>(`/api/upstreams/${id}/quota`).then((r) => r.data),
   /** Codex：手动刷新 OAuth access_token */
   refreshOAuth: (id: string) =>
     http.post<{ ok: boolean; account_id: string }>(`/api/upstreams/${id}/oauth/refresh`).then((r) => r.data),

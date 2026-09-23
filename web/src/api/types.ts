@@ -241,6 +241,55 @@ export interface TestResp {
   models?: number
 }
 
+/** 上游额度快照（codex：响应头；devin：GetUserStatus 额度块） */
+export interface QuotaSnapshot {
+  kind?: string
+  /** live = 真实流量自动抓取；probe = 主动探测 */
+  source?: string
+  captured_at?: number
+  // codex
+  plan_type?: string
+  active_limit?: string
+  primary?: CodexQuotaWindow
+  secondary?: CodexQuotaWindow
+  primary_over_secondary_limit_percent?: number
+  credits?: { has_credits?: boolean; unlimited?: boolean; balance?: string }
+  // devin
+  plan?: string
+  account?: string
+  email?: string
+  available_models?: number
+  daily_quota?: number
+  weekly_quota?: number
+  /** 额度百分数（上游字段对，如 99 / 100） */
+  percent_value?: number
+  percent_total?: number
+  daily_reset_at?: number
+  weekly_reset_at?: number
+}
+
+/** 额度窗口（codex 主/次窗口；区别于 Key 用量的 QuotaWindow） */
+export interface CodexQuotaWindow {
+  used_percent?: number
+  window_minutes?: number
+  reset_at?: number
+  reset_after_seconds?: number
+}
+
+/** GET/POST /api/upstreams/{id}/quota 响应 */
+export interface QuotaResp {
+  id?: string
+  kind?: string
+  supported?: boolean
+  ok?: boolean
+  probed?: boolean
+  cached?: boolean
+  status?: number
+  latency_ms?: number
+  error?: string
+  quota: QuotaSnapshot | null
+}
+
 /** 查看上游明文 API Key（管理员二次验证后，仅本次展示） */
 export interface UpstreamRevealReq {
   password: string
