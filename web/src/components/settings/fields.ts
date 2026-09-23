@@ -187,6 +187,15 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     default: 10,
     help: '登录接口防爆破限速（次/分钟）。默认 10',
   },
+  'gateway.admin_login_expire_minutes': {
+    label: '登录有效期',
+    type: 'number',
+    min: 1,
+    max: 43200,
+    unit: '分钟',
+    default: 1440,
+    help: '管理员登录 JWT 有效期（分钟，1–43200）。到期需重新登录（含 TOTP 验证）；仅对新签发的 token 生效。默认 1440（24 小时）',
+  },
   'gateway.anthropic_default_max_tokens': {
     label: 'Anthropic 默认 max_tokens',
     type: 'number',
