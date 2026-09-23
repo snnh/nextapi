@@ -591,30 +591,15 @@ async fn test_upstream(
 
     // Devin 渠道：GetUserStatus 真实探测（返回账号/套餐/可用模型数）
     if up.kind == "devin" {
-        let started = std::time::Instant::now();
-        let res = match up.api_key_plain.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-            Some(tok) => {
-                let base = if up.base_url.trim().is_empty() {
-                    crate::upstream::devin::DEFAULT_BASE_URL
-                } else {
-                    up.base_url.trim()
-                };
-                crate::upstream::devin::user_status(&client, base, tok, 10000).await
-            }
-            None => Err(crate::upstream::UpstreamError::Status(
-                400,
-                "缺少 session token（api_key）".to_string(),
-            )),
-        };
-        let latency_ms = started.elapsed().as_millis() as u64;
-        return Ok(Json(match res {
-            Ok(info) => serde_json::json!({
-                "ok": true, "status": 200, "latency_ms": latency_ms,
-                "account": info.account_id, "email": info.email, "plan": info.plan,
-                "models": info.models.len(),
-            }),
-            Err(e) => serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
-        }));
+        return Ok(Json(
+            crate::upstream::devin::probe_status(
+                &client,
+                &up.base_url,
+                up.api_key_plain.as_deref(),
+                10_000,
+            )
+            .await,
+        ));
     }
     let proto = up
         .protocol_list()

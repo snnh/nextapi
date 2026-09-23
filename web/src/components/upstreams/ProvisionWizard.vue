@@ -36,6 +36,9 @@
           <div class="preset-head">
             <span class="preset-name">{{ p.display_name }}</span>
             <el-tag size="small" type="info">{{ p.kind }}</el-tag>
+            <el-tag v-if="p.auth_kind === 'oauth'" size="small" type="warning" effect="plain">
+              OAuth 授权
+            </el-tag>
             <el-icon v-if="picked?.name === p.name" class="check"><CircleCheckFilled /></el-icon>
           </div>
           <div class="hint">{{ p.description }}</div>
@@ -65,7 +68,41 @@
       <el-form-item label="上游名称" required>
         <el-input v-model="name" placeholder="用于区分同一供应商的多个账号" clearable />
       </el-form-item>
-      <el-form-item label="API Key" required>
+      <!-- OAuth 渠道（Devin）：免 API Key，用 Devin 账号授权换取会话凭证 -->
+      <el-form-item v-if="isOauth" label="Devin 授权">
+        <div class="api-key-block">
+          <div class="hint">
+            凭证为 devin CLI 的 session token（<span class="mono">devin-session-token$…</span>）：
+            点击「开始授权」在浏览器登录 Devin 账号，把页面给出的授权码粘贴回来兑换，
+            token 将随渠道一起加密保存。未授权也可先建渠道，之后到上游列表补授权。
+          </div>
+          <div class="oauth-state">
+            <el-button size="small" :loading="devinAuthLoading" @click="devinStartAuth">
+              开始授权
+            </el-button>
+            <el-input
+              v-model="devinCode"
+              size="small"
+              class="devin-code"
+              placeholder="粘贴授权码（code）"
+              clearable
+            />
+            <el-button
+              size="small"
+              type="primary"
+              :loading="devinExchangeLoading"
+              :disabled="!devinCode.trim()"
+              @click="devinExchange"
+            >
+              兑换凭证
+            </el-button>
+            <el-tag v-if="apiKey.trim()" size="small" type="success" effect="plain">
+              已获取 session token
+            </el-tag>
+          </div>
+        </div>
+      </el-form-item>
+      <el-form-item v-else label="API Key" required>
         <el-input
           v-model="apiKey"
           type="password"
@@ -131,7 +168,9 @@
         :closable="false"
         show-icon
         :title="`连通正常 HTTP ${result.test.status} · ${result.test.latency_ms}ms`"
-      />
+      >
+        <div v-if="isOauth" class="hint">{{ devinAccountHint }}</div>
+      </el-alert>
       <el-alert
         v-else
         type="error"
@@ -139,11 +178,22 @@
         show-icon
         :title="result?.test.error || '连通测试失败'"
       >
-        <div class="hint">上游已创建，可稍后到列表页修改凭证或重试连通测试。</div>
+        <div class="hint">
+          {{
+            isOauth && !apiKey.trim()
+              ? '上游已创建但尚未绑定凭证：到「上游」列表点击该渠道的「Devin 授权」完成授权后，再点「测试」与「拉取模型」。'
+              : '上游已创建，可稍后到列表页修改凭证或重试连通测试。'
+          }}
+        </div>
       </el-alert>
 
-      <div class="group-title">模型发现</div>
-      <div v-if="modelsLoading" class="hint">正在拉取模型列表…</div>
+      <div v-if="isOauth && !apiKey.trim()" class="hint">
+        未授权渠道不会参与路由：请先完成 Devin 授权，再回到「上游」页拉取模型并建立路由。
+      </div>
+
+      <div v-if="!isOauth || apiKey.trim()" class="group-title">模型发现</div>
+      <div v-if="isOauth && !apiKey.trim()" />
+      <div v-else-if="modelsLoading" class="hint">正在拉取模型列表…</div>
       <el-alert
         v-else-if="modelsErr"
         type="warning"
@@ -357,6 +407,65 @@ const mediaBaseUrlPreview = computed(() => {
   return p.media_base_url ?? ''
 })
 
+// —— OAuth 渠道（Devin）：CLI PKCE 无头授权（verifier 仅暂存内存，兑换后即弃）——
+/** Devin 探测结果摘要（账号 / 套餐 / 可用模型数：Free 计划多模型被门控，只列可用数） */
+const devinAccountHint = computed(() => {
+  const t = result.value?.test
+  if (!t?.ok) return ''
+  const parts: string[] = []
+  if (t.email) parts.push(`账号 ${t.email}`)
+  if (t.plan) parts.push(`套餐 ${t.plan}`)
+  if (typeof t.models === 'number') parts.push(`可用模型 ${t.models} 个`)
+  return parts.join(' · ')
+})
+
+const isOauth = computed(() => picked.value?.auth_kind === 'oauth')
+const devinPkce = ref<{ state: string; code_verifier: string } | null>(null)
+const devinCode = ref('')
+const devinAuthLoading = ref(false)
+const devinExchangeLoading = ref(false)
+
+/** 第一步：生成 PKCE 会话并在新窗口打开 Devin 授权页 */
+async function devinStartAuth() {
+  devinAuthLoading.value = true
+  try {
+    const r = await upstreamApi.devinPkceStart()
+    devinPkce.value = { state: r.state, code_verifier: r.code_verifier }
+    window.open(r.authorize_url, '_blank')
+    ElMessage.info('已在新窗口打开 Devin 授权页；完成授权后把页面给出的授权码粘贴回来兑换')
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    devinAuthLoading.value = false
+  }
+}
+
+/** 第二步：授权码 + verifier 兑换 session token（随渠道一起加密保存） */
+async function devinExchange() {
+  if (!devinPkce.value) {
+    ElMessage.warning('请先点击「开始授权」')
+    return
+  }
+  const code = devinCode.value.trim()
+  if (!code) return
+  devinExchangeLoading.value = true
+  try {
+    const r = await upstreamApi.devinPkceExchange({
+      code,
+      code_verifier: devinPkce.value.code_verifier,
+      base_url: picked.value?.base_url || undefined,
+    })
+    apiKey.value = r.token
+    devinCode.value = ''
+    devinPkce.value = null
+    ElMessage.success('兑换成功，session token 已就绪（接入后加密存储）')
+  } catch (e) {
+    ElMessage.error(errMsg(e))
+  } finally {
+    devinExchangeLoading.value = false
+  }
+}
+
 // —— 模型发现与同步 ——
 const modelsLoading = ref(false)
 const modelsErr = ref('')
@@ -395,6 +504,8 @@ watch(
     models.value = []
     modelsErr.value = ''
     syncReport.value = null
+    devinPkce.value = null
+    devinCode.value = ''
     initDomain(p)
   },
 )
@@ -418,6 +529,8 @@ function reset() {
   modelsErr.value = ''
   syncRunning.value = false
   syncReport.value = null
+  devinPkce.value = null
+  devinCode.value = ''
   initDomain(null)
 }
 
@@ -428,7 +541,7 @@ async function submit() {
     ElMessage.warning('请输入上游名称')
     return
   }
-  if (!apiKey.value.trim()) {
+  if (!isOauth.value && !apiKey.value.trim()) {
     ElMessage.warning('请填写 API Key')
     return
   }
@@ -448,7 +561,7 @@ async function submit() {
   conflict.value = false
   try {
     const body: ProvisionReq = {
-      api_key: apiKey.value,
+      api_key: apiKey.value.trim(),
       name: name.value.trim(),
     }
     if (domainChoices.value.length > 1) {
@@ -464,7 +577,8 @@ async function submit() {
     emit('saved')
     if (resp.test.ok) ElMessage.success('上游已接入，连通正常')
     else ElMessage.warning('上游已创建，但连通测试未通过')
-    fetchModels()
+    // OAuth 渠道未授权时不拉模型列表（避免必然失败），待授权后到上游页拉取
+    if (!isOauth.value || apiKey.value.trim()) fetchModels()
   } catch (e) {
     const msg = errMsg(e)
     if (msg.includes('已存在')) {
@@ -539,6 +653,22 @@ function gotoRoutes() {
 </script>
 
 <style scoped>
+.api-key-block {
+  width: 100%;
+}
+.oauth-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 6px;
+  flex-wrap: wrap;
+}
+.devin-code {
+  width: 260px;
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .steps {
   margin-bottom: 18px;
 }

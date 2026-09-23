@@ -16,6 +16,9 @@ pub struct Preset {
     pub name: &'static str,
     pub display_name: &'static str,
     pub kind: &'static str,
+    /// 渠道鉴权方式：`api_key`（默认，provision 必填 Key）/ `oauth`（授权码换取凭证：
+    /// 可先创建渠道，凭证随后由授权流程写入，故 provision 允许空 Key）
+    pub auth_kind: &'static str,
     pub base_url: &'static str,
     pub protocols: &'static [&'static str],
     /// 图像原生接口根（仅阿里系：文本兼容根与图像原生根不同）
@@ -91,12 +94,13 @@ pub struct ProvisionTarget {
     pub extra: serde_json::Value,
 }
 
-/// 全部预设（12 个）
-static PRESETS: [Preset; 12] = [
+/// 全部预设（13 个）
+static PRESETS: [Preset; 13] = [
     Preset {
         name: "dashscope",
         display_name: "阿里云百炼 DashScope",
         kind: "aliyun",
+        auth_kind: "api_key",
         base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         // 文本走 OpenAI 兼容（Chat/Responses 同根）；Anthropic 兼容独立根 /apps/anthropic；
         // 图像走 DashScope 原生（同步 Qwen-Image + 异步万相）
@@ -166,6 +170,7 @@ static PRESETS: [Preset; 12] = [
         name: "qianfan",
         display_name: "百度千帆",
         kind: "baidu",
+        auth_kind: "api_key",
         base_url: "https://qianfan.baidubce.com/v2",
         protocols: &["openai_chat"],
         media_base_url: None,
@@ -179,6 +184,7 @@ static PRESETS: [Preset; 12] = [
         name: "qianfan_tokenplan",
         display_name: "百度千帆 Token Plan",
         kind: "baidu",
+        auth_kind: "api_key",
         base_url: "https://qianfan.baidubce.com/v2/tokenplan/personal",
         // 三协议实测可用：Chat/Responses 走 OpenAI 兼容根，Anthropic 走独立 /anthropic 根
         protocols: &["openai_chat", "openai_responses", "anthropic"],
@@ -198,6 +204,7 @@ static PRESETS: [Preset; 12] = [
         name: "kimi",
         display_name: "月之暗面 Kimi",
         kind: "kimi",
+        auth_kind: "api_key",
         base_url: "https://api.moonshot.cn/v1",
         protocols: &["openai_chat"],
         media_base_url: None,
@@ -211,6 +218,7 @@ static PRESETS: [Preset; 12] = [
         name: "hunyuan",
         display_name: "腾讯云 TokenHub",
         kind: "tencent",
+        auth_kind: "api_key",
         base_url: "https://tokenhub.tencentmaas.com/v1",
         // hy4-preview 等兼容三协议；Anthropic 为独立根（Claude Code 拼接 /v1/messages）
         protocols: &["openai_chat", "openai_responses", "anthropic"],
@@ -226,6 +234,7 @@ static PRESETS: [Preset; 12] = [
         name: "tencent_tokenplan",
         display_name: "腾讯云 Token Plan",
         kind: "tencent",
+        auth_kind: "api_key",
         base_url: "https://api.lkeap.cloud.tencent.com/plan/v3",
         // 官方双根：OpenAI 兼容 /plan/v3；Anthropic 独立根 /plan/anthropic（+ /v1/messages）
         protocols: &["openai_chat", "anthropic"],
@@ -244,6 +253,7 @@ static PRESETS: [Preset; 12] = [
         name: "dashscope_tokenplan",
         display_name: "阿里云百炼 Token Plan",
         kind: "aliyun",
+        auth_kind: "api_key",
         base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
         // 官方双根：OpenAI 兼容 /compatible-mode/v1；Anthropic 独立根 /apps/anthropic（+ /v1/messages）
         protocols: &["openai_chat", "openai_responses", "anthropic"],
@@ -262,6 +272,7 @@ static PRESETS: [Preset; 12] = [
         name: "zhipu",
         display_name: "智谱 GLM",
         kind: "zhipu",
+        auth_kind: "api_key",
         base_url: "https://open.bigmodel.cn/api/paas/v4",
         protocols: &["openai_chat"],
         media_base_url: None,
@@ -275,6 +286,7 @@ static PRESETS: [Preset; 12] = [
         name: "volcano",
         display_name: "字节火山方舟",
         kind: "volcano",
+        auth_kind: "api_key",
         base_url: "https://ark.cn-beijing.volces.com/api/v3",
         protocols: &["openai_chat"],
         media_base_url: None,
@@ -288,6 +300,7 @@ static PRESETS: [Preset; 12] = [
         name: "openrouter",
         display_name: "OpenRouter",
         kind: "openrouter",
+        auth_kind: "api_key",
         base_url: "https://openrouter.ai/api/v1",
         protocols: &["openai_chat", "openai_responses"],
         media_base_url: None,
@@ -301,6 +314,7 @@ static PRESETS: [Preset; 12] = [
         name: "zenmux",
         display_name: "Zenmux",
         kind: "zenmux",
+        auth_kind: "api_key",
         base_url: "https://api.zenmux.ai/v1",
         // 四协议兼容：OpenAI Chat / Responses / Anthropic / Gemini
         protocols: &["openai_chat", "openai_responses", "anthropic", "gemini"],
@@ -315,6 +329,7 @@ static PRESETS: [Preset; 12] = [
         name: "deepseek",
         display_name: "DeepSeek",
         kind: "deepseek",
+        auth_kind: "api_key",
         base_url: "https://api.deepseek.com/v1",
         // 官网原生三协议：OpenAI Chat + Responses（/v1 根）+ Anthropic（/anthropic 独立根）
         protocols: &["openai_chat", "openai_responses", "anthropic"],
@@ -326,9 +341,27 @@ static PRESETS: [Preset; 12] = [
         description:
             "DeepSeek 官方：原生支持 OpenAI Chat/Responses 与 Anthropic 三协议（Anthropic 走独立 /anthropic 根，已内置映射）。",
     },
+    Preset {
+        name: "devin",
+        display_name: "Devin（OAuth 授权）",
+        kind: "devin",
+        // OAuth 渠道：免 API Key，凭证由 Devin CLI PKCE 授权流程换取后写入
+        auth_kind: "oauth",
+        base_url: crate::upstream::devin::DEFAULT_BASE_URL,
+        // 对外入口 Responses（CLI 形态请求 → Devin Connect 协议）；其余三协议经 IR 转换互通
+        protocols: &["openai_responses"],
+        media_base_url: None,
+        protocol_base_urls: None,
+        models_path: None,
+        workspace_domain: None,
+        unified_domain: None,
+        description:
+            "Devin 官方：以 devin CLI 形态接入（DevIn Connect 协议），用 Devin 账号 OAuth 授权换取会话凭证，\
+             免 API Key；对外提供 Responses 接口（含工具调用），其余协议经内部转换互通。",
+    },
 ];
 
-/// 全部预设（12 个）。
+/// 全部预设（13 个）。
 pub fn presets() -> &'static [Preset] {
     &PRESETS
 }
@@ -477,8 +510,11 @@ pub async fn provision(
     domain: DomainChoice<'_>,
     admin: &str,
 ) -> ApiResult<serde_json::Value> {
-    // 参数校验：api_key 空白 → 400；域名参数非法 → 400（在插入前 fail-fast）
-    validate_provision_key(api_key)?;
+    // 参数校验：api_key 空白 → 400（OAuth 预设除外：可先建渠道，凭证由授权流程后置写入）；
+    // 域名参数非法 → 400（在插入前 fail-fast）
+    if !is_oauth(preset) {
+        validate_provision_key(api_key)?;
+    }
     let target = provision_target(preset, domain)?;
 
     // name 缺省 = preset.name
@@ -488,16 +524,23 @@ pub async fn provision(
         .unwrap_or(preset.name)
         .to_string();
 
-    // api_key 加密（crypto 不可用时的处理照抄 upstreams create）
-    if !state.crypto.is_available() {
-        return Err(ApiError::bad_request(
-            "未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key",
-        ));
-    }
-    let api_key_enc = state
-        .crypto
-        .encrypt(api_key)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    // api_key 加密（crypto 不可用时的处理照抄 upstreams create）；
+    // OAuth 预设留空 → NULL（授权流程兑换到凭证后再写入）
+    let api_key_enc = if api_key.trim().is_empty() {
+        None
+    } else {
+        if !state.crypto.is_available() {
+            return Err(ApiError::bad_request(
+                "未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key",
+            ));
+        }
+        Some(
+            state
+                .crypto
+                .encrypt(api_key.trim())
+                .map_err(|e| ApiError::bad_request(e.to_string()))?,
+        )
+    };
 
     let extra = target.extra;
 
@@ -514,7 +557,7 @@ pub async fn provision(
     .bind(&name)
     .bind(preset.kind)
     .bind(&target.base_url)
-    .bind(&api_key_enc)
+    .bind(api_key_enc.as_deref())
     .bind(&protocols)
     .bind(300_000)
     .bind(5)
@@ -537,6 +580,11 @@ pub async fn provision(
 
     let upstream_val = serde_json::to_value(&up).map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "upstream": upstream_val, "test": test }))
+}
+
+/// 预设是否为 OAuth 渠道（免 API Key：凭证由授权流程后置写入）。可单测。
+pub fn is_oauth(preset: &Preset) -> bool {
+    preset.auth_kind == "oauth"
 }
 
 /// 纯函数：校验 provision 的 api_key 是否空白（空白 → 400）。可单测。
@@ -589,6 +637,18 @@ async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> 
     let client = state
         .client_pools
         .client_for(up, snap, &state.hot.load().proxy.default_proxy_id);
+
+    // Devin 渠道：GetUserStatus 探测（账号/套餐/可用模型数）；未授权 → ok:false 提示授权
+    if up.kind == "devin" {
+        return crate::upstream::devin::probe_status(
+            &client,
+            &up.base_url,
+            up.api_key_plain.as_deref(),
+            10_000,
+        )
+        .await;
+    }
+
     let proto = up
         .protocol_list()
         .first()
@@ -657,13 +717,13 @@ mod tests {
     #[test]
     fn presets_complete() {
         let ps = presets();
-        assert_eq!(ps.len(), 12, "应有 12 个预设");
+        assert_eq!(ps.len(), 13, "应有 13 个预设");
 
         // name 唯一
         let mut names: Vec<&str> = ps.iter().map(|p| p.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 12, "预设 name 必须唯一");
+        assert_eq!(names.len(), 13, "预设 name 必须唯一");
 
         // protocols 全在白名单内
         const WHITELIST: &[&str] = &[
@@ -837,6 +897,35 @@ mod tests {
                 "预设 `{name}` 不应有 media_base_url"
             );
         }
+    }
+
+    #[test]
+    fn preset_auth_kind_and_devin_oauth() {
+        // auth_kind 只能是 api_key / oauth；devin 必须为 oauth（免 Key → 授权流程写入凭证）
+        for p in presets() {
+            assert!(
+                ["api_key", "oauth"].contains(&p.auth_kind),
+                "预设 `{}` auth_kind 非法: {}",
+                p.name,
+                p.auth_kind
+            );
+        }
+        let devin = find("devin").expect("应有 devin 预设");
+        assert_eq!(devin.kind, "devin");
+        assert!(is_oauth(devin), "devin 预设必须是 oauth 鉴权");
+        assert_eq!(devin.protocols, &["openai_responses"], "devin 入口以 Responses 优先");
+        assert_eq!(devin.base_url, crate::upstream::devin::DEFAULT_BASE_URL);
+        // 非 OAuth 预设仍要求 Key
+        assert!(!is_oauth(find("deepseek").unwrap()));
+    }
+
+    #[test]
+    fn provision_key_requirement_by_auth_kind() {
+        // 非 OAuth 预设：空 Key → 400（沿用原校验）
+        assert!(validate_provision_key("").is_err());
+        // OAuth 预设：空 Key 合法（provision 只对非 OAuth 预设做校验）
+        let devin = find("devin").unwrap();
+        assert!(is_oauth(devin));
     }
 
     #[test]

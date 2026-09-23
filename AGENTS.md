@@ -80,7 +80,8 @@ src/
 ├── media/           # 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
-├── presets.rs       # 供应商预设（12 个内置预设 + 一键接入 provision + media_base_url /
+├── presets.rs       # 供应商预设（13 个内置预设，含 devin OAuth 免 Key 预设 + 一键接入 provision
+│                    # + Preset.auth_kind（api_key/oauth）+ media_base_url /
 │                     # protocol_base_urls / models_path 处理；含百度/腾讯/阿里 Token Plan 专属根地址；
 │                     # dashscope 含阿里云百炼统一域名 unified_domain / 业务空间专属域名 workspace_domain）
 ├── embed.rs         # 前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）

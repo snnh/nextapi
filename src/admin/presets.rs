@@ -42,6 +42,8 @@ fn preset_json(p: &presets::Preset) -> serde_json::Value {
         "name": p.name,
         "display_name": p.display_name,
         "kind": p.kind,
+        // 鉴权方式：api_key（默认）/ oauth（Devin：免 Key，走授权流程）
+        "auth_kind": p.auth_kind,
         "base_url": p.base_url,
         "protocols": p.protocols,
         "media_base_url": p.media_base_url,
@@ -89,6 +91,8 @@ fn roots_json(roots: &[(&'static str, &'static str)]) -> serde_json::Value {
 /// POST /api/presets/{name}/provision 请求体。
 #[derive(Debug, Deserialize)]
 struct ProvisionReq {
+    /// OAuth 预设（Devin）可省略：凭证由授权流程换取后粘贴，或建渠道后再授权
+    #[serde(default)]
     api_key: String,
     #[serde(default)]
     name: Option<String>,
