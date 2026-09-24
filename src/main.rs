@@ -178,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         limiter: limit::RateLimiter::new(),
         quota_cache: limit::QuotaCache::new(),
         breaker: routing::Breaker::new(),
+        cred_guard: upstream::cred::AuthGuard::default(),
         sticky: routing::StickyMap::default(),
         client_pools: upstream::ClientPools::new(),
         codex_locks: std::sync::Mutex::new(std::collections::HashMap::new()),

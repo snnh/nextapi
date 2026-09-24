@@ -74,6 +74,8 @@ src/
 │   │                #   提示词按模型渲染为 f2 + 调用方 instructions 追加 + sentry-trace 头
 │   │                #   + <system_info> 模板注入，变量可被 X-System-Info-* / metadata 覆盖）
 │   │                # + PKCE 兑换 + GetUserStatus 探测
+├── upstream/cred.rs # 凭证失效（token 失效）：错误文本→鉴权失效识别 + 内存守卫
+│                    #（冷却期内跳过该上游）+ extra.auth_state 落库（后台可见）
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
 ├── upstream/quota.rs # 上游额度快照（codex：x-codex-* 响应头解析，网关旁路抓头 + 节流落库；
 │                    # devin：GetUserStatus 额度块）→ upstreams.extra.quota
@@ -94,6 +96,7 @@ src/
 │                     # dashscope 含阿里云百炼统一域名 unified_domain / 业务空间专属域名 workspace_domain）
 ├── embed.rs         # 前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/responses/compact
+│                    # 凭证失效联动：命中鉴权失败 → 502 upstream_auth_failed + 临时跳过该上游
 │                    # 直接转发 + /v1/images/* + 视频 501 占位）
 │                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
@@ -117,7 +120,8 @@ src/
     ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
     ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持；
                      # codex 渠道 auth_json 创建 + /{id}/oauth/refresh 手动刷新
-                     # + /{id}/quota 额度快照读取/探测（codex 响应头 / devin GetUserStatus））
+                     # + /{id}/quota 额度快照读取/探测（codex 响应头 / devin GetUserStatus）
+                     # + /{id}/devin/reauth 重新授权（PKCE 换 token 写回 + 探测验证 + 解隔离））
     ├── model_sync.rs # /api/upstreams/{id}/models 拉取（协议/codex 适配）+ 同步引擎
                      #（auto 全量对账仅动 managed_by='auto' 托管路由；manual 勾选创建）+ 周期任务
     ├── routes.rs    # /api/model-routes 批量替换
