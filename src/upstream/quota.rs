@@ -36,10 +36,10 @@ pub fn parse_codex_headers(headers: &HeaderMap) -> Option<serde_json::Value> {
     let primary_used = num("x-codex-primary-used-percent");
     let secondary_used = num("x-codex-secondary-used-percent");
     let credits_balance = get("x-codex-credits-balance");
-    let credits_has = get("x-codex-credits-has-credits")
-        .map(|s| s.eq_ignore_ascii_case("true") || s == "1");
-    let credits_unlimited = get("x-codex-credits-unlimited")
-        .map(|s| s.eq_ignore_ascii_case("true") || s == "1");
+    let credits_has =
+        get("x-codex-credits-has-credits").map(|s| s.eq_ignore_ascii_case("true") || s == "1");
+    let credits_unlimited =
+        get("x-codex-credits-unlimited").map(|s| s.eq_ignore_ascii_case("true") || s == "1");
     // 无任何额度特征字段 → 认为上游未返回额度头（普通 API Key 渠道等）
     if plan_type.is_none()
         && active_limit.is_none()
@@ -65,7 +65,10 @@ pub fn parse_codex_headers(headers: &HeaderMap) -> Option<serde_json::Value> {
         out.insert("active_limit".into(), serde_json::json!(v));
     }
     // 主/次窗口：使用率 + 窗口长度（分钟）+ 重置时刻（epoch 秒）/ 剩余秒数
-    for (key, prefix) in [("primary", "x-codex-primary"), ("secondary", "x-codex-secondary")] {
+    for (key, prefix) in [
+        ("primary", "x-codex-primary"),
+        ("secondary", "x-codex-secondary"),
+    ] {
         let used = num(&format!("{prefix}-used-percent"));
         let window = num(&format!("{prefix}-window-minutes"));
         let reset_at = num(&format!("{prefix}-reset-at"));
@@ -89,7 +92,10 @@ pub fn parse_codex_headers(headers: &HeaderMap) -> Option<serde_json::Value> {
         out.insert(key.into(), serde_json::Value::Object(w));
     }
     if let Some(v) = num("x-codex-primary-over-secondary-limit-percent") {
-        out.insert("primary_over_secondary_limit_percent".into(), serde_json::json!(v));
+        out.insert(
+            "primary_over_secondary_limit_percent".into(),
+            serde_json::json!(v),
+        );
     }
     if credits_has.is_some() || credits_unlimited.is_some() || credits_balance.is_some() {
         let mut c = serde_json::Map::new();
@@ -293,17 +299,36 @@ mod tests {
         assert_eq!(snap["source"], "probe");
         assert!(is_fresh(&snap, 300), "刚生成的快照应新鲜");
         assert!(!is_fresh(&snap, -1), "负 TTL → 过期");
-        assert!(!is_fresh(&serde_json::json!({"kind": "codex"}), 300), "缺 captured_at → 过期");
+        assert!(
+            !is_fresh(&serde_json::json!({"kind": "codex"}), 300),
+            "缺 captured_at → 过期"
+        );
     }
 
     #[test]
     fn throttle_claim_dedups_and_slides() {
         let t: QuotaThrottle = std::sync::Mutex::new(std::collections::HashMap::new());
         let id = Uuid::new_v4();
-        assert_eq!(throttle_claim(&t, id, 100, "A"), Some(false), "首次写入放行");
-        assert_eq!(throttle_claim(&t, id, 110, "A"), Some(true), "同内容窗口内跳过");
-        assert_eq!(throttle_claim(&t, id, 170, "A"), Some(false), "超出 60s 窗口再次放行");
-        assert_eq!(throttle_claim(&t, id, 175, "B"), Some(false), "内容变化立即放行");
+        assert_eq!(
+            throttle_claim(&t, id, 100, "A"),
+            Some(false),
+            "首次写入放行"
+        );
+        assert_eq!(
+            throttle_claim(&t, id, 110, "A"),
+            Some(true),
+            "同内容窗口内跳过"
+        );
+        assert_eq!(
+            throttle_claim(&t, id, 170, "A"),
+            Some(false),
+            "超出 60s 窗口再次放行"
+        );
+        assert_eq!(
+            throttle_claim(&t, id, 175, "B"),
+            Some(false),
+            "内容变化立即放行"
+        );
         throttle_forget(&t, &id);
         assert!(t.lock().unwrap().get(&id).is_none(), "删除后无残留");
     }

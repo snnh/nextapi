@@ -212,9 +212,7 @@ async fn exec_http(
                 )
                 .await?
             }
-            None => {
-                upstream::execute_stream(client, url, headers, body, stream_timeout_ms).await?
-            }
+            None => upstream::execute_stream(client, url, headers, body, stream_timeout_ms).await?,
         };
         Ok(ExecOutcome::Stream(upstream::StreamSource::Http(resp)))
     } else if codex_aggregate {
@@ -942,7 +940,6 @@ fn mode_str(mode: Mode) -> &'static str {
     }
 }
 
-
 /// 从 Fail 中抽取人类可读的消息摘要。
 fn fail_message(fail: &Fail) -> String {
     match fail {
@@ -964,10 +961,8 @@ fn debug_payload(
 ) -> Option<serde_json::Value> {
     let (req, req_trunc) = req.as_ref()?;
     let resp_bytes = resp_bytes();
-    let (resp, resp_trunc) = crate::logging::redact::redact_and_truncate(
-        &resp_bytes,
-        crate::logging::DEBUG_MAX_BYTES,
-    );
+    let (resp, resp_trunc) =
+        crate::logging::redact::redact_and_truncate(&resp_bytes, crate::logging::DEBUG_MAX_BYTES);
     Some(serde_json::json!({
         "request": req.clone(),
         "response": resp,
@@ -1090,7 +1085,10 @@ fn nonstream_success(
                         response: json_rsp(StatusCode::BAD_GATEWAY, request_id, None, body.clone()),
                         status: 502,
                         degraded: false,
-                        error: Some(crate::text::truncate_chars(&format!("响应转换失败: {e}"), 2000)),
+                        error: Some(crate::text::truncate_chars(
+                            &format!("响应转换失败: {e}"),
+                            2000,
+                        )),
                         final_json: Some(body),
                     }
                 }
@@ -1695,7 +1693,9 @@ async fn run_gateway(
                 match upstream.api_key_plain.as_deref().map(str::trim) {
                     Some(tok) if !tok.is_empty() => {
                         match crate::upstream::devin::convert::build_chat_request(
-                            &outbound.body, &up_model, tok,
+                            &outbound.body,
+                            &up_model,
+                            tok,
                         ) {
                             Ok(b) => {
                                 devin_ctx = Some(DevinCtx {

@@ -63,7 +63,11 @@ impl ApiError {
 ///
 /// 供 `IntoResponse` 与少数需要自定义状态码/request_id 的中间件复用，
 /// 避免各处手工拼同一个 JSON 结构。
-pub fn error_body(message: impl Into<String>, code: Option<&str>, request_id: &str) -> serde_json::Value {
+pub fn error_body(
+    message: impl Into<String>,
+    code: Option<&str>,
+    request_id: &str,
+) -> serde_json::Value {
     let _ = request_id;
     serde_json::json!({
         "error": { "message": message.into(), "type": "nextapi_error", "code": code }

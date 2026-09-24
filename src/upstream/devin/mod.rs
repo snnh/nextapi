@@ -87,7 +87,11 @@ fn map_error_body(status: u16, body: &[u8]) -> UpstreamError {
     let (code, msg) = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|v| {
-            let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("").to_string();
+            let code = v
+                .get("code")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
             let msg = v
                 .get("message")
                 .or_else(|| v.pointer("/error/message"))
@@ -147,7 +151,8 @@ impl FrameParser {
             if self.buf.len() < 5 {
                 break;
             }
-            let len = u32::from_be_bytes([self.buf[1], self.buf[2], self.buf[3], self.buf[4]]) as usize;
+            let len =
+                u32::from_be_bytes([self.buf[1], self.buf[2], self.buf[3], self.buf[4]]) as usize;
             if len > MAX_FRAME_BYTES {
                 return Err(format!("信封帧超限（{len}B > {MAX_FRAME_BYTES}B）"));
             }
@@ -434,8 +439,14 @@ pub async fn exchange_pkce(
     }
     Ok(PkceResult {
         token,
-        webapp_host: proto::get(&fields, 2).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        api_url: proto::get(&fields, 3).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        webapp_host: proto::get(&fields, 2)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        api_url: proto::get(&fields, 3)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -621,7 +632,9 @@ pub async fn user_status(
                 .and_then(|v| v.as_bytes())
                 .and_then(|b| proto::decode(b).ok())
                 .and_then(|inner| {
-                    proto::get(&inner, 2).and_then(|v| v.as_str()).map(String::from)
+                    proto::get(&inner, 2)
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
                 })
         })
         .unwrap_or_default();
@@ -649,7 +662,9 @@ pub async fn user_status(
     // f33 模型目录包装 { f1: repeated 条目(251) , f2: 展示分组, f3: 版本 }；
     // 条目 { f22: model_uid, f33: 计划门控("Upgrade to Pro…") } —— 带门控的不可用
     for wrapper in proto::get_all(&uf, 33) {
-        let Some(b) = wrapper.as_bytes() else { continue };
+        let Some(b) = wrapper.as_bytes() else {
+            continue;
+        };
         let Ok(wf) = proto::decode(b) else { continue };
         for entry in proto::get_all(&wf, 1) {
             let Some(eb) = entry.as_bytes() else { continue };
@@ -664,8 +679,14 @@ pub async fn user_status(
     }
 
     Ok(StatusInfo {
-        account_id: proto::get(&uf, 5).and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        email: proto::get(&uf, 7).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        account_id: proto::get(&uf, 5)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        email: proto::get(&uf, 7)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         plan,
         models,
         quota,
