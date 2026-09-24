@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.10] - 2026-09-24
 
 ### Added
 - **上游凭证失效（token 失效）四层处理**：识别 → 隔离 → 可见 → 恢复，全渠道通用，
@@ -22,8 +22,6 @@
     换新 session token 直接写回 + 探测验证 + 解除隔离 + 清熔断）；编辑上游更换/清除凭证也会
     立即解除隔离；WebUI 上游行新增「重新授权」按钮与专用弹窗（含授权链接、授权码输入、
     成功后展示账号/套餐）。
-
-### Added
 - **Devin 渠道「CLI 环境模拟」**（上游级 `extra.cli_emulation`，**默认开启**，可在渠道表单关闭）：
   - f2 改用官方 CLI 头提示词（实测渲染版 17682B，随仓库 `src/upstream/devin/cli_prompt.txt`），
     末行 "You are powered by <模型展示名>" 按实际模型重渲染（`swe-1-6-slow` → `SWE-1.6 Slow`）；
