@@ -78,10 +78,10 @@ finish_reason 归一化为 OpenAI 词汇（`stop/length/tool_calls/content_filte
 ## 3. 流式转换要点
 
 - 各协议流式事件经 `StreamState` 状态机转为 IR chunk（`chunk_to_ir`），再编码为目标协议事件（`chunk_from_ir`）；
-- 工具调用增量按 index 对齐累积（`ir::ToolCallAggregator`）；Gemini 的 `functionCall` 需完整 `args`，聚合到合法 JSON 才发送，`finish_reason` 到达时强制冲刷；
+- 工具调用增量按 index 对齐累积（各协议 `StreamState` 自行累积，`ir::ToolCallAggregator` 仅供单测校验）；Gemini 的 `functionCall` 需完整 `args`，聚合到合法 JSON 才发送，`finish_reason` 到达时强制冲刷；
 - Anthropic 事件序列保证 `message_start → content_block_start/delta*/stop → message_delta → message_stop`；
 - OpenAI 流终止载荷 `[DONE]`；Responses 补发 `response.completed`；Gemini 无终止事件；
-- 转换失败可回退透传（`convert_mode=passthrough_fallback`）。
+- 转换失败不回退透传：直接转移到下一候选上游（`convert_mode` 取值见 `logging::LogEvent`：`none|passthrough|convert|media_adapt|media_task`）。
 
 ## 4. 错误体翻译
 

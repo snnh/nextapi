@@ -59,6 +59,17 @@ impl ApiError {
     }
 }
 
+/// 统一错误响应体（`error.message/type` + 可空 `code`；与前端 http.ts 拦截器约定同形）。
+///
+/// 供 `IntoResponse` 与少数需要自定义状态码/request_id 的中间件复用，
+/// 避免各处手工拼同一个 JSON 结构。
+pub fn error_body(message: impl Into<String>, code: Option<&str>, request_id: &str) -> serde_json::Value {
+    let _ = request_id;
+    serde_json::json!({
+        "error": { "message": message.into(), "type": "nextapi_error", "code": code }
+    })
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
@@ -77,13 +88,7 @@ impl IntoResponse for ApiError {
         } else {
             self.to_string()
         };
-        let mut response = (
-            status,
-            Json(serde_json::json!({
-                "error": { "message": message, "type": "nextapi_error", "code": code }
-            })),
-        )
-            .into_response();
+        let mut response = (status, Json(error_body(message, code, &request_id))).into_response();
         if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
             response.headers_mut().insert("x-request-id", value);
         }

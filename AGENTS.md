@@ -82,6 +82,7 @@ src/
 ├── media/           # 图片通道：mod（4 种图片 API 形状适配：Openai 透传/Gemini generateContent/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
+│                    # + resolve（图片引用解析/data-URL）+ download（远程图下载，netguard 防护）
 ├── presets.rs       # 供应商预设（13 个内置预设，含 devin OAuth 免 Key 预设 + 一键接入 provision
 │                    # + Preset.auth_kind（api_key/oauth）+ media_base_url /
 │                     # protocol_base_urls / models_path 处理；含百度/腾讯/阿里 Token Plan 专属根地址；
@@ -91,6 +92,7 @@ src/
 │                    # 直接转发 + /v1/images/* + 视频 501 占位）
 │                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
+├── text.rs          # 文本截断工具（字节/字符上限 + UTF-8 边界安全，单一实现）
 ├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细；
 │                    # cost_display 展示币种合计 + cost_na_count 缺失计数）
 ├── billing/         # 计价引擎（只统计不扣费）：mod（规则匹配/分段命中/成本计算/price_batch 回填；
@@ -100,8 +102,11 @@ src/
 ├── logging/         # 日志核心：LogSink（有界 mpsc + 满则写 WAL）、writer 批量写者（同事务
 │                    # usage_logs UNNEST 多行 + usage_hourly upsert + quota_usage tokens 累加 +
 │                    # last_used_at 批量更新）、wal（JSONL+CRC 滚动/重放/归档）、partition（30 天
-│                    # epoch 对齐分区 ensure/list/drop_covered）、redact（debug 脱敏 64KB 截断）
-├── auth/mod.rs      # 单管理员 JWT + 登录防爆破（内存滑窗）+ require_admin 中间件 + 审计写入
+│                    # epoch 对齐分区 ensure/list/drop_covered）、redact（debug 脱敏 64KB 截断）、
+│                    # headers（请求/响应头采集与脱敏）
+├── auth/mod.rs      # 单管理员 JWT（登录有效期热可配）+ 登录防爆破（内存滑窗，复用
+│                    # limit::window_allow）+ require_admin 中间件 + 审计写入
+├── auth/totp.rs     # TOTP 二次验证（绑定/校验/恢复）
 └── admin/
     ├── mod.rs       # /api 路由聚合
     ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
@@ -126,7 +131,8 @@ src/
 migrations/          # 0001_init ~ 0016_usage_upstream_model（sqlx::migrate! 启动自动执行；
                      # 含分区/计价/媒体/加固/别名/幂等/TOTP/模型同步/Codex OAuth/
                      # 日志索引与游标/请求头/上游模型名 upstream_model）
-tests/               # 集成测试（尚未建立；需 PG + mock 上游）
+tests/               # 集成测试目录（当前不存在：测试全部为 src/** 内联 #[cfg(test)]，
+                     # 无外部依赖；建立集成测试需 PG + mock 上游）
 web/                 # Vue3 管理后台：src/views 9 页面（含模型别名）+ components/{pricing,settings,upstreams,stats}/
                      # 页面私有组件 + api/（types.ts 接口类型唯一事实源、index.ts 分组函数、http.ts 401 拦截）
                      # + scripts/check-api-paths.mjs 构建前置自检

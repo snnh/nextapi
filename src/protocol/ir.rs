@@ -318,12 +318,16 @@ pub struct IrToolCallDelta {
     pub arguments: Option<String>,
 }
 
-/// 工具调用流式聚合器（跨协议转换时按 index 对齐、拼接参数，PLAN.md §4.4）。
+/// 工具调用流式聚合器：测试辅助（校验各协议增量工具调用按 index 拼接的正确性）。
+///
+/// 生产链路用的是流式逐帧转换（不需要聚合器），故仅在测试构建下编译。
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct ToolCallAggregator {
     calls: Vec<IrToolCall>,
 }
 
+#[cfg(test)]
 impl ToolCallAggregator {
     pub fn new() -> Self {
         Self::default()

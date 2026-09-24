@@ -32,7 +32,7 @@ pub fn put_str(buf: &mut BytesMut, field: u32, val: &str) {
 
 /// 写 varint 字段（wire type 0）。
 pub fn put_uint(buf: &mut BytesMut, field: u32, n: u64) {
-    put_varint(buf, ((field << 3) | 0) as u64);
+    put_varint(buf, (field << 3) as u64);
     put_varint(buf, n);
 }
 
@@ -88,7 +88,8 @@ impl Val {
         }
     }
 
-    #[allow(dead_code)] // wire 全类型访问器（round-trip 完整性；double 仅 f8 采样参数出站用）
+    /// 仅测试使用（round-trip 校验 wire 全类型可解）
+    #[cfg(test)]
     pub fn as_double(&self) -> Option<f64> {
         match self {
             Val::Fixed64(b) => Some(f64::from_le_bytes(*b)),
@@ -115,7 +116,7 @@ pub fn decode(buf: &[u8]) -> Result<Vec<Field>, String> {
                 out.push((field, Val::Varint(n)));
             }
             1 => {
-                if i + 8 > buf.len() {
+                if buf.len().saturating_sub(i) < 8 {
                     return Err("f64 越界".into());
                 }
                 let mut b = [0u8; 8];
@@ -126,15 +127,17 @@ pub fn decode(buf: &[u8]) -> Result<Vec<Field>, String> {
             2 => {
                 let (ln, ni) = read_varint(buf, i)?;
                 i = ni;
-                let ln = ln as usize;
-                if i + ln > buf.len() {
+                // u64 → usize 转换与 i+ln 均需防溢出：恶意 varint（如 2^64-1）会让
+                // 加法回绕绕过越界守卫，随后切片 panic
+                let ln = usize::try_from(ln).map_err(|_| "len 溢出".to_string())?;
+                if ln > buf.len().saturating_sub(i) {
                     return Err("len 越界".into());
                 }
                 out.push((field, Val::Bytes(Bytes::copy_from_slice(&buf[i..i + ln]))));
                 i += ln;
             }
             5 => {
-                if i + 4 > buf.len() {
+                if buf.len().saturating_sub(i) < 4 {
                     return Err("f32 越界".into());
                 }
                 let mut b = [0u8; 4];
@@ -169,12 +172,12 @@ fn read_varint(buf: &[u8], mut i: usize) -> Result<(u64, usize), String> {
 }
 
 /// 取字段列表中某字段的首个值。
-pub fn get<'a>(fields: &'a [Field], field: u32) -> Option<&'a Val> {
+pub fn get(fields: &[Field], field: u32) -> Option<&Val> {
     fields.iter().find(|(f, _)| *f == field).map(|(_, v)| v)
 }
 
 /// 取字段列表中某字段的所有值（repeated）。
-pub fn get_all<'a>(fields: &'a [Field], field: u32) -> Vec<&'a Val> {
+pub fn get_all(fields: &[Field], field: u32) -> Vec<&Val> {
     fields
         .iter()
         .filter(|(f, _)| *f == field)

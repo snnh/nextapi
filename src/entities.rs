@@ -278,8 +278,7 @@ pub struct ProxyRow {
     pub host: String,
     pub port: i32,
     pub username: Option<String>,
-    #[allow(dead_code)]
-    pub password_enc: Option<String>,
+    /// 明文密码（仅内存快照持有，绝不出 API）；密文列只在加载期使用，不驻留快照
     pub password_plain: Option<String>,
     pub no_proxy: Vec<String>,
     pub enabled: bool,

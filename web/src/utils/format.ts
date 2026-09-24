@@ -8,13 +8,6 @@ export function fmtTime(iso?: string | null): string {
   return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
-/** 仅日期 */
-export function fmtDate(iso?: string | null): string {
-  if (!iso) return '-'
-  const d = dayjs(iso)
-  return d.isValid() ? d.format('YYYY-MM-DD') : '-'
-}
-
 /** Decimal 字符串 → 展示（截断 6 位？后端已按 display_precision 舍入；此处仅格式化千分位） */
 export function fmtMoney(v?: string | number | null): string {
   if (v === null || v === undefined || v === '') return '-'

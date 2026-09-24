@@ -51,7 +51,7 @@ impl RateLimiter {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let queue = map.entry(key.id).or_default();
-        if window_allow(queue, now, limit) {
+        if window_allow(queue, now, limit, RPM_WINDOW) {
             Ok(())
         } else {
             Err(ApiError::RateLimited)
@@ -97,13 +97,18 @@ impl RateLimiter {
 /// 滑动窗口纯逻辑（60s）：先剔除过期事件，再判断能否容纳新事件。
 /// 放行时把 `now` 压入队列；超限返回 false 且不压入。
 /// `limit == 0` 视为不限（直接放行、不记录）。
-fn window_allow(queue: &mut VecDeque<Instant>, now: Instant, limit: u32) -> bool {
+pub fn window_allow(
+    queue: &mut VecDeque<Instant>,
+    now: Instant,
+    limit: u32,
+    window: Duration,
+) -> bool {
     if limit == 0 {
         return true;
     }
     // 剔除过期事件（队列按时间递增，从头部开始；严格大于窗口即过期）
     while let Some(&t) = queue.front() {
-        if now.duration_since(t) > RPM_WINDOW {
+        if now.duration_since(t) > window {
             queue.pop_front();
         } else {
             break;
@@ -359,15 +364,15 @@ mod tests {
         let mut q = VecDeque::new();
         let start = Instant::now();
         // 放行前 3 个
-        assert!(window_allow(&mut q, start, 3));
-        assert!(window_allow(&mut q, start + Duration::from_secs(1), 3));
-        assert!(window_allow(&mut q, start + Duration::from_secs(2), 3));
+        assert!(window_allow(&mut q, start, 3, RPM_WINDOW));
+        assert!(window_allow(&mut q, start + Duration::from_secs(1), 3, RPM_WINDOW));
+        assert!(window_allow(&mut q, start + Duration::from_secs(2), 3, RPM_WINDOW));
         assert_eq!(q.len(), 3);
         // 第 4 个超限（不压入、不增长）
-        assert!(!window_allow(&mut q, start + Duration::from_secs(3), 3));
+        assert!(!window_allow(&mut q, start + Duration::from_secs(3), 3, RPM_WINDOW));
         assert_eq!(q.len(), 3);
         // 跳至 far future：全部过期，重新放行且只剩新压入的 1 个
-        assert!(window_allow(&mut q, start + Duration::from_secs(100), 3));
+        assert!(window_allow(&mut q, start + Duration::from_secs(100), 3, RPM_WINDOW));
         assert_eq!(q.len(), 1);
     }
 
@@ -377,15 +382,12 @@ mod tests {
         let start = Instant::now();
         let limit = 1;
         // 恰在 60s 边界的旧事件仍算在窗口内 → 拒绝
-        assert!(window_allow(&mut q, start, limit));
-        assert!(!window_allow(
-            &mut q,
-            start + Duration::from_secs(60),
-            limit
-        ));
+        assert!(window_allow(&mut q, start, limit, RPM_WINDOW));
+        assert!(!window_allow(&mut q,
+            start + Duration::from_secs(60), limit, RPM_WINDOW));
         assert_eq!(q.len(), 1);
         // 61s：过期 → 放行
-        assert!(window_allow(&mut q, start + Duration::from_secs(61), limit));
+        assert!(window_allow(&mut q, start + Duration::from_secs(61), limit, RPM_WINDOW));
         assert_eq!(q.len(), 1);
     }
 
@@ -393,7 +395,7 @@ mod tests {
     fn window_allow_limit_zero_unlimited() {
         let mut q = VecDeque::new();
         // limit=0 视为不限：直接放行且不记录
-        assert!(window_allow(&mut q, Instant::now(), 0));
+        assert!(window_allow(&mut q, Instant::now(), 0, RPM_WINDOW));
         assert!(q.is_empty());
     }
 

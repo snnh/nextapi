@@ -77,9 +77,6 @@ export const WEEKDAYS: { value: string; label: string }[] = [
   { value: 'sun', label: '日' },
 ]
 
-export const WEEKDAY_LABEL = (w: string): string =>
-  WEEKDAYS.find((x) => x.value === w)?.label ?? w
-
 /** 上游 kind 建议选项（后端不做白名单校验，仅为表单引导） */
 export const UPSTREAM_KINDS = [
   'openai_compatible',

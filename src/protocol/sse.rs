@@ -20,9 +20,13 @@ impl SseParser {
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<String> {
         self.buf.extend_from_slice(bytes);
         let mut out = Vec::new();
-        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
-            let line = self.buf.drain(..=pos).collect::<Vec<u8>>();
-            let line = String::from_utf8_lossy(&line);
+        // 游标推进：逐行处理但只在末尾一次性 drain（旧实现每行 drain 一次，
+        // 剩余缓冲被反复 memmove，大 chunk 下退化为 O(n²)）
+        let mut cursor = 0usize;
+        while let Some(rel) = self.buf[cursor..].iter().position(|&b| b == b'\n') {
+            let end = cursor + rel + 1;
+            let line = String::from_utf8_lossy(&self.buf[cursor..end]);
+            cursor = end;
             let line = line.trim_end_matches(['\n', '\r']);
             if line.is_empty() {
                 // 空行 = 事件结束
@@ -39,6 +43,9 @@ impl SseParser {
                 self.data_lines.push(String::new());
             }
             // 其他行（event:/id:/retry:/注释）忽略：转换以 data 载荷为准
+        }
+        if cursor > 0 {
+            self.buf.drain(..cursor);
         }
         out
     }
@@ -92,7 +99,13 @@ pub fn encode_typed_event(data: &str) -> String {
         .ok()
         .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
         .filter(|t| !t.is_empty());
-    match event {
+    encode_typed_event_with_type(data, event.as_deref())
+}
+
+/// 已知事件类型时直接编码：省掉为取 `type` 而对同一 JSON 的二次解析
+/// （流式热路径上每个事件帧都走这条，见 `rewrite_sse_payload` 与转换器）。
+pub fn encode_typed_event_with_type(data: &str, event: Option<&str>) -> String {
+    match event.filter(|t| !t.is_empty()) {
         Some(name) => format!("event: {name}\n{}", encode_event(data)),
         None => encode_event(data),
     }

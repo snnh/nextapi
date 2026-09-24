@@ -24,9 +24,6 @@ use crate::state::AppState;
 /// codex CLI 的公开 OAuth client_id（社区通行用法）。
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-/// PKCE 授权端点（Phase 2 内置授权流使用）
-#[allow(dead_code)]
-pub const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const ORIGINATOR: &str = "codex_cli_rs";
 /// Codex 后端要求 instructions 必填（缺失 400 Instructions are required）。

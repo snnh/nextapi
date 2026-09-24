@@ -38,7 +38,7 @@ pub struct LogEvent {
     pub protocol_in: String,
     /// 未知时 = protocol_in
     pub protocol_out: String,
-    /// passthrough|convert|passthrough_fallback
+    /// none|passthrough|convert（媒体端点另有 media_adapt|media_task）
     pub convert_mode: String,
     pub stream: bool,
     pub status: i32,
@@ -151,10 +151,7 @@ impl LogSink {
                             tracing::warn!("日志溢出写 WAL 失败，数据丢弃: {e}");
                         }
                     });
-                    self.pending
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .push(h);
+                    self.reap_pending(h);
                 }
                 Err(mpsc::error::TrySendError::Closed(ev)) => {
                     let _ = ev;
@@ -178,12 +175,16 @@ impl LogSink {
                         }
                     }
                 });
-                self.pending
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .push(h);
+                self.reap_pending(h);
             }
         }
+    }
+
+    /// 登记后台任务句柄；先回收已完成的旧句柄，避免 pending 无界增长。
+    fn reap_pending(&self, h: tokio::task::JoinHandle<()>) {
+        let mut p = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        p.retain(|h| !h.is_finished());
+        p.push(h);
     }
 
     /// 优雅关闭：drop sender（调用方随后 await writer 退出）。

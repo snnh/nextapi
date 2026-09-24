@@ -49,14 +49,7 @@ fn redact_value(v: &Value) -> Value {
 
 /// 将字符串按字节上限截断（不会切断 UTF-8 字符）。
 fn truncate_to_bytes(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    s[..end].to_string()
+    crate::text::truncate_bytes(s, max)
 }
 
 /// 规则：JSON 递归遍历——key 命中敏感集合且字符串 > 256 → "[redacted]"；data: 前缀字符串 →

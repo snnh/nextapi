@@ -55,8 +55,12 @@ fn connect_headers(token: Option<&str>, streaming: bool) -> HeaderMap {
     h.insert(reqwest::header::ACCEPT, "*/*".parse().unwrap());
     if let Some(tok) = token {
         let v = format!("Basic {tok}-{tok}");
-        if let Ok(val) = v.parse() {
-            h.insert(reqwest::header::AUTHORIZATION, val);
+        match v.parse() {
+            Ok(val) => {
+                h.insert(reqwest::header::AUTHORIZATION, val);
+            }
+            // header 值含非法字符（token 被污染）→ 明确告警，否则只表现为难查的 401
+            Err(_) => tracing::warn!("devin: session token 含非法头字符，未发送 Authorization"),
         }
     }
     h
@@ -93,6 +97,15 @@ fn map_error_body(status: u16, body: &[u8]) -> UpstreamError {
             (!code.is_empty() || !msg.is_empty()).then_some((code, msg))
         })
         .unwrap_or_default();
+    // 非 JSON 错误体（HTML/纯文本/空）→ 回落原文，避免错误信息变成 ": "
+    let (code, msg) = if code.is_empty() && msg.is_empty() {
+        (
+            "upstream_error".to_string(),
+            text.trim().chars().take(300).collect::<String>(),
+        )
+    } else {
+        (code, msg)
+    };
     let hint = match code.as_str() {
         "failed_precondition" | "permission_denied" => {
             "（提示：该模型可能未解锁于当前 Devin 套餐；Free 计划仅个别模型可用）"
@@ -104,6 +117,11 @@ fn map_error_body(status: u16, body: &[u8]) -> UpstreamError {
     };
     UpstreamError::Status(status, format!("{code}: {msg}{hint}"))
 }
+
+/// 单帧载荷上限（防上游用巨大 len 头撑爆内存；实测帧为 KB 级）。
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// 解析缓冲上限（收不到完整帧即持续累积时的硬护栏）。
+const MAX_BUFFER_BYTES: usize = MAX_FRAME_BYTES + 64 * 1024;
 
 /// 信封帧解析器（flags(1) + len(4,BE) + payload，跨网络块拼接）。
 struct FrameParser {
@@ -118,7 +136,11 @@ impl FrameParser {
         Self { buf: Vec::new() }
     }
 
-    fn feed(&mut self, chunk: &[u8]) -> Vec<Frame> {
+    /// 解析出完整帧；`Err` 表示帧头非法或超限（调用方按上游错误处理）。
+    fn feed(&mut self, chunk: &[u8]) -> Result<Vec<Frame>, String> {
+        if self.buf.len().saturating_add(chunk.len()) > MAX_BUFFER_BYTES {
+            return Err(format!("信封缓冲超限（>{}B）", MAX_BUFFER_BYTES));
+        }
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
         loop {
@@ -126,6 +148,9 @@ impl FrameParser {
                 break;
             }
             let len = u32::from_be_bytes([self.buf[1], self.buf[2], self.buf[3], self.buf[4]]) as usize;
+            if len > MAX_FRAME_BYTES {
+                return Err(format!("信封帧超限（{len}B > {MAX_FRAME_BYTES}B）"));
+            }
             if self.buf.len() < 5 + len {
                 break;
             }
@@ -134,7 +159,7 @@ impl FrameParser {
             self.buf.drain(..5 + len);
             out.push((flags, payload));
         }
-        out
+        Ok(out)
     }
 }
 
@@ -216,6 +241,8 @@ fn frame_sse_stream(
         conv: StreamConv,
         queue: VecDeque<Result<Bytes, String>>,
         done: bool,
+        /// 是否收到结束帧（flags=2）：EOF 而无结束帧 = 连接被截断，不能当成功
+        end_seen: bool,
     }
     let st = St {
         src: Box::pin(src),
@@ -223,12 +250,29 @@ fn frame_sse_stream(
         conv: StreamConv::new(model),
         queue: VecDeque::new(),
         done: false,
+        end_seen: false,
     };
     stream::unfold(st, |mut st| async move {
         while st.queue.is_empty() && !st.done {
             match st.src.next().await {
                 Some(Ok(chunk)) => {
-                    for (flags, payload) in st.parser.feed(&chunk) {
+                    let frames = match st.parser.feed(&chunk) {
+                        Ok(f) => f,
+                        Err(msg) => {
+                            st.done = true;
+                            if st.conv.started() {
+                                let evs = st.conv.fail(&msg);
+                                push_events(&mut st.queue, evs);
+                            } else {
+                                st.queue.push_back(Err(msg));
+                            }
+                            break;
+                        }
+                    };
+                    for (flags, payload) in frames {
+                        if flags & 0x02 != 0 {
+                            st.end_seen = true;
+                        }
                         match frame_events(&mut st.conv, flags, &payload) {
                             Ok(evs) => push_events(&mut st.queue, evs),
                             Err(msg) => {
@@ -258,8 +302,19 @@ fn frame_sse_stream(
                 }
                 None => {
                     st.done = true;
-                    let evs = st.conv.finish();
-                    push_events(&mut st.queue, evs);
+                    if st.end_seen {
+                        let evs = st.conv.finish();
+                        push_events(&mut st.queue, evs);
+                    } else {
+                        // 连接被截断（EOF 无结束帧）：不能当成功，按上游错误表达
+                        let msg = "连接中断：未收到结束帧".to_string();
+                        if st.conv.started() {
+                            let evs = st.conv.fail(&msg);
+                            push_events(&mut st.queue, evs);
+                        } else {
+                            st.queue.push_back(Err(msg));
+                        }
+                    }
                 }
             }
         }
@@ -304,16 +359,24 @@ pub async fn execute_nonstream(
     let mut src = Box::pin(resp.bytes_stream().map(|r| r.map_err(|e| e.to_string())));
     let mut parser = FrameParser::new();
     let mut conv = StreamConv::new(model);
+    let mut end_seen = false;
     while let Some(chunk) = src.next().await {
         let frames = match chunk {
-            Ok(bytes) => parser.feed(&bytes),
+            Ok(bytes) => parser.feed(&bytes).map_err(UpstreamError::BodyRead)?,
             Err(e) => return Err(UpstreamError::BodyRead(e)),
         };
         for (flags, payload) in frames {
+            if flags & 0x02 != 0 {
+                end_seen = true;
+            }
             if let Err(msg) = frame_events(&mut conv, flags, &payload) {
                 return Err(UpstreamError::Status(502, msg));
             }
         }
+    }
+    // EOF 而无结束帧 = 连接截断：半截结果不能当成功返回
+    if !end_seen {
+        return Err(UpstreamError::BodyRead("连接中断：未收到结束帧".into()));
     }
     let _ = conv.finish();
     Ok(conv.final_json())
@@ -361,7 +424,7 @@ pub async fn exchange_pkce(
     if !status.is_success() {
         return Err(map_error_body(status.as_u16(), &bytes));
     }
-    let fields = proto::decode(&bytes).map_err(|e| UpstreamError::BodyRead(e))?;
+    let fields = proto::decode(&bytes).map_err(UpstreamError::BodyRead)?;
     let token = proto::get(&fields, 1)
         .and_then(|v| v.as_str())
         .unwrap_or_default()
@@ -620,11 +683,27 @@ mod tests {
         let mut full = vec![0u8, 0, 0, 0, 5];
         full.extend_from_slice(payload);
         // 跨两个 chunk 喂入
-        assert!(p.feed(&full[..3]).is_empty());
-        let frames = p.feed(&full[3..]);
+        assert!(p.feed(&full[..3]).unwrap().is_empty());
+        let frames = p.feed(&full[3..]).unwrap();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].0, 0);
         assert_eq!(&frames[0].1[..], payload);
+    }
+
+    /// 恶意帧头（巨大 len / 超限帧）必须报错而非撑爆缓冲或 panic
+    #[test]
+    fn frame_parser_rejects_oversize_and_bad_len() {
+        let mut p = FrameParser::new();
+        // 声明 4GB 载荷且持续送数据 → 缓冲护栏生效
+        let mut head = vec![0u8];
+        head.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(p.feed(&head).is_err(), "超过单帧上限应报错");
+        let mut p2 = FrameParser::new();
+        // 合法空帧后紧跟越界 len 头（> MAX_FRAME_BYTES）→ 仍需报错
+        let mut junk = vec![0u8, 0, 0, 0, 0];
+        junk.push(0);
+        junk.extend_from_slice(&(MAX_FRAME_BYTES as u32 + 1).to_be_bytes());
+        assert!(p2.feed(&junk).is_err());
     }
 
     #[test]

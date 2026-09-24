@@ -2,8 +2,6 @@
 //!
 //! 双向转换均走 IR（N→1→N），避免 N×M 适配器爆炸。
 //! 无法映射能力三级策略（§4.3）：直接映射 → 降级（记 ConvCtx + X-NextAPI-Degraded）→ 扩展透传。
-#![allow(dead_code)] // M2 先落地纯转换逻辑，M3 网关核心接入后移除
-#![allow(unused_imports)] // 同上：pub use 供 M3 使用
 
 pub mod anthropic;
 pub mod chat;
