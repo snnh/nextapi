@@ -501,6 +501,52 @@ fn clean_auth_value(name: &str, raw: &str) -> Option<String> {
     }
 }
 
+/// 调用方传入的 system_info 变量：请求头 `X-System-Info-*` 与请求体 `metadata` 对象
+/// （键小写、仅 [a-z0-9_]；值去控制字符并截断 500 字符）。请求头优先于 metadata。
+fn system_info_vars(headers: &HeaderMap, body: &serde_json::Value) -> Vec<(String, String)> {
+    fn norm_key(k: &str) -> Option<String> {
+        let k = k.trim().to_ascii_lowercase();
+        (!k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')).then_some(k)
+    }
+    fn norm_val(v: &str) -> Option<String> {
+        let cleaned: String = v
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let cleaned = cleaned.trim();
+        (!cleaned.is_empty()).then(|| crate::text::truncate_chars(cleaned, 500))
+    }
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut upsert = |key: Option<String>, val: Option<String>| {
+        if let (Some(k), Some(v)) = (key, val) {
+            match out.iter_mut().find(|(ek, _)| *ek == k) {
+                Some(slot) => slot.1 = v,
+                None => out.push((k, v)),
+            }
+        }
+    };
+    if let Some(m) = body.get("metadata").and_then(|v| v.as_object()) {
+        for (k, v) in m {
+            let val = if let Some(s) = v.as_str() {
+                Some(s.to_string())
+            } else if v.is_number() || v.is_boolean() {
+                Some(v.to_string())
+            } else {
+                None
+            };
+            upsert(norm_key(k), val.as_deref().and_then(norm_val));
+        }
+    }
+    for (name, value) in headers {
+        if let Some(suffix) = name.as_str().strip_prefix("x-system-info-") {
+            if let Ok(v) = value.to_str() {
+                upsert(norm_key(suffix), norm_val(v));
+            }
+        }
+    }
+    out
+}
+
 /// sha256 hex 化（网关 Key 鉴权）。
 fn hash_key(key: &str) -> String {
     let mut h = Sha256::new();
@@ -1689,13 +1735,23 @@ async fn run_gateway(
             let is_devin = upstream.kind == "devin";
             let mut devin_ctx: Option<DevinCtx> = None;
             let mut devin_err: Option<String> = None;
+            let mut devin_emu: Option<crate::upstream::devin::Emulation> = None;
             if is_devin {
+                let emu = crate::upstream::devin::emulation_config(&upstream.extra);
+                devin_emu = Some(emu);
                 match upstream.api_key_plain.as_deref().map(str::trim) {
                     Some(tok) if !tok.is_empty() => {
-                        match crate::upstream::devin::convert::build_chat_request(
+                        // CLI 环境模拟：头提示词/system_info 模板来自 extra，变量可被
+                        // 调用方（请求头 X-System-Info-* / 请求体 metadata）覆盖。
+                        let mut opts = crate::upstream::devin::convert::RequestOptions::from_extra(
+                            &upstream.extra,
+                        );
+                        opts.vars = system_info_vars(&headers, &body_value);
+                        match crate::upstream::devin::convert::build_chat_request_ex(
                             &outbound.body,
                             &up_model,
                             tok,
+                            &opts,
                         ) {
                             Ok(b) => {
                                 devin_ctx = Some(DevinCtx {
@@ -1728,6 +1784,7 @@ async fn run_gateway(
                 } else {
                     upstream.base_url.trim()
                 };
+                let emu = devin_emu.unwrap_or_default();
                 if stream {
                     crate::upstream::devin::execute_stream(
                         &client,
@@ -1736,6 +1793,7 @@ async fn run_gateway(
                         ctx.body.clone(),
                         &up_model,
                         stream_timeout_ms,
+                        emu,
                     )
                     .await
                     .map(upstream::StreamSource::Bytes)
@@ -1748,6 +1806,7 @@ async fn run_gateway(
                         ctx.body.clone(),
                         &up_model,
                         upstream.timeout_ms,
+                        emu,
                     )
                     .await
                     .map(ExecOutcome::Json)

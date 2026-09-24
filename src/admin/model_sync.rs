@@ -73,7 +73,8 @@ pub async fn fetch_upstream_models(
         } else {
             up.base_url.trim()
         };
-        let info = upstream::devin::user_status(&client, base, tok, 15000)
+        let emu = upstream::devin::emulation_config(&up.extra);
+        let info = upstream::devin::user_status(&client, base, tok, 15000, emu)
             .await
             .map_err(|e| e.to_string())?;
         return Ok(info.models);

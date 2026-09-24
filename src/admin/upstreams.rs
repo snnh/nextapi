@@ -739,7 +739,8 @@ async fn quota_probe(
     } else {
         up.base_url.trim()
     };
-    match crate::upstream::devin::user_status(&client, base, tok, 10_000).await {
+    let emu = crate::upstream::devin::emulation_config(&up.extra);
+    match crate::upstream::devin::user_status(&client, base, tok, 10_000, emu).await {
         Ok(info) => {
             let s = crate::upstream::devin::quota_snapshot(&info);
             // 上游未返回额度块（quota 为 None）时不落库：避免用「无额度」的空快照
@@ -816,6 +817,7 @@ async fn test_upstream(
                 &up.base_url,
                 up.api_key_plain.as_deref(),
                 10_000,
+                crate::upstream::devin::emulation_config(&up.extra),
             )
             .await,
         ));

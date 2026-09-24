@@ -207,6 +207,16 @@ export interface UpstreamExtra {
         simulate_body?: boolean
       }
     | null
+  /**
+   * Devin 渠道 CLI 环境模拟：缺省开启（f2 用 CLI 头提示词 + sentry-trace 头 +
+   * <system_info> 注入）；false 关闭。
+   */
+  cli_emulation?: boolean | { enabled?: boolean } | null
+  /**
+   * Devin <system_info> 模板：缺省用官方模板；字符串=自定义模板（支持 {变量}）；
+   * false 或空串=不注入；对象 { template } 亦可。
+   */
+  system_info?: false | string | { enabled?: boolean; template?: string | null } | null
 }
 
 export interface UpstreamIn {

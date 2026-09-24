@@ -645,6 +645,7 @@ async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> 
             &up.base_url,
             up.api_key_plain.as_deref(),
             10_000,
+            crate::upstream::devin::emulation_config(&up.extra),
         )
         .await;
     }
