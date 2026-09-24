@@ -128,7 +128,6 @@ fn extract_image_urls(raw: &Option<serde_json::Value>) -> Vec<serde_json::Value>
     out
 }
 
-
 /// 任务状态归一后的处理类别（纯函数，可测）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskOutcome {
@@ -390,7 +389,10 @@ async fn finalize_succeeded(
 
 /// 失败/取消（已归一到 failed）→ 状态 failed + error；LogEvent status=502 不计价。
 async fn finalize_failed(state: &AppState, task: &MediaTaskRow, st: &TaskStatus) -> ApiResult<()> {
-    let error = crate::text::truncate_chars(&st.error.clone().unwrap_or_else(|| "任务失败".to_string()), 2000);
+    let error = crate::text::truncate_chars(
+        &st.error.clone().unwrap_or_else(|| "任务失败".to_string()),
+        2000,
+    );
     let updated = sqlx::query(
         "UPDATE media_tasks SET status='failed', error=$2, raw=$3, finished_at=now(), updated_at=now() \
          WHERE id=$1 AND status IN ('pending','processing')",
@@ -480,7 +482,11 @@ fn err_response(status: u16, message: &str) -> Response {
     let status =
         axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
     let request_id = uuid::Uuid::new_v4().to_string();
-    (status, Json(crate::error::error_body(message, None, &request_id))).into_response()
+    (
+        status,
+        Json(crate::error::error_body(message, None, &request_id)),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------

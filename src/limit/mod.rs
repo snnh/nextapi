@@ -365,14 +365,34 @@ mod tests {
         let start = Instant::now();
         // 放行前 3 个
         assert!(window_allow(&mut q, start, 3, RPM_WINDOW));
-        assert!(window_allow(&mut q, start + Duration::from_secs(1), 3, RPM_WINDOW));
-        assert!(window_allow(&mut q, start + Duration::from_secs(2), 3, RPM_WINDOW));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(1),
+            3,
+            RPM_WINDOW
+        ));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(2),
+            3,
+            RPM_WINDOW
+        ));
         assert_eq!(q.len(), 3);
         // 第 4 个超限（不压入、不增长）
-        assert!(!window_allow(&mut q, start + Duration::from_secs(3), 3, RPM_WINDOW));
+        assert!(!window_allow(
+            &mut q,
+            start + Duration::from_secs(3),
+            3,
+            RPM_WINDOW
+        ));
         assert_eq!(q.len(), 3);
         // 跳至 far future：全部过期，重新放行且只剩新压入的 1 个
-        assert!(window_allow(&mut q, start + Duration::from_secs(100), 3, RPM_WINDOW));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(100),
+            3,
+            RPM_WINDOW
+        ));
         assert_eq!(q.len(), 1);
     }
 
@@ -383,11 +403,20 @@ mod tests {
         let limit = 1;
         // 恰在 60s 边界的旧事件仍算在窗口内 → 拒绝
         assert!(window_allow(&mut q, start, limit, RPM_WINDOW));
-        assert!(!window_allow(&mut q,
-            start + Duration::from_secs(60), limit, RPM_WINDOW));
+        assert!(!window_allow(
+            &mut q,
+            start + Duration::from_secs(60),
+            limit,
+            RPM_WINDOW
+        ));
         assert_eq!(q.len(), 1);
         // 61s：过期 → 放行
-        assert!(window_allow(&mut q, start + Duration::from_secs(61), limit, RPM_WINDOW));
+        assert!(window_allow(
+            &mut q,
+            start + Duration::from_secs(61),
+            limit,
+            RPM_WINDOW
+        ));
         assert_eq!(q.len(), 1);
     }
 

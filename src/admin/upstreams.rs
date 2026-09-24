@@ -680,7 +680,8 @@ async fn quota_probe(
         );
         let url = format!(
             "{}{}",
-            up.base_url_for(Protocol::OpenaiResponses).trim_end_matches('/'),
+            up.base_url_for(Protocol::OpenaiResponses)
+                .trim_end_matches('/'),
             "/responses"
         );
         let resp = match client

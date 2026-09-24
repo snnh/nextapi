@@ -908,7 +908,11 @@ mod tests {
         let devin = find("devin").expect("应有 devin 预设");
         assert_eq!(devin.kind, "devin");
         assert!(is_oauth(devin), "devin 预设必须是 oauth 鉴权");
-        assert_eq!(devin.protocols, &["openai_responses"], "devin 入口以 Responses 优先");
+        assert_eq!(
+            devin.protocols,
+            &["openai_responses"],
+            "devin 入口以 Responses 优先"
+        );
         assert_eq!(devin.base_url, crate::upstream::devin::DEFAULT_BASE_URL);
         // 非 OAuth 预设仍要求 Key
         assert!(!is_oauth(find("deepseek").unwrap()));

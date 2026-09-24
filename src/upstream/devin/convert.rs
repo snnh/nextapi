@@ -17,8 +17,7 @@ use crate::protocol::sse::{encode_typed_event, encode_typed_event_with_type};
 
 /// f2 prompt 缺省：调用方未带 instructions 时的极简身份提示（不内嵌 CLI 默认头
 /// 提示词——该提示词与 CLI 内置工具强耦合，网关透传调用方工具时不适用）。
-pub const DEFAULT_PROMPT: &str =
-    "You are Devin, an interactive command line agent from Cognition.";
+pub const DEFAULT_PROMPT: &str = "You are Devin, an interactive command line agent from Cognition.";
 
 /// 客户端标识（模拟 devin CLI 3000.11.1）。
 const EXTENSION_NAME: &str = "devin-cli";
@@ -51,20 +50,62 @@ fn det_uuid(seed: &str) -> String {
 /// 会话代号（形如 "glorious-orchestra"）。
 fn codename(seed: &str) -> String {
     const ADJ: &[&str] = &[
-        "amber", "ancient", "autumn", "bold", "brave", "bright", "calm", "clever",
-        "crimson", "crystal", "curious", "dancing", "dawn", "diamond", "distant", "eager",
-        "emerald", "fabled", "fancy", "gentle", "glorious", "golden", "happy", "hidden",
-        "humble", "ivory", "joyful", "keen", "lively", "lucky", "lunar", "mellow",
-        "misty", "noble", "proud", "quiet", "rapid", "rusty", "silent", "silver",
-        "sleepy", "spring", "starry", "steady", "sunny", "velvet", "vivid", "wild",
+        "amber", "ancient", "autumn", "bold", "brave", "bright", "calm", "clever", "crimson",
+        "crystal", "curious", "dancing", "dawn", "diamond", "distant", "eager", "emerald",
+        "fabled", "fancy", "gentle", "glorious", "golden", "happy", "hidden", "humble", "ivory",
+        "joyful", "keen", "lively", "lucky", "lunar", "mellow", "misty", "noble", "proud", "quiet",
+        "rapid", "rusty", "silent", "silver", "sleepy", "spring", "starry", "steady", "sunny",
+        "velvet", "vivid", "wild",
     ];
     const NOUN: &[&str] = &[
-        "anchor", "archive", "aurora", "badger", "beacon", "blossom", "breeze", "brook",
-        "canyon", "cascade", "citadel", "comet", "compass", "coral", "crane", "creek",
-        "delta", "dolphin", "ember", "falcon", "fjord", "forest", "fountain", "galaxy",
-        "harbor", "horizon", "island", "jasper", "lantern", "marsh", "meadow", "meteor",
-        "orchestra", "orchid", "otter", "pebble", "pillow", "quill", "raven", "river",
-        "savanna", "solstice", "summit", "thicket", "thunder", "valley", "willow", "zephyr",
+        "anchor",
+        "archive",
+        "aurora",
+        "badger",
+        "beacon",
+        "blossom",
+        "breeze",
+        "brook",
+        "canyon",
+        "cascade",
+        "citadel",
+        "comet",
+        "compass",
+        "coral",
+        "crane",
+        "creek",
+        "delta",
+        "dolphin",
+        "ember",
+        "falcon",
+        "fjord",
+        "forest",
+        "fountain",
+        "galaxy",
+        "harbor",
+        "horizon",
+        "island",
+        "jasper",
+        "lantern",
+        "marsh",
+        "meadow",
+        "meteor",
+        "orchestra",
+        "orchid",
+        "otter",
+        "pebble",
+        "pillow",
+        "quill",
+        "raven",
+        "river",
+        "savanna",
+        "solstice",
+        "summit",
+        "thicket",
+        "thunder",
+        "valley",
+        "willow",
+        "zephyr",
     ];
     let d = det_hash(seed);
     let a = ADJ[d[0] as usize % ADJ.len()];
@@ -142,13 +183,19 @@ fn input_to_messages(input: &Value) -> Result<Vec<Msg>, String> {
         Value::String(s) => out.push(Msg::User { text: s.clone() }),
         Value::Array(items) => {
             for item in items {
-                let ty = item.get("type").and_then(|t| t.as_str()).unwrap_or("message");
+                let ty = item
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("message");
                 match ty {
                     "message" | "" => {
                         let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
                         let text = content_text(item.get("content").unwrap_or(&Value::Null));
                         if role == "assistant" {
-                            pending.get_or_insert_with(Default::default).0.push_str(&text);
+                            pending
+                                .get_or_insert_with(Default::default)
+                                .0
+                                .push_str(&text);
                         } else {
                             flush(&mut pending, &mut out);
                             out.push(Msg::User { text });
@@ -282,11 +329,27 @@ pub fn build_chat_request(body: &Value, model_uid: &str, token: &str) -> Result<
     {
         let mut c = BytesMut::new();
         put_uint(&mut c, 1, 1);
-        put_uint(&mut c, 2, body.get("max_output_tokens").and_then(|v| v.as_u64()).unwrap_or(128000));
+        put_uint(
+            &mut c,
+            2,
+            body.get("max_output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(128000),
+        );
         put_uint(&mut c, 3, 400);
-        put_double(&mut c, 5, body.get("temperature").and_then(|v| v.as_f64()).unwrap_or(1.0));
+        put_double(
+            &mut c,
+            5,
+            body.get("temperature")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
+        );
         put_uint(&mut c, 7, 40);
-        put_double(&mut c, 8, body.get("top_p").and_then(|v| v.as_f64()).unwrap_or(0.95));
+        put_double(
+            &mut c,
+            8,
+            body.get("top_p").and_then(|v| v.as_f64()).unwrap_or(0.95),
+        );
         put_msg(&mut b, 8, &c);
     }
 
@@ -310,7 +373,11 @@ pub fn build_chat_request(body: &Value, model_uid: &str, token: &str) -> Result<
                 .get("parameters")
                 .cloned()
                 .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
-            put_str(&mut sub, 3, &serde_json::to_string(&params).unwrap_or_else(|_| "{}".into()));
+            put_str(
+                &mut sub,
+                3,
+                &serde_json::to_string(&params).unwrap_or_else(|_| "{}".into()),
+            );
             put_msg(&mut b, 10, &sub);
         }
     }
@@ -484,9 +551,18 @@ impl StreamConv {
 
     fn feed_tool_delta(&mut self, payload: &[u8]) -> Result<Vec<String>, String> {
         let fields = proto::decode(payload)?;
-        let call_id = proto::get(&fields, 1).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let name = proto::get(&fields, 2).and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let frag = proto::get(&fields, 3).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let call_id = proto::get(&fields, 1)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = proto::get(&fields, 2)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let frag = proto::get(&fields, 3)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let mut out = Vec::new();
 
         let idx = if !call_id.is_empty() {
@@ -773,10 +849,16 @@ mod tests {
         assert_eq!(env[0], 0);
         let payload = &env[5..];
         let fields = proto::decode(payload).unwrap();
-        assert_eq!(proto::get(&fields, 2).unwrap().as_str(), Some("You are helpful."));
+        assert_eq!(
+            proto::get(&fields, 2).unwrap().as_str(),
+            Some("You are helpful.")
+        );
         assert_eq!(proto::get_all(&fields, 3).len(), 3); // user / assistant(合并) / tool
         assert_eq!(proto::get(&fields, 7).unwrap().as_uint(), Some(5));
-        assert_eq!(proto::get(&fields, 21).unwrap().as_str(), Some("swe-1-6-slow"));
+        assert_eq!(
+            proto::get(&fields, 21).unwrap().as_str(),
+            Some("swe-1-6-slow")
+        );
         assert_eq!(proto::get_all(&fields, 10).len(), 1);
         // assistant 消息：f6 工具调用 + f11 文本
         let assistant = proto::get_all(&fields, 3)[1].as_bytes().unwrap().clone();
@@ -833,7 +915,10 @@ mod tests {
         let ev5 = conv.finish();
         assert!(ev5.iter().any(|e| e.contains("response.completed")));
         // 终止事件里的 usage：input=150（未缓存100+缓存50）output=20
-        let done = ev5.iter().find(|e| e.contains("response.completed")).unwrap();
+        let done = ev5
+            .iter()
+            .find(|e| e.contains("response.completed"))
+            .unwrap();
         assert!(done.contains("\"input_tokens\":150"));
         assert!(done.contains("\"cached_tokens\":50"));
         assert!(done.contains("\"output_tokens\":20"));
