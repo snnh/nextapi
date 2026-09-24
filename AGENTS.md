@@ -70,6 +70,9 @@ src/
 │   ├── devin/       # Devin Connect 渠道：proto wire 编解码 + Responses↔Devin 转换 +
 │   │                # CLI 形态请求（工具循环三形态消息：f3 正文 / f6 工具 / f11 思维链）
 │   │                # + 响应双流分流（f9 思维链→reasoning、f3 回答→output_text）
+│   │                # + CLI 环境模拟（extra.cli_emulation 默认开：cli_prompt.txt 头
+│   │                #   提示词按模型渲染为 f2 + 调用方 instructions 追加 + sentry-trace 头
+│   │                #   + <system_info> 模板注入，变量可被 X-System-Info-* / metadata 覆盖）
 │   │                # + PKCE 兑换 + GetUserStatus 探测
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
 ├── upstream/quota.rs # 上游额度快照（codex：x-codex-* 响应头解析，网关旁路抓头 + 节流落库；

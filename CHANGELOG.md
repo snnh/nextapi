@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Devin 渠道「CLI 环境模拟」**（上游级 `extra.cli_emulation`，**默认开启**，可在渠道表单关闭）：
+  - f2 改用官方 CLI 头提示词（实测渲染版 17682B，随仓库 `src/upstream/devin/cli_prompt.txt`），
+    末行 "You are powered by <模型展示名>" 按实际模型重渲染（`swe-1-6-slow` → `SWE-1.6 Slow`）；
+    调用方 `instructions` 追加在其后（关闭模拟时仍用极简身份提示词）。
+  - 出站头补 `sentry-trace: <32hex>-<16hex>-1`（逐请求生成），保持与官方一致不发 User-Agent。
+  - 会话首条以 source=1 注入 `<system_info>` 环境块：模板可由 `extra.system_info` 自定义
+    （缺省=官方形态；空串/false=不注入），支持变量 `{cwd} {platform} {os_version} {date}
+    {weekday} {datetime} {hostname} {arch} {model} {model_display} {gateway_version}`，
+    未识别占位符原样保留；调用方可用请求头 `X-System-Info-<变量名>` 或请求体 `metadata`
+    覆盖同名变量（请求头优先，值去控制字符并截断 500 字符）。
+  - WebUI：上游表单 devin 渠道新增「CLI 环境模拟」开关 + system_info 开关与模板文本框（含变量提示）。
+
 ## [0.3.9] - 2026-09-24
 
 ### Fixed

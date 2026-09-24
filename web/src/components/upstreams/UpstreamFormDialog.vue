@@ -241,6 +241,39 @@
         </div>
       </el-form-item>
 
+      <!-- Devin 渠道：CLI 环境模拟（头提示词 / sentry-trace / <system_info>） -->
+      <el-form-item v-if="isDevin" label="CLI 环境模拟">
+        <el-switch v-model="form.cliEmulation" />
+        <span class="hint" style="margin-left: 8px">
+          按官方 devin CLI 形态出站：f2 用 CLI 头提示词（17682B，末行按模型渲染）并把调用方的
+          system 提示词追加在后，出站头补 <span class="mono">sentry-trace</span>（不发 UA），
+          并按下方模板注入 <span class="mono">&lt;system_info&gt;</span>。关闭则用极简身份提示词。
+        </span>
+      </el-form-item>
+      <template v-if="isDevin && form.cliEmulation">
+        <el-form-item label="注入 system_info">
+          <el-switch v-model="form.systemInfoEnabled" />
+          <span class="hint" style="margin-left: 8px">
+            以 source=1 注入会话首条环境信息（官方 CLI 行为）；关闭即不注入。
+          </span>
+        </el-form-item>
+        <el-form-item v-if="form.systemInfoEnabled" label="system_info 模板">
+          <el-input
+            v-model="form.systemInfoTemplate"
+            type="textarea"
+            :rows="7"
+            spellcheck="false"
+            placeholder="留空=不注入"
+          />
+          <div class="hint">
+            可用变量：<span class="mono">{{ systemInfoVarHint }}</span>；
+            未识别的占位符原样保留。调用方可用请求头
+            <span class="mono">X-System-Info-&lt;变量名&gt;</span> 或请求体
+            <span class="mono">metadata</span> 覆盖同名变量（请求头优先）。
+          </div>
+        </el-form-item>
+      </template>
+
       <el-form-item label="协议" prop="protocols">
         <el-select
           v-model="form.protocols"
@@ -541,6 +574,8 @@ import {
   PROTOCOL_OPTIONS,
   STANDARD_PROTOCOLS,
   UPSTREAM_KINDS,
+  DEVIN_DEFAULT_SYSTEM_INFO,
+  DEVIN_SYSTEM_INFO_VARS,
 } from '@/utils/consts'
 import { upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -638,6 +673,12 @@ interface FormState {
   codexFingerprint: boolean
   /** Codex 自定义 User-Agent（留空=内置预设） */
   codexUserAgent: string
+  /** Devin：CLI 环境模拟开关（extra.cli_emulation；预设开启） */
+  cliEmulation: boolean
+  /** Devin：是否注入 <system_info>（空串=不注入） */
+  systemInfoEnabled: boolean
+  /** Devin：system_info 模板（支持 {变量}） */
+  systemInfoTemplate: string
 }
 
 function defaultForm(): FormState {
@@ -672,6 +713,9 @@ function defaultForm(): FormState {
     codexTransport: 'auto',
     codexFingerprint: true,
     codexUserAgent: '',
+    cliEmulation: true,
+    systemInfoEnabled: true,
+    systemInfoTemplate: DEVIN_DEFAULT_SYSTEM_INFO,
   }
 }
 
@@ -682,6 +726,10 @@ const codexTipShown = ref(false)
 
 // ---- Devin 渠道：CLI PKCE 无头授权（verifier 仅暂存内存，兑换后即弃） ----
 const isDevin = computed(() => form.kind === 'devin')
+/** system_info 变量提示文案（{cwd} {platform} …） */
+const systemInfoVarHint = computed(() =>
+  DEVIN_SYSTEM_INFO_VARS.map((v) => '{' + v + '}').join(' '),
+)
 const devinPkce = ref<{ state: string; code_verifier: string } | null>(null)
 const devinCode = ref('')
 const devinAuthLoading = ref(false)
@@ -1213,6 +1261,17 @@ function open(upstream?: UpstreamOut) {
     const fp = upstream.extra?.codex_fingerprint
     base.codexFingerprint = fp === false ? false : (fp?.enabled ?? true)
     base.codexUserAgent = (fp && typeof fp === 'object' ? fp.user_agent : '') ?? ''
+    // Devin CLI 环境模拟：cli_emulation 默认开；system_info 缺省为官方模板、空串=不注入
+    base.cliEmulation = upstream.extra?.cli_emulation !== false
+    const si = upstream.extra?.system_info
+    const siTpl = typeof si === 'object' && si ? (si.template ?? '') : '' 
+    if (si === false || (typeof si === 'string' && !si.trim())) {
+      base.systemInfoEnabled = false
+      base.systemInfoTemplate = DEVIN_DEFAULT_SYSTEM_INFO
+    } else {
+      base.systemInfoEnabled = true
+      base.systemInfoTemplate = siTpl || DEVIN_DEFAULT_SYSTEM_INFO
+    }
   }
   Object.assign(form, base)
   extraSnapshot.value = upstream?.extra
@@ -1280,6 +1339,19 @@ function buildExtra(): UpstreamExtra {
     delete next.enabled
     if (Object.keys(next).length) extra.codex_fingerprint = next as never
     else delete extra.codex_fingerprint
+  }
+  // Devin CLI 环境模拟：开启=预设（不落 extra）；关闭写 false。
+  // system_info 仅在非默认模板时落 extra（= 默认模板用后端内置，留空串=不注入）。
+  if (form.kind === 'devin') {
+    if (form.cliEmulation) delete extra.cli_emulation
+    else extra.cli_emulation = false
+    if (!form.systemInfoEnabled || !form.systemInfoTemplate.trim()) {
+      extra.system_info = ''
+    } else if (form.systemInfoTemplate === DEVIN_DEFAULT_SYSTEM_INFO) {
+      delete extra.system_info
+    } else {
+      extra.system_info = form.systemInfoTemplate
+    }
   }
   return extra
 }

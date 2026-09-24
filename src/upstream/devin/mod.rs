@@ -37,8 +37,36 @@ fn endpoint(base_url: &str, path: &str) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), path)
 }
 
-/// CLI 形态出站头（实测）：`Authorization: Basic {tok}-{tok}` 为原文重复、非 base64。
-fn connect_headers(token: Option<&str>, streaming: bool) -> HeaderMap {
+/// CLI 环境模拟配置（`extra.cli_emulation`：false 关闭；默认开启＝行为贴近官方 CLI）。
+#[derive(Debug, Clone, Copy)]
+pub struct Emulation {
+    pub enabled: bool,
+}
+
+impl Default for Emulation {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// 读取上游 CLI 环境模拟配置（`extra.cli_emulation`：bool，或对象 `{enabled: bool}`）。
+pub fn emulation_config(extra: &serde_json::Value) -> Emulation {
+    match extra.get("cli_emulation") {
+        Some(v) if v.as_bool() == Some(false) => Emulation { enabled: false },
+        Some(v)
+            if v.as_object()
+                .is_some_and(|o| o.get("enabled").and_then(|x| x.as_bool()) == Some(false)) =>
+        {
+            Emulation { enabled: false }
+        }
+        _ => Emulation::default(),
+    }
+}
+
+/// CLI 形态出站头（实测）：`Authorization: Basic {tok}-{tok}` 为原文重复、非 base64；
+/// 官方客户端另带 `sentry-trace: <32hex>-<16hex>-1`（模拟开启时随请求生成），
+/// 且**不发 User-Agent**。
+fn connect_headers(token: Option<&str>, streaming: bool, emulation: Emulation) -> HeaderMap {
     let mut h = HeaderMap::new();
     if streaming {
         h.insert(
@@ -53,6 +81,13 @@ fn connect_headers(token: Option<&str>, streaming: bool) -> HeaderMap {
     }
     h.insert("connect-protocol-version", "1".parse().unwrap());
     h.insert(reqwest::header::ACCEPT, "*/*".parse().unwrap());
+    if emulation.enabled {
+        let mut raw = [0u8; 24];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut raw);
+        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let trace = format!("{}-{}-1", &hex[..32], &hex[32..48]);
+        h.insert("sentry-trace", trace.parse().unwrap());
+    }
     if let Some(tok) = token {
         let v = format!("Basic {tok}-{tok}");
         match v.parse() {
@@ -197,10 +232,11 @@ async fn open_chat(
     token: &str,
     body: Bytes,
     timeout_ms: i32,
+    emulation: Emulation,
 ) -> Result<reqwest::Response, UpstreamError> {
     let mut req = client
         .post(endpoint(base_url, CHAT_PATH))
-        .headers(connect_headers(Some(token), true))
+        .headers(connect_headers(Some(token), true, emulation))
         .body(body);
     if timeout_ms > 0 {
         req = req.timeout(std::time::Duration::from_millis(timeout_ms as u64));
@@ -229,8 +265,9 @@ pub async fn execute_stream(
     body: Bytes,
     model: &str,
     timeout_ms: i32,
+    emulation: Emulation,
 ) -> Result<ByteStream, UpstreamError> {
-    let resp = open_chat(client, base_url, token, body, timeout_ms).await?;
+    let resp = open_chat(client, base_url, token, body, timeout_ms, emulation).await?;
     let src = resp.bytes_stream().map(|r| r.map_err(|e| e.to_string()));
     Ok(frame_sse_stream(src, model.to_string()))
 }
@@ -359,8 +396,9 @@ pub async fn execute_nonstream(
     body: Bytes,
     model: &str,
     timeout_ms: i32,
+    emulation: Emulation,
 ) -> Result<serde_json::Value, UpstreamError> {
-    let resp = open_chat(client, base_url, token, body, timeout_ms).await?;
+    let resp = open_chat(client, base_url, token, body, timeout_ms, emulation).await?;
     let mut src = Box::pin(resp.bytes_stream().map(|r| r.map_err(|e| e.to_string())));
     let mut parser = FrameParser::new();
     let mut conv = StreamConv::new(model);
@@ -409,12 +447,13 @@ pub async fn exchange_pkce(
     code_verifier: &str,
     timeout_ms: i32,
 ) -> Result<PkceResult, UpstreamError> {
+    let emulation = Emulation::default();
     let mut body = BytesMut::new();
     put_str(&mut body, 1, code);
     put_str(&mut body, 2, code_verifier);
     let mut req = client
         .post(endpoint(base_url, EXCHANGE_PATH))
-        .headers(connect_headers(None, false))
+        .headers(connect_headers(None, false, emulation))
         .body(body.freeze());
     if timeout_ms > 0 {
         req = req.timeout(std::time::Duration::from_millis(timeout_ms as u64));
@@ -551,6 +590,7 @@ pub async fn probe_status(
     base_url: &str,
     token: Option<&str>,
     timeout_ms: u64,
+    emulation: Emulation,
 ) -> serde_json::Value {
     let base = if base_url.trim().is_empty() {
         DEFAULT_BASE_URL
@@ -559,7 +599,7 @@ pub async fn probe_status(
     };
     let started = std::time::Instant::now();
     let res = match token.map(str::trim).filter(|t| !t.is_empty()) {
-        Some(tok) => user_status(client, base, tok, timeout_ms as i32).await,
+        Some(tok) => user_status(client, base, tok, timeout_ms as i32, emulation).await,
         None => Err(UpstreamError::Status(
             400,
             "尚未完成 Devin 授权：请用「Devin 授权」以 Devin 账号换取会话凭证".to_string(),
@@ -596,13 +636,14 @@ pub async fn user_status(
     base_url: &str,
     token: &str,
     timeout_ms: i32,
+    emulation: Emulation,
 ) -> Result<StatusInfo, UpstreamError> {
     let mut outer = BytesMut::new();
     let m = metadata(token);
     put_msg(&mut outer, 1, &m);
     let mut req = client
         .post(endpoint(base_url, STATUS_PATH))
-        .headers(connect_headers(Some(token), false))
+        .headers(connect_headers(Some(token), false, emulation))
         .body(outer.freeze());
     if timeout_ms > 0 {
         req = req.timeout(std::time::Duration::from_millis(timeout_ms as u64));
@@ -698,6 +739,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sentry_trace_only_when_emulation_on() {
+        let on = connect_headers(Some("tok$a"), true, Emulation::default());
+        let trace = on.get("sentry-trace").expect("模拟开启应带 sentry-trace");
+        let trace = trace.to_str().unwrap();
+        let parts: Vec<&str> = trace.split('-').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].len(), 32);
+        assert_eq!(parts[1].len(), 16);
+        assert_eq!(parts[2], "1");
+        assert!(on.get("user-agent").is_none(), "官方 CLI 不发 User-Agent");
+        let off = connect_headers(Some("tok$a"), true, Emulation { enabled: false });
+        assert!(off.get("sentry-trace").is_none());
+    }
+
+    #[test]
+    fn emulation_config_defaults_on() {
+        assert!(emulation_config(&serde_json::json!({})).enabled);
+        assert!(!emulation_config(&serde_json::json!({"cli_emulation": false})).enabled);
+        assert!(
+            !emulation_config(&serde_json::json!({"cli_emulation": {"enabled": false}})).enabled
+        );
+        assert!(emulation_config(&serde_json::json!({"cli_emulation": true})).enabled);
+    }
+
+    #[test]
     fn frame_parser_across_chunks() {
         let mut p = FrameParser::new();
         let payload = b"hello";
@@ -737,7 +803,7 @@ mod tests {
 
     #[test]
     fn auth_header_is_plain_dup() {
-        let h = connect_headers(Some("devin-session-token$abc"), true);
+        let h = connect_headers(Some("devin-session-token$abc"), true, Emulation::default());
         assert_eq!(
             h.get(reqwest::header::AUTHORIZATION).unwrap(),
             "Basic devin-session-token$abc-devin-session-token$abc"

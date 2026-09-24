@@ -15,9 +15,16 @@ use sha2::{Digest, Sha256};
 use super::proto::{self, put_double, put_msg, put_str, put_uint};
 use crate::protocol::sse::{encode_typed_event, encode_typed_event_with_type};
 
-/// f2 prompt 缺省：调用方未带 instructions 时的极简身份提示（不内嵌 CLI 默认头
-/// 提示词——该提示词与 CLI 内置工具强耦合，网关透传调用方工具时不适用）。
+/// f2 prompt 缺省（CLI 环境模拟关闭时）：调用方未带 instructions 时的极简身份提示。
 pub const DEFAULT_PROMPT: &str = "You are Devin, an interactive command line agent from Cognition.";
+
+/// 官方 CLI 头提示词（实测渲染版 17682B，取自 devin CLI 3000.11.1 的真实请求 f2，
+/// 见 `.owc/devin-ref/field-0019_f2.txt`）。末行 "You are powered by <模型展示名>"
+/// 按实际模型重渲染（见 [`render_cli_prompt`]）。
+pub const CLI_HEAD_PROMPT: &str = include_str!("cli_prompt.txt");
+
+/// 官方 CLI 注入的 <system_info> 环境块模板（实测 265B 形态；变量见 [`builtin_vars`]）。
+pub const DEFAULT_SYSTEM_INFO: &str = "<system_info>\nThe following information is automatically generated context about your current environment.\nCurrent workspace directories:\n  {cwd} (cwd)\n\nPlatform: {platform}\nOS Version: {os_version}\nToday's date: {weekday}, {date}\n</system_info>";
 
 /// 客户端标识（模拟 devin CLI 3000.11.1）。
 const EXTENSION_NAME: &str = "devin-cli";
@@ -118,6 +125,217 @@ fn fingerprint() -> String {
     let mut raw = [0u8; 366];
     rand::rng().fill_bytes(&mut raw);
     raw.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// system_info 注入策略（`extra.system_info`）：
+/// - 缺省 → 官方模板 [`DEFAULT_SYSTEM_INFO`]；`false` 或空串 → 不注入；
+/// - 字符串 → 自定义模板（支持 `{变量}` 替换，未识别占位符原样保留）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SystemInfoSpec {
+    #[default]
+    Default,
+    Off,
+    Template(String),
+}
+
+/// 解析 `extra.system_info`（字符串 / `{template}` 对象 / false）。
+pub fn system_info_spec(extra: &serde_json::Value) -> SystemInfoSpec {
+    match extra.get("system_info") {
+        None => SystemInfoSpec::Default,
+        Some(v) if v.as_bool() == Some(false) => SystemInfoSpec::Off,
+        Some(v) if v.as_str().is_some_and(|s| s.trim().is_empty()) => SystemInfoSpec::Off,
+        Some(v) => match v.as_str() {
+            Some(s) => SystemInfoSpec::Template(s.to_string()),
+            None => v
+                .get("template")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| SystemInfoSpec::Template(t.to_string()))
+                .unwrap_or(SystemInfoSpec::Default),
+        },
+    }
+}
+
+/// 渲染 CLI 头提示词的模型展示名（`swe-1-6-slow` → `SWE-1.6 Slow`）。
+/// 无法识别时返回 None（保留提示词原文）。
+fn model_display_name(uid: &str) -> Option<String> {
+    fn cap(s: &str) -> String {
+        let mut ch = s.chars();
+        match ch.next() {
+            Some(first) => format!("{}{}", first.to_ascii_uppercase(), ch.as_str()),
+            None => String::new(),
+        }
+    }
+    let parts: Vec<&str> = uid
+        .strip_prefix("swe-")?
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() || !parts[0].chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    // swe-1-6-slow → SWE-1.6 Slow；swe-2-high → SWE-2 High；swe-2 → SWE-2
+    let (mut name, mut tiers) = (format!("SWE-{}", parts[0]), &parts[1..]);
+    if let Some(minor) = parts
+        .get(1)
+        .filter(|p| p.chars().all(|c| c.is_ascii_digit()))
+    {
+        name.push('.');
+        name.push_str(minor);
+        tiers = &parts[2..];
+    }
+    for tier in tiers {
+        name.push(' ');
+        name.push_str(&cap(tier));
+    }
+    Some(name)
+}
+
+/// 按模型渲染 CLI 头提示词（仅替换末行的模型展示名；识别不出则原样返回）。
+pub fn render_cli_prompt(model_uid: &str) -> String {
+    let Some(name) = model_display_name(model_uid) else {
+        return CLI_HEAD_PROMPT.to_string();
+    };
+    match CLI_HEAD_PROMPT.rfind("You are powered by ") {
+        Some(idx) => {
+            let line_end = CLI_HEAD_PROMPT[idx..]
+                .find('\n')
+                .map(|off| idx + off)
+                .unwrap_or(CLI_HEAD_PROMPT.len());
+            format!(
+                "{}You are powered by {name}.{}",
+                &CLI_HEAD_PROMPT[..idx],
+                &CLI_HEAD_PROMPT[line_end..]
+            )
+        }
+        None => CLI_HEAD_PROMPT.to_string(),
+    }
+}
+
+fn platform_name() -> String {
+    std::env::consts::OS.to_string()
+}
+
+fn os_version() -> String {
+    if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .map(|s| format!("Linux {}", s.trim()))
+            .unwrap_or_else(|_| platform_name())
+    } else {
+        platform_name()
+    }
+}
+
+fn hostname() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// 模板内置变量（键均小写；调用方传来的同名变量覆盖之）。
+fn builtin_vars(model_uid: &str) -> Vec<(String, String)> {
+    let now = chrono::Local::now();
+    vec![
+        ("cwd".into(), "/workspace".into()),
+        ("platform".into(), platform_name()),
+        ("os_version".into(), os_version()),
+        ("date".into(), now.format("%Y-%m-%d").to_string()),
+        ("weekday".into(), now.format("%A").to_string()),
+        (
+            "datetime".into(),
+            now.format("%Y-%m-%d %H:%M:%S").to_string(),
+        ),
+        ("hostname".into(), hostname()),
+        ("arch".into(), std::env::consts::ARCH.to_string()),
+        ("model".into(), model_uid.to_string()),
+        (
+            "model_display".into(),
+            model_display_name(model_uid).unwrap_or_else(|| model_uid.to_string()),
+        ),
+        (
+            "gateway_version".into(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        ),
+    ]
+}
+
+/// `{name}` 占位符替换：仅替换已知变量（大小写不敏感），未识别的原样保留。
+fn render_vars(template: &str, vars: &[(String, String)]) -> String {
+    let mut out = String::with_capacity(template.len() + 64);
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        let name = &after[..close];
+        let key = name.trim().to_ascii_lowercase();
+        match vars.iter().find(|(k, _)| *k == key) {
+            Some((_, v)) => out.push_str(v),
+            None => {
+                out.push('{');
+                out.push_str(name);
+                out.push('}');
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 渲染 system_info 块；`Off` 返回 None。
+pub fn render_system_info(
+    spec: &SystemInfoSpec,
+    model_uid: &str,
+    caller_vars: &[(String, String)],
+) -> Option<String> {
+    let template = match spec {
+        SystemInfoSpec::Off => return None,
+        SystemInfoSpec::Default => DEFAULT_SYSTEM_INFO,
+        SystemInfoSpec::Template(t) => t.as_str(),
+    };
+    let mut vars = builtin_vars(model_uid);
+    for (k, v) in caller_vars {
+        match vars.iter_mut().find(|(bk, _)| bk == k) {
+            Some(slot) => slot.1 = v.clone(),
+            None => vars.push((k.clone(), v.clone())),
+        }
+    }
+    Some(render_vars(template, &vars))
+}
+
+/// 请求构造选项（上游 `extra` 解析结果 + 调用方传入变量）。
+/// `Default` 与生产默认一致（CLI 环境模拟开启）。
+#[derive(Debug, Clone)]
+pub struct RequestOptions {
+    /// CLI 环境模拟（`extra.cli_emulation`，默认开）：头提示词 + system_info 注入
+    pub cli_emulation: bool,
+    pub system_info: SystemInfoSpec,
+    /// 调用方传入变量（键小写；请求头 X-System-Info-* 与请求体 metadata）
+    pub vars: Vec<(String, String)>,
+}
+
+impl Default for RequestOptions {
+    fn default() -> Self {
+        Self::from_extra(&serde_json::Value::Null)
+    }
+}
+
+impl RequestOptions {
+    /// 从上游 `extra` 解析（调用方变量由调用方 push）。
+    pub fn from_extra(extra: &serde_json::Value) -> Self {
+        Self {
+            cli_emulation: extra.get("cli_emulation").and_then(|v| v.as_bool()) != Some(false),
+            system_info: system_info_spec(extra),
+            vars: Vec::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -332,17 +550,39 @@ fn encode_message(msg: &Msg, idx: usize, seed: &str) -> BytesMut {
 ///
 /// `body` 为出站 Responses JSON；`model_uid` 为上游实际模型名（f21）；
 /// `token` 为 devin session token（Metadata f3 原文）。
-pub fn build_chat_request(body: &Value, model_uid: &str, token: &str) -> Result<Bytes, String> {
+/// 构造 GetChatMessageRequest 信封字节。`opts.cli_emulation` 为 true 时按官方 CLI 形态：
+/// f2 = 头提示词（按模型渲染）为底 + 调用方 instructions 追加在后，并在会话首条注入
+/// `<system_info>`（模板与变量见 [`SystemInfoSpec`] / [`builtin_vars`]）。
+pub fn build_chat_request_ex(
+    body: &Value,
+    model_uid: &str,
+    token: &str,
+    opts: &RequestOptions,
+) -> Result<Bytes, String> {
     // 会话种子：输入序列化 + 模型 → 同会话多轮请求派生 id 稳定
     let seed = format!("{model_uid}:{}", body.get("input").unwrap_or(&Value::Null));
 
-    let messages = input_to_messages(body.get("input").unwrap_or(&Value::Null))?;
-    let prompt = body
+    let mut messages = input_to_messages(body.get("input").unwrap_or(&Value::Null))?;
+    let caller_prompt = body
         .get("instructions")
         .and_then(|v| v.as_str())
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or(DEFAULT_PROMPT)
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let prompt = if opts.cli_emulation {
+        // CLI 形态（实测）：头提示词为底，调用方 system 提示词追加在后
+        match caller_prompt {
+            Some(extra) => format!("{}\n\n{extra}", render_cli_prompt(model_uid)),
+            None => render_cli_prompt(model_uid),
+        }
+    } else {
+        caller_prompt.unwrap_or(DEFAULT_PROMPT).to_string()
+    };
+    if opts.cli_emulation {
+        // 官方 CLI 在会话首条注入环境信息（source=1）
+        if let Some(text) = render_system_info(&opts.system_info, model_uid, &opts.vars) {
+            messages.insert(0, Msg::User { text });
+        }
+    }
 
     let mut b = BytesMut::with_capacity(8 * 1024);
 
@@ -1014,7 +1254,11 @@ mod tests {
             "temperature": 0.5,
             "max_output_tokens": 1000
         });
-        let env = build_chat_request(&body, "swe-1-6-slow", "tok$1").unwrap();
+        let opts = RequestOptions {
+            cli_emulation: false,
+            ..Default::default()
+        };
+        let env = build_chat_request_ex(&body, "swe-1-6-slow", "tok$1", &opts).unwrap();
         // 信封
         assert_eq!(env[0], 0);
         let payload = &env[5..];
@@ -1170,6 +1414,136 @@ mod tests {
         assert_eq!(json["output"][0]["summary"][0]["text"], "思考中");
         assert_eq!(json["output"][1]["type"], "message");
         assert_eq!(json["output"][1]["content"][0]["text"], "最终回答");
+    }
+
+    #[test]
+    fn model_display_name_maps_swe_models() {
+        assert_eq!(
+            model_display_name("swe-1-6-slow").as_deref(),
+            Some("SWE-1.6 Slow")
+        );
+        assert_eq!(
+            model_display_name("swe-1-6-fast").as_deref(),
+            Some("SWE-1.6 Fast")
+        );
+        assert_eq!(
+            model_display_name("swe-2-high").as_deref(),
+            Some("SWE-2 High")
+        );
+        assert_eq!(model_display_name("swe-2").as_deref(), Some("SWE-2"));
+        assert_eq!(
+            model_display_name("swe-1-7-lightning-max").as_deref(),
+            Some("SWE-1.7 Lightning Max")
+        );
+        assert_eq!(model_display_name("swe-check"), None);
+        assert_eq!(model_display_name("claude-sonnet-4"), None);
+        // 头提示词末行按模型重渲染；不可识别时原样
+        let rendered = render_cli_prompt("swe-1-6-slow");
+        assert!(rendered.ends_with("You are powered by SWE-1.6 Slow."));
+        assert_eq!(CLI_HEAD_PROMPT.len(), 17682);
+        assert_eq!(render_cli_prompt("unknown-model"), CLI_HEAD_PROMPT);
+    }
+
+    #[test]
+    fn cli_emulation_renders_head_prompt_with_instructions_appended() {
+        let body = json!({
+            "instructions": "调用方的系统提示词",
+            "input": [{"role": "user", "content": "hi"}]
+        });
+        let opts = RequestOptions {
+            cli_emulation: true,
+            ..Default::default()
+        };
+        let env = build_chat_request_ex(&body, "swe-1-6-slow", "tok$1", &opts).unwrap();
+        let fields = proto::decode(&env[5..]).unwrap();
+        let prompt = proto::get(&fields, 2).unwrap().as_str().unwrap();
+        assert!(
+            prompt.starts_with("You are Devin, an interactive command line agent from Cognition.")
+        );
+        assert!(prompt.contains("You are powered by SWE-1.6 Slow."));
+        assert!(prompt.ends_with("调用方的系统提示词"));
+        // 首条消息 = <system_info>（source=1），变量已替换
+        let msgs = proto::get_all(&fields, 3);
+        assert_eq!(msgs.len(), 2);
+        let first = proto::decode(msgs[0].as_bytes().unwrap()).unwrap();
+        assert_eq!(proto::get(&first, 2).unwrap().as_uint(), Some(1));
+        let info = proto::get(&first, 3).unwrap().as_str().unwrap();
+        assert!(info.starts_with("<system_info>"));
+        assert!(info.contains("  /workspace (cwd)"));
+        assert!(!info.contains("{cwd}"));
+        assert!(info.contains("Platform: "));
+        assert!(!info.contains("SWE-1.6 Slow")); // system_info 不含模型名
+    }
+
+    #[test]
+    fn cli_emulation_off_keeps_minimal_prompt_and_no_system_info() {
+        let body = json!({"input": [{"role": "user", "content": "hi"}]});
+        let opts = RequestOptions {
+            cli_emulation: false,
+            ..Default::default()
+        };
+        let env = build_chat_request_ex(&body, "swe-1-6-slow", "tok$1", &opts).unwrap();
+        let fields = proto::decode(&env[5..]).unwrap();
+        assert_eq!(
+            proto::get(&fields, 2).unwrap().as_str(),
+            Some(DEFAULT_PROMPT)
+        );
+        assert_eq!(proto::get_all(&fields, 3).len(), 1);
+    }
+
+    #[test]
+    fn system_info_template_and_caller_vars() {
+        let extra = json!({
+            "cli_emulation": true,
+            "system_info": "<system_info>{cwd}|{platform}|{custom}|{unknown}</system_info>"
+        });
+        let mut opts = RequestOptions::from_extra(&extra);
+        opts.vars
+            .push(("custom".to_string(), "调用方值".to_string()));
+        let body = json!({"input": [{"role": "user", "content": "hi"}]});
+        let env = build_chat_request_ex(&body, "swe-1-6-slow", "tok$1", &opts).unwrap();
+        let fields = proto::decode(&env[5..]).unwrap();
+        let first = proto::decode(proto::get_all(&fields, 3)[0].as_bytes().unwrap()).unwrap();
+        let info = proto::get(&first, 3).unwrap().as_str().unwrap();
+        assert_eq!(
+            info,
+            format!(
+                "<system_info>/workspace|{}|调用方值|{{unknown}}</system_info>",
+                std::env::consts::OS
+            )
+        );
+        // 内置变量可被调用方覆盖（同名）
+        let extra = json!({"cli_emulation": true, "system_info": "{cwd}"});
+        let mut opts = RequestOptions::from_extra(&extra);
+        opts.vars.push(("cwd".to_string(), "/repo".to_string()));
+        let env = build_chat_request_ex(&body, "swe-1-6-slow", "tok$1", &opts).unwrap();
+        let fields = proto::decode(&env[5..]).unwrap();
+        let first = proto::decode(proto::get_all(&fields, 3)[0].as_bytes().unwrap()).unwrap();
+        assert_eq!(proto::get(&first, 3).unwrap().as_str(), Some("/repo"));
+    }
+
+    #[test]
+    fn system_info_spec_parsing() {
+        assert_eq!(system_info_spec(&json!({})), SystemInfoSpec::Default);
+        assert_eq!(
+            system_info_spec(&json!({"system_info": false})),
+            SystemInfoSpec::Off
+        );
+        assert_eq!(
+            system_info_spec(&json!({"system_info": "   "})),
+            SystemInfoSpec::Off
+        );
+        assert_eq!(
+            system_info_spec(&json!({"system_info": "{date}"})),
+            SystemInfoSpec::Template("{date}".into())
+        );
+        assert_eq!(
+            system_info_spec(&json!({"system_info": {"template": "{date}"}})),
+            SystemInfoSpec::Template("{date}".into())
+        );
+        // cli_emulation 默认开；显式 false 关
+        assert!(RequestOptions::from_extra(&json!({})).cli_emulation);
+        assert!(!RequestOptions::from_extra(&json!({"cli_emulation": false})).cli_emulation);
     }
 
     /// 从 SSE 事件串取出 data 行并解析为 JSON。

@@ -134,3 +134,29 @@ export function statusType(s: number): 'success' | 'warning' | 'danger' | 'info'
   if (s < 500) return 'warning'
   return 'danger'
 }
+
+/** Devin CLI 环境模拟：官方 <system_info> 模板（实测形态；{变量} 运行时替换） */
+export const DEVIN_DEFAULT_SYSTEM_INFO = `<system_info>
+The following information is automatically generated context about your current environment.
+Current workspace directories:
+  {cwd} (cwd)
+
+Platform: {platform}
+OS Version: {os_version}
+Today's date: {weekday}, {date}
+</system_info>`
+
+/** Devin system_info 可用变量（内置；同名可被请求头 X-System-Info-* / metadata 覆盖） */
+export const DEVIN_SYSTEM_INFO_VARS = [
+  'cwd',
+  'platform',
+  'os_version',
+  'date',
+  'weekday',
+  'datetime',
+  'hostname',
+  'arch',
+  'model',
+  'model_display',
+  'gateway_version',
+]
