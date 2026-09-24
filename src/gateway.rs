@@ -343,6 +343,19 @@ impl Stream for TeeStream {
                 }
                 Poll::Ready(Some(Err(e))) => {
                     self.done = true;
+                    // 流中鉴权失效（devin 用 HTTP 200 + end 帧 unauthenticated 表达）：
+                    // 状态码已发出无法改判，但凭证守卫要立刻生效，避免后续请求继续白打上游
+                    let msg = e.to_string();
+                    if let Some(ctx) = self.ctx.as_ref() {
+                        if let (Some(uid), Some(code)) =
+                            (ctx.tmpl.upstream_id, crate::upstream::cred::classify(&msg))
+                        {
+                            ctx.state.mark_auth_failure(
+                                uid,
+                                crate::upstream::cred::AuthFailure::new(200, code, &msg),
+                            );
+                        }
+                    }
                     // 转发错误；下次 poll 会 finalize 一次性记账
                     return Poll::Ready(Some(Err(to_io_err(e))));
                 }
@@ -987,6 +1000,24 @@ fn mode_str(mode: Mode) -> &'static str {
 }
 
 /// 从 Fail 中抽取人类可读的消息摘要。
+/// 凭证失效联动（token 失效四项之①→②→③）：命中上游鉴权失败时把该上游临时摘出候选
+/// （内存守卫，冷却 [`crate::upstream::cred::AUTH_FAIL_TTL_SECS`] 秒）并异步落库
+/// `upstreams.extra.auth_state`（后台可见）。返回是否命中。
+fn note_auth_failure(state: &AppState, upstream: &UpstreamRow, e: &UpstreamError) -> bool {
+    let Some((status, code, msg)) = e.auth_failure() else {
+        return false;
+    };
+    tracing::warn!(
+        upstream = %upstream.name, kind = %upstream.kind, status, code,
+        "上游凭证失效：临时跳过该上游（更新凭证或冷却到期后自动恢复）"
+    );
+    state.mark_auth_failure(
+        upstream.id,
+        crate::upstream::cred::AuthFailure::new(status, code, msg),
+    );
+    true
+}
+
 fn fail_message(fail: &Fail) -> String {
     match fail {
         Fail::Upstream(e) => match e {
@@ -1163,6 +1194,21 @@ fn nonstream_success(
 
 /// 全部候选失败时，把最后的错误翻译为入口协议错误体。
 fn entry_error(entry: Protocol, fail: &Fail) -> (u16, serde_json::Value) {
+    // 凭证失效（token 失效四项之①）：统一改判 502 `upstream_auth_failed`，
+    // 不透出上游 401 原文——对调用方而言网关 Key 没问题，问题在上游凭证。
+    if let Fail::Upstream(e) = fail {
+        if let Some((_, code, msg)) = e.auth_failure() {
+            let ir = IrError {
+                status: 502,
+                message: format!(
+                    "上游凭证失效（{code}）：{msg}（网关已临时跳过该上游，请在后台更新凭证）"
+                ),
+                r#type: Some("upstream_auth_failed".into()),
+                code: Some("upstream_auth_failed".into()),
+            };
+            return (502, error_from_ir(entry, &ir));
+        }
+    }
     match fail {
         Fail::Upstream(e) => match e {
             UpstreamError::Status(s, body) => {
@@ -1451,6 +1497,11 @@ async fn run_gateway(
                 cap_filtered.push(format!("{} 缺 {}", up.name, missing.join("/")));
                 continue;
             }
+            // 凭证失效隔离（token 失效四项之②）：冷却期内跳过该候选
+            if let Some(f) = state.cred_guard.blocking(&up.id) {
+                cap_filtered.push(format!("{} 凭证失效（{}）", up.name, f.code));
+                continue;
+            }
             if up.enabled && state.breaker.allow(&up) {
                 candidates.push(Candidate {
                     route,
@@ -1463,7 +1514,7 @@ async fn run_gateway(
         let msg = if cap_filtered.is_empty() {
             "无可用上游".to_string()
         } else {
-            format!("无可用上游（能力不足：{}）", cap_filtered.join("；"))
+            format!("无可用上游（跳过：{}）", cap_filtered.join("；"))
         };
         let lbl = metrics_labels(&key, entry, "");
         log_fail(&state, &tmpl, start, 503, &msg, 0);
@@ -1878,6 +1929,7 @@ async fn run_gateway(
             match exec_res {
                 Ok(ExecOutcome::Json(json)) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    state.clear_auth_failure(upstream.id);
                     // M11.3：成功即更新粘性 pin（仅开启时；pin 只在成功路径写入）
                     if gateway_cfg.sticky_routing {
                         state.sticky.pin(key.id, &model, upstream.id);
@@ -1972,6 +2024,7 @@ async fn run_gateway(
                 }
                 Ok(ExecOutcome::Stream(src)) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    state.clear_auth_failure(upstream.id);
                     // M11.3：成功即更新粘性 pin（仅开启时；pin 只在成功路径写入）
                     if gateway_cfg.sticky_routing {
                         state.sticky.pin(key.id, &model, upstream.id);
@@ -2018,6 +2071,7 @@ async fn run_gateway(
                     return record(&state.metrics, &lbl, start, false, resp);
                 }
                 Err(e) => {
+                    note_auth_failure(&state, upstream, &e);
                     let retryable = e.retryable(&route.retry_status_codes);
                     if retryable {
                         state.breaker.on_failure(&state.db, upstream).await;
@@ -2344,6 +2398,11 @@ async fn openai_responses_compact(
                 filtered.push(format!("{} 缺 {}", up.name, missing.join("/")));
                 continue;
             }
+            // 凭证失效隔离（token 失效四项之②）：冷却期内跳过该候选
+            if let Some(f) = state.cred_guard.blocking(&up.id) {
+                filtered.push(format!("{} 凭证失效（{}）", up.name, f.code));
+                continue;
+            }
             if up.enabled && state.breaker.allow(&up) {
                 candidates.push(Candidate {
                     route,
@@ -2510,6 +2569,7 @@ async fn openai_responses_compact(
             match exec_res {
                 Ok(ExecOutcome::Json(json)) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    state.clear_auth_failure(upstream.id);
                     if gateway_cfg.sticky_routing {
                         state.sticky.pin(key.id, &model, upstream.id);
                     }
@@ -2559,6 +2619,7 @@ async fn openai_responses_compact(
                 }
                 Ok(ExecOutcome::Stream(src)) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    state.clear_auth_failure(upstream.id);
                     if gateway_cfg.sticky_routing {
                         state.sticky.pin(key.id, &model, upstream.id);
                     }
@@ -2590,6 +2651,7 @@ async fn openai_responses_compact(
                     return record(&state.metrics, &lbl, start, false, resp);
                 }
                 Err(e) => {
+                    note_auth_failure(&state, upstream, &e);
                     let retryable = e.retryable(&route.retry_status_codes);
                     if retryable {
                         state.breaker.on_failure(&state.db, upstream).await;
@@ -2876,6 +2938,10 @@ async fn images_generations(
     let mut candidates: Vec<Candidate> = Vec::new();
     for route in matched {
         if let Some(up) = snap.upstreams.get(&route.upstream_id).cloned() {
+            // 凭证失效隔离（token 失效四项之②）：冷却期内跳过该候选
+            if state.cred_guard.blocking(&up.id).is_some() {
+                continue;
+            }
             if up.enabled && media::image_api_of(&up).is_some() && state.breaker.allow(&up) {
                 candidates.push(Candidate {
                     route,
@@ -3048,6 +3114,7 @@ async fn images_generations(
             match exec {
                 Ok(json) => {
                     state.breaker.on_success(&state.db, upstream).await;
+                    state.clear_auth_failure(upstream.id);
                     match media::parse_image_response(image_api, ir.size.as_deref(), &json) {
                         Ok(ImageOutcome::Created {
                             images,
@@ -3232,6 +3299,7 @@ async fn images_generations(
                         Err(e) => {
                             // 上游响应虽 2xx 但结构不符合预期：视为该候选失败（BodyRead 不可重试）
                             last_upstream = Some(upstream.name.clone());
+                            note_auth_failure(&state, upstream, &e);
                             last_err = Some(e);
                             failed_candidates += 1;
                             last_idx = idx;
@@ -3243,6 +3311,7 @@ async fn images_generations(
                     }
                 }
                 Err(e) => {
+                    note_auth_failure(&state, upstream, &e);
                     let retryable = e.retryable(&route.retry_status_codes);
                     if retryable {
                         state.breaker.on_failure(&state.db, upstream).await;
@@ -3434,6 +3503,38 @@ mod tests {
     use axum::http::HeaderMap;
     use chrono::Utc;
     use serde_json::json;
+
+    /// 凭证失效改判（token 失效四项之①）：502 + upstream_auth_failed，不透出上游 401。
+    #[test]
+    fn auth_failure_error_shape() {
+        let auth = || UpstreamError::AuthFailed(200, "unauthenticated: Invalid token".into());
+        for entry in [Protocol::OpenaiResponses, Protocol::OpenaiChat] {
+            let (status, body) = entry_error(entry, &Fail::Upstream(auth()));
+            assert_eq!(status, 502);
+            assert_eq!(body["error"]["code"], "upstream_auth_failed");
+            assert_eq!(body["error"]["type"], "upstream_auth_failed");
+            assert!(body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("凭证失效"));
+            // 非凭证错误维持原判
+            let (status, _) = entry_error(
+                entry,
+                &Fail::Upstream(UpstreamError::Status(500, "boom".into())),
+            );
+            assert_eq!(status, 500);
+        }
+        // 401 的普通 Status 也按凭证失效处理（Key 失效/过期）
+        let (status, body) = entry_error(
+            Protocol::Anthropic,
+            &Fail::Upstream(UpstreamError::Status(
+                401,
+                r#"{"error":{"message":"bad key"}}"#.into(),
+            )),
+        );
+        assert_eq!(status, 502);
+        assert_eq!(body["error"]["type"], "upstream_auth_failed");
+    }
 
     /// compact 候选判定：codex 渠道或声明 openai_responses 协议的上游可服务。
     #[test]

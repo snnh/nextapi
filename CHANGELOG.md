@@ -3,6 +3,27 @@
 ## [Unreleased]
 
 ### Added
+- **上游凭证失效（token 失效）四层处理**：识别 → 隔离 → 可见 → 恢复，全渠道通用，
+  Devin（session token 过期）/ Codex（OAuth 失效）/ 普通 Key 渠道同样受益：
+  - **识别**：新增 `UpstreamError::AuthFailed` 变体；devin 的两种失效形态都覆盖
+    （流式 **HTTP 200 + end 帧** `{"error":{"code":"unauthenticated"}}`、unary **HTTP 401**），
+    其它渠道 401/403 或错误体含 `invalid_api_key`/`token expired` 等同样判定；
+    模型门控（`failed_precondition`/`permission_denied`）不误判。对外统一回
+    **502 + `upstream_auth_failed`**（不再原样透出上游 401）。
+  - **隔离**：新增 `upstream::cred::AuthGuard` 内存守卫，命中后冷却 300s 内把该上游摘出候选
+    （模型路由/Responses/图片三条候选链都生效），跳过原因写进「无可用上游」错误信息；
+    任一请求成功或凭证更新即自动解除；与熔断器语义分离（不写 `disabled_by='auto'`，
+    避免需要人工恢复）。
+  - **可见**：失效详情落库 `upstreams.extra.auth_state`（`{at,status,code,message}`，
+    JSONB 原子合并，同一次失效期内不重复写库）；`/api/upstreams` 新增 `auth_state` /
+    `auth_blocked` 字段；后台列表显示「凭证失效 · 已跳过」标签 + 悬停详情；连通测试与额度
+    探测命中失效时同样标记，成功即清除。
+  - **恢复**：新增 `POST /api/upstreams/{id}/devin/reauth`（Devin 一键重新授权：PKCE 授权码
+    换新 session token 直接写回 + 探测验证 + 解除隔离 + 清熔断）；编辑上游更换/清除凭证也会
+    立即解除隔离；WebUI 上游行新增「重新授权」按钮与专用弹窗（含授权链接、授权码输入、
+    成功后展示账号/套餐）。
+
+### Added
 - **Devin 渠道「CLI 环境模拟」**（上游级 `extra.cli_emulation`，**默认开启**，可在渠道表单关闭）：
   - f2 改用官方 CLI 头提示词（实测渲染版 17682B，随仓库 `src/upstream/devin/cli_prompt.txt`），
     末行 "You are powered by <模型展示名>" 按实际模型重渲染（`swe-1-6-slow` → `SWE-1.6 Slow`）；

@@ -6,6 +6,7 @@
 
 pub mod codex;
 pub mod codex_ws;
+pub mod cred;
 pub mod devin;
 pub mod quota;
 pub mod usage;
@@ -34,6 +35,10 @@ pub enum UpstreamError {
     /// 上游返回非 2xx（status, body 原文截断 2KB）
     #[error("上游错误 {0}: {1}")]
     Status(u16, String),
+    /// 上游凭证失效（token 过期/无效）：独立变体以便网关改判为 502
+    /// `upstream_auth_failed`（不透出上游 401 原文）并触发 credential 守卫。
+    #[error("上游凭证失效({0}): {1}")]
+    AuthFailed(u16, String),
     #[error("响应读取失败: {0}")]
     BodyRead(String),
 }
@@ -44,6 +49,8 @@ impl UpstreamError {
         match self {
             UpstreamError::Timeout | UpstreamError::Connect(_) => true,
             UpstreamError::Status(s, _) => codes.contains(&(*s as i32)),
+            // 凭证失效重试同一上游必然同样失败（换凭证才有用），只做候选级转移
+            UpstreamError::AuthFailed(..) => false,
             UpstreamError::BodyRead(_) => false,
         }
     }
@@ -56,6 +63,32 @@ impl UpstreamError {
             self,
             UpstreamError::Status(s, _) if matches!(s, 400 | 404 | 405 | 413 | 422)
         )
+    }
+
+    /// 凭证失效判定（token 失效四项之①）：返回 (状态码, 归一化错误码, 上游原文)。
+    ///
+    /// - 上游层已判定的 [`UpstreamError::AuthFailed`] 直接命中（devin 200+end 帧形态）；
+    /// - 任意渠道的 401/403 视为**候选级**凭证问题（Key 失效/过期）；
+    /// - 其余状态码再按错误文本兜底识别（如 400 体里带 `invalid_api_key`）。
+    pub fn auth_failure(&self) -> Option<(u16, &'static str, &str)> {
+        match self {
+            UpstreamError::AuthFailed(s, msg) => Some((
+                *s,
+                crate::upstream::cred::classify(msg).unwrap_or("unauthenticated"),
+                msg.as_str(),
+            )),
+            UpstreamError::Status(s, msg) => {
+                if matches!(s, 401 | 403) {
+                    return Some((
+                        *s,
+                        crate::upstream::cred::classify(msg).unwrap_or("unauthenticated"),
+                        msg.as_str(),
+                    ));
+                }
+                crate::upstream::cred::classify(msg).map(|code| (*s, code, msg.as_str()))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -997,6 +1030,32 @@ mod tests {
         assert_eq!(b["b"]["c"], json!(2));
         // 缺失 → 写
         assert_eq!(b["x"]["y"], json!(5));
+    }
+
+    #[test]
+    fn auth_failure_classification() {
+        // 上游层已判定（devin 200+end 帧）→ 直接命中，错误码归一化
+        let e = UpstreamError::AuthFailed(200, "unauthenticated: Invalid token".into());
+        assert_eq!(
+            e.auth_failure().map(|(s, c, _)| (s, c)),
+            Some((200, "unauthenticated"))
+        );
+        assert!(!e.retryable(&[401, 429]));
+        assert!(!e.client_causal());
+        // 任意渠道 401/403 → 候选级凭证问题
+        let e = UpstreamError::Status(403, "forbidden".into());
+        assert_eq!(
+            e.auth_failure().map(|(s, c, _)| (s, c)),
+            Some((403, "unauthenticated"))
+        );
+        // 4xx 体里的鉴权错误码兜底识别
+        let e = UpstreamError::Status(400, r#"{"error":{"code":"invalid_api_key"}}"#.into());
+        assert_eq!(e.auth_failure().map(|(_, c, _)| c), Some("invalid_api_key"));
+        // 普通上游错误不误判
+        assert!(UpstreamError::Status(500, "internal error".into())
+            .auth_failure()
+            .is_none());
+        assert!(UpstreamError::Timeout.auth_failure().is_none());
     }
 
     #[test]

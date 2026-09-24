@@ -136,6 +136,14 @@ export const upstreamApi = {
         body,
       )
       .then((r) => r.data),
+  /** Devin：一键重新授权（授权码换新 session token 直接写回该上游，token 失效四项之④） */
+  devinReauth: (id: string, body: { code: string; code_verifier: string; base_url?: string }) =>
+    http
+      .post<{ ok: boolean; probe: Record<string, unknown>; upstream: UpstreamOut }>(
+        `/api/upstreams/${id}/devin/reauth`,
+        body,
+      )
+      .then((r) => r.data),
   /** 手动模式：为勾选模型创建手动路由 */
   addModelRoutes: (id: string, models: string[]) =>
     http.post<ModelSyncReport>(`/api/upstreams/${id}/models/routes`, { models }).then((r) => r.data),

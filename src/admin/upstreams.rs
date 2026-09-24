@@ -40,6 +40,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/devin/pkce/start", post(devin_pkce_start))
         .route("/devin/pkce/exchange", post(devin_pkce_exchange))
         .route("/{id}/oauth/refresh", post(refresh_oauth))
+        .route("/{id}/devin/reauth", post(devin_reauth))
         .route("/{id}/reveal-key", post(reveal_upstream_key))
 }
 
@@ -91,6 +92,116 @@ async fn devin_pkce_exchange(
         "token": r.token,
         "webapp_host": r.webapp_host,
         "api_url": r.api_url,
+    })))
+}
+
+/// POST /{id}/devin/reauth：用 Devin CLI PKCE 授权码换取新 session token 并写回该上游
+/// （token 失效四项之④：一键重新授权 → 清失效标记 → 立刻探测验证）。
+///
+/// 与 `POST /devin/pkce/exchange` 的区别：交换得到的 token 直接落到指定上游（加密存储），
+/// 而不是回传给前端再走一次表单保存；成功后解除凭证失效隔离并重置熔断状态。
+#[derive(Debug, Deserialize)]
+struct DevinReauthReq {
+    code: String,
+    code_verifier: String,
+    /// 可选自定义基址（默认官方）
+    #[serde(default)]
+    base_url: Option<String>,
+}
+
+async fn devin_reauth(
+    State(state): State<Arc<AppState>>,
+    admin: AdminUsername,
+    Path(id): Path<Uuid>,
+    Json(body): Json<DevinReauthReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let row = fetch_upstream(&state, id).await?;
+    if row.kind != "devin" {
+        return Err(ApiError::bad_request(
+            "仅 Devin 渠道支持重新授权（kind='devin'）",
+        ));
+    }
+    if !state.crypto.is_available() {
+        return Err(ApiError::bad_request(
+            "未设置 NEXTAPI_SECRET_KEY，无法保存上游鉴权 Key",
+        ));
+    }
+    let code = body.code.trim();
+    let verifier = body.code_verifier.trim();
+    if code.is_empty() || verifier.is_empty() {
+        return Err(ApiError::bad_request("code 与 code_verifier 均不能为空"));
+    }
+    let base = body
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(crate::upstream::devin::DEFAULT_BASE_URL);
+    let client = state.client_pools.direct_client();
+    let r = crate::upstream::devin::exchange_pkce(&client, base, code, verifier, 15000)
+        .await
+        .map_err(|e| match e.auth_failure() {
+            // 兑换阶段的 401 语义是「授权码无效/已过期」，不是渠道 token 失效——文案要贴合
+            Some((_, _, msg)) => {
+                ApiError::bad_request(format!("授权码兑换失败（请重新发起授权）：{msg}"))
+            }
+            None => ApiError::bad_request(e.to_string()),
+        })?;
+    let enc = state
+        .crypto
+        .encrypt(&r.token)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    sqlx::query("UPDATE upstreams SET api_key_enc=$1, updated_at=now() WHERE id=$2")
+        .bind(&enc)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+    // 新凭证即刻生效：解除失效隔离 + 清熔断状态 + 刷新快照（下次请求即用新 token）
+    state.clear_auth_failure(id);
+    state.breaker.reset(id);
+    state
+        .cache
+        .reload(&state.db, &state.crypto)
+        .await
+        .map_err(ApiError::internal)?;
+
+    // 立即探测验证新凭证（顺带把账号/套餐信息返回给前端），失败则重新标记失效
+    let started = std::time::Instant::now();
+    let emu = crate::upstream::devin::emulation_config(&row.extra);
+    let probe =
+        match crate::upstream::devin::user_status(&client, base, &r.token, 10_000, emu).await {
+            Ok(info) => {
+                crate::upstream::devin::status_json(&info, started.elapsed().as_millis() as u64)
+            }
+            Err(e) => {
+                let Some((status, code, msg)) = e.auth_failure() else {
+                    return Err(ApiError::bad_request(format!("重新授权后探测失败：{e}")));
+                };
+                state.mark_auth_failure(
+                    id,
+                    crate::upstream::cred::AuthFailure::new(status, code, msg),
+                );
+                return Err(ApiError::bad_request(format!(
+                    "重新授权失败：换取的 token 未被上游接受（{code}），请重新发起授权"
+                )));
+            }
+        };
+    auth::audit(
+        &state,
+        &admin.0,
+        "upstream.reauth",
+        "upstream",
+        Some(&id.to_string()),
+        serde_json::json!({ "name": row.name, "kind": row.kind, "webapp_host": r.webapp_host }),
+        None,
+    )
+    .await?;
+    let row = fetch_upstream(&state, id).await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "probe": probe,
+        "upstream": to_out(row, &state.crypto, None),
     })))
 }
 
@@ -149,11 +260,19 @@ struct UpstreamOut {
     has_oauth: bool,
     oauth_account_id: Option<String>,
     oauth_expires_at: Option<DateTime<Utc>>,
+    /// 凭证失效状态（token 失效四项之③）：`{at,status,code,message}`；无则 null
+    auth_state: Option<serde_json::Value>,
+    /// 是否处于失效冷却期（网关当前会跳过该上游）
+    auth_blocked: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-fn to_out(row: UpstreamDbRow, crypto: &crate::crypto::Crypto) -> UpstreamOut {
+fn to_out(
+    row: UpstreamDbRow,
+    crypto: &crate::crypto::Crypto,
+    live_auth: Option<&crate::upstream::cred::AuthFailure>,
+) -> UpstreamOut {
     // oauth 元数据（account_id/expires_at）：解密仅取非敏感字段展示
     let (oauth_account_id, oauth_expires_at) = match row.oauth_enc.as_deref() {
         Some(enc) if !enc.is_empty() => match crypto.decrypt(enc) {
@@ -168,7 +287,17 @@ fn to_out(row: UpstreamDbRow, crypto: &crate::crypto::Crypto) -> UpstreamOut {
         },
         _ => (None, None),
     };
+    // 凭证失效状态：内存守卫（实时）优先，回落 `extra.auth_state`（落库快照，重启后仍在）
+    let auth_failure = live_auth
+        .cloned()
+        .or_else(|| crate::upstream::cred::auth_state_from_extra(&row.extra));
+    // 是否正在被跳过，只看内存守卫（网关侧的真实闸门；重启后守卫为空即不再跳过）
+    let auth_blocked = live_auth.is_some_and(|f| f.blocked_at(chrono::Utc::now()));
     UpstreamOut {
+        auth_state: auth_failure
+            .as_ref()
+            .and_then(|f| serde_json::to_value(f).ok()),
+        auth_blocked,
         has_api_key: row.api_key_enc.is_some(),
         id: row.id,
         name: row.name,
@@ -283,7 +412,13 @@ async fn list_upstreams(
     )
     .fetch_all(&state.db)
     .await?;
-    let items: Vec<UpstreamOut> = rows.into_iter().map(|r| to_out(r, &state.crypto)).collect();
+    let items: Vec<UpstreamOut> = rows
+        .into_iter()
+        .map(|r| {
+            let live = state.cred_guard.get(&r.id);
+            to_out(r, &state.crypto, live.as_ref())
+        })
+        .collect();
     Ok(Json(serde_json::json!({ "items": items })))
 }
 
@@ -392,7 +527,7 @@ async fn create_upstream(
     .await?;
 
     let row = fetch_upstream(&state, id).await?;
-    Ok(Json(serde_json::json!(to_out(row, &state.crypto))))
+    Ok(Json(serde_json::json!(to_out(row, &state.crypto, None))))
 }
 
 /// PUT /{id}：部分更新；api_key 语义见模块注释；enabled 切换见模块注释。
@@ -421,7 +556,11 @@ async fn update_upstream(
     let probe_model = body.probe_model.or(row.probe_model.clone());
     let use_proxy = body.use_proxy.unwrap_or(row.use_proxy);
     let proxy_id = body.proxy_id.or(row.proxy_id);
-    let extra = body.extra.unwrap_or_else(|| row.extra.clone());
+    // auth_state 由后端维护（凭证失效联动写入），忽略前端回传的旧值，避免编辑其它字段时复活失效标记
+    let mut extra = body.extra.unwrap_or_else(|| row.extra.clone());
+    if let Some(o) = extra.as_object_mut() {
+        o.remove(crate::upstream::cred::AUTH_STATE_KEY);
+    }
     let model_sync = body.model_sync.unwrap_or_else(|| row.model_sync.clone());
     let model_exclude = body
         .model_exclude
@@ -519,6 +658,17 @@ async fn update_upstream(
     if body.enabled.is_some() {
         state.breaker.reset(id);
     }
+    // 凭证变更（换 Key / 清 Key / 换 auth.json）→ 立即解除凭证失效隔离（token 失效四项之④）
+    let cred_changed = matches!(
+        api_key_semantics(body.api_key.as_deref()),
+        ApiKeySemantics::Set(_) | ApiKeySemantics::Clear
+    ) || matches!(
+        api_key_semantics(body.auth_json.as_deref()),
+        ApiKeySemantics::Set(_) | ApiKeySemantics::Clear
+    );
+    if cred_changed {
+        state.clear_auth_failure(id);
+    }
     // Key 是否随本次保存被显式变更（Set/Clear；未传或掩码=Keep）——审计留痕，便于排查"Key 何时被改"
     let api_key_changed = matches!(
         api_key_semantics(body.api_key.as_deref()),
@@ -537,7 +687,7 @@ async fn update_upstream(
     .await?;
 
     let row = fetch_upstream(&state, id).await?;
-    Ok(Json(serde_json::json!(to_out(row, &state.crypto))))
+    Ok(Json(serde_json::json!(to_out(row, &state.crypto, None))))
 }
 
 /// DELETE /{id}：删除上游。
@@ -642,10 +792,18 @@ async fn quota_probe(
         let (token, account) = match crate::upstream::codex::ensure_token(&state, &up).await {
             Ok(t) => t,
             Err(e) => {
+                // OAuth 刷新/鉴权失败（invalid_grant / 401 等）同样标记凭证失效
+                let text = e.to_string();
+                if let Some(code) = crate::upstream::cred::classify(&text) {
+                    state.mark_auth_failure(
+                        up.id,
+                        crate::upstream::cred::AuthFailure::new(401, code, &text),
+                    );
+                }
                 return Ok(Json(serde_json::json!({
                     "ok": false, "probed": true, "latency_ms": started.elapsed().as_millis() as u64,
                     "error": format!("codex oauth: {e}"), "quota": cached,
-                })))
+                })));
             }
         };
         let sim = crate::upstream::codex::sim_config(&up.extra);
@@ -742,6 +900,7 @@ async fn quota_probe(
     let emu = crate::upstream::devin::emulation_config(&up.extra);
     match crate::upstream::devin::user_status(&client, base, tok, 10_000, emu).await {
         Ok(info) => {
+            state.clear_auth_failure(up.id);
             let s = crate::upstream::devin::quota_snapshot(&info);
             // 上游未返回额度块（quota 为 None）时不落库：避免用「无额度」的空快照
             // 覆盖上一次的有效额度；此时仍返回本次探测到的套餐/账号/模型数
@@ -754,11 +913,14 @@ async fn quota_probe(
                 "stored": info.quota.is_some(),
             })))
         }
-        Err(e) => Ok(Json(serde_json::json!({
-            "ok": false, "probed": true,
-            "latency_ms": started.elapsed().as_millis() as u64,
-            "error": e.to_string(), "quota": cached,
-        }))),
+        Err(e) => {
+            let err = note_probe_auth(&state, &up, &e);
+            Ok(Json(serde_json::json!({
+                "ok": false, "probed": true,
+                "latency_ms": started.elapsed().as_millis() as u64,
+                "error": err, "quota": cached,
+            })))
+        }
     }
 }
 
@@ -811,15 +973,38 @@ async fn test_upstream(
 
     // Devin 渠道：GetUserStatus 真实探测（返回账号/套餐/可用模型数）
     if up.kind == "devin" {
+        let emu = crate::upstream::devin::emulation_config(&up.extra);
+        let token = up
+            .api_key_plain
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        let Some(tok) = token else {
+            // 尚未授权：返回提示（不涉及凭证状态）
+            return Ok(Json(
+                crate::upstream::devin::probe_status(&client, &up.base_url, None, 10_000, emu)
+                    .await,
+            ));
+        };
+        let base = if up.base_url.trim().is_empty() {
+            crate::upstream::devin::DEFAULT_BASE_URL
+        } else {
+            up.base_url.trim()
+        };
+        let started = std::time::Instant::now();
         return Ok(Json(
-            crate::upstream::devin::probe_status(
-                &client,
-                &up.base_url,
-                up.api_key_plain.as_deref(),
-                10_000,
-                crate::upstream::devin::emulation_config(&up.extra),
-            )
-            .await,
+            match crate::upstream::devin::user_status(&client, base, tok, 10_000, emu).await {
+                Ok(info) => {
+                    // 探测成功 = 凭证可用 → 解除失效隔离（token 失效四项之④）
+                    state.clear_auth_failure(up.id);
+                    crate::upstream::devin::status_json(&info, started.elapsed().as_millis() as u64)
+                }
+                Err(e) => {
+                    let latency_ms = started.elapsed().as_millis() as u64;
+                    let err = note_probe_auth(&state, &up, &e);
+                    serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": err })
+                }
+            },
         ));
     }
     let proto = up
@@ -867,9 +1052,43 @@ async fn test_upstream(
     let latency_ms = started.elapsed().as_millis() as u64;
 
     Ok(Json(match resp {
-        Ok(r) => crate::upstream::probe_ok_json(r.status().as_u16(), latency_ms),
+        Ok(r) => {
+            let status = r.status().as_u16();
+            if matches!(status, 401 | 403) {
+                // 连通但鉴权失败：标记凭证失效，后台可见（token 失效四项之①→③）
+                note_probe_auth(
+                    &state,
+                    &up,
+                    &upstream::UpstreamError::Status(
+                        status,
+                        format!("HTTP {status}（连通性测试鉴权失败）"),
+                    ),
+                );
+            } else {
+                state.clear_auth_failure(up.id);
+            }
+            crate::upstream::probe_ok_json(status, latency_ms)
+        }
         Err(e) => crate::upstream::probe_err_json(latency_ms, e),
     }))
+}
+
+/// 探测/测试命中鉴权失效 → 标记隔离 + 落库，并返回带恢复指引的错误文案（token 失效四项之①③）。
+fn note_probe_auth(
+    state: &AppState,
+    up: &crate::entities::UpstreamRow,
+    e: &upstream::UpstreamError,
+) -> String {
+    match e.auth_failure() {
+        Some((status, code, msg)) => {
+            state.mark_auth_failure(
+                up.id,
+                crate::upstream::cred::AuthFailure::new(status, code, msg),
+            );
+            format!("{e}（已标记凭证失效：网关将临时跳过该上游，请重新授权或更换凭证）")
+        }
+        None => e.to_string(),
+    }
 }
 
 /// 校验模型同步策略与排除名单边界（review P2 风格：长度/数量上限）。

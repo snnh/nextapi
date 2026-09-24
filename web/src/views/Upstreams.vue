@@ -53,6 +53,15 @@
               <el-tag :type="statusMeta(row).type" size="small" class="status-inline">
                 {{ statusMeta(row).text }}
               </el-tag>
+              <el-tag
+                v-if="row.auth_state"
+                type="danger"
+                size="small"
+                class="status-inline"
+                effect="plain"
+              >
+                凭证失效
+              </el-tag>
             </template>
           </template>
         </el-table-column>
@@ -138,9 +147,15 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="状态" min-width="200">
+        <el-table-column v-if="!isNarrow" label="状态" min-width="240">
           <template #default="{ row }">
             <el-tag :type="statusMeta(row).type" size="small">{{ statusMeta(row).text }}</el-tag>
+            <!-- 凭证失效（token 失效四项之③）：悬停看时间/错误码/上游原文 -->
+            <el-tooltip v-if="row.auth_state" :content="authTooltip(row)" placement="top">
+              <el-tag type="danger" size="small" effect="dark" style="margin-left: 6px">
+                {{ row.auth_blocked ? '凭证失效 · 已跳过' : '凭证失效' }}
+              </el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
 
@@ -180,6 +195,9 @@
                   <el-dropdown-item v-if="quotaSupported(row)" command="quota">
                     额度
                   </el-dropdown-item>
+                  <el-dropdown-item v-if="isDevin(row)" command="reauth">
+                    重新授权
+                  </el-dropdown-item>
                   <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -194,6 +212,9 @@
               </el-button>
               <el-button v-if="quotaSupported(row)" size="small" @click="openQuota(row)">
                 额度
+              </el-button>
+              <el-button v-if="isDevin(row)" size="small" @click="openReauth(row)">
+                重新授权
               </el-button>
               <el-button
                 size="small"
@@ -215,6 +236,8 @@
       完整 Key 默认不可再次查看；如需查看，点行内「查看 Key」并输入管理员密码二次验证（已启用 TOTP 时还需动态码），
       验证通过后明文仅弹窗内本次展示。
       默认值：timeout_ms = 300000、breaker_threshold = 5；图片媒体地址留空时回退 base_url。启用/禁用直接切换行内开关（禁用后 disabled_by = manual）。
+      凭证失效（如 Devin session token 过期）由网关自动识别：命中后临时跳过该上游 5 分钟并标注「凭证失效」，
+      点「重新授权」用 Devin 账号换取新 token 即可恢复（无需手动冷却）。
     </div>
 
     <!-- 接入向导（选择供应商 → 填写凭证 → 连通与模型） -->
@@ -228,6 +251,9 @@
 
     <!-- 额度探测（codex / devin） -->
     <QuotaDialog v-model="quotaVisible" :row="quotaRow" />
+
+    <!-- Devin 重新授权（PKCE 换新 session token 并写回该上游） -->
+    <DevinReauthDialog v-model="reauthVisible" :row="reauthRow" @done="loadUpstreams" />
 
     <!-- 查看明文 API Key（安全验证） -->
     <el-dialog
@@ -314,6 +340,7 @@ import type { Preset, ProxyOut, UpstreamIn, UpstreamOut } from '@/api/types'
 import UpstreamFormDialog from '@/components/upstreams/UpstreamFormDialog.vue'
 import ProvisionWizard from '@/components/upstreams/ProvisionWizard.vue'
 import QuotaDialog from '@/components/upstreams/QuotaDialog.vue'
+import DevinReauthDialog from '@/components/upstreams/DevinReauthDialog.vue'
 
 const DISABLED_BY_LABELS: Record<string, string> = {
   manual: '手动禁用',
@@ -388,14 +415,44 @@ function onRowAction(command: string, row: UpstreamOut) {
   else if (command === 'reveal') openReveal(row)
   else if (command === 'test') testUpstream(row)
   else if (command === 'quota') openQuota(row)
+  else if (command === 'reauth') openReauth(row)
   else if (command === 'delete') removeUpstream(row)
 }
 
 // —— 额度探测（codex：响应头；devin：GetUserStatus）——
 const quotaVisible = ref(false)
 const quotaRow = ref<UpstreamOut | null>(null)
+const reauthVisible = ref(false)
+const reauthRow = ref<UpstreamOut | null>(null)
 
 /** 支持额度探测的渠道（与后端 quota_probe 的 supports_quota 同口径） */
+/** Devin 渠道（支持 PKCE 重新授权） */
+function isDevin(row: UpstreamOut): boolean {
+  return row.kind === 'devin'
+}
+
+/** 凭证失效悬停详情：时间 + 错误码 + 上游原文 + 处置建议 */
+function authTooltip(row: UpstreamOut): string {
+  const st = row.auth_state
+  if (!st) return ''
+  const lines = [
+    `最近一次凭证失效：${fmtTime(st.at)}`,
+    `错误码：${st.code}（HTTP ${st.status}）`,
+    `上游原文：${st.message}`,
+  ]
+  lines.push(
+    row.auth_blocked
+      ? '网关已临时跳过该上游（5 分钟后自动重试），请重新授权或更换凭证。'
+      : '冷却已过（网关会重新尝试该上游）。',
+  )
+  return lines.join('\n')
+}
+
+function openReauth(row: UpstreamOut) {
+  reauthRow.value = row
+  reauthVisible.value = true
+}
+
 function quotaSupported(row: UpstreamOut): boolean {
   return row.kind === 'codex' || row.kind === 'devin'
 }

@@ -141,6 +141,18 @@ export interface Overrides {
   body?: { add?: Record<string, unknown>; set?: Record<string, unknown> }
 }
 
+/** 上游凭证失效状态（网关识别到 token 失效后写入 extra.auth_state） */
+export interface AuthStateInfo {
+  /** 首次发现时刻（RFC3339） */
+  at: string
+  /** 上游状态码（devin 流式形态为 200） */
+  status: number
+  /** 归一化错误码，如 unauthenticated */
+  code: string
+  /** 上游原文（截断） */
+  message: string
+}
+
 export interface UpstreamOut {
   id: string
   name: string
@@ -171,6 +183,10 @@ export interface UpstreamOut {
   has_oauth: boolean
   oauth_account_id: string | null
   oauth_expires_at: string | null
+  /** 凭证失效状态（token 失效四项之③）：最近一次鉴权失败详情，无则 null */
+  auth_state: AuthStateInfo | null
+  /** 是否正处于失效冷却期（网关会跳过该上游） */
+  auth_blocked: boolean
   created_at: string
   updated_at: string
 }

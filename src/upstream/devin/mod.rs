@@ -116,7 +116,8 @@ fn metadata(token: &str) -> BytesMut {
 }
 
 /// Connect 错误体 → UpstreamError（错误映射：Free 计划误报 failed_precondition /
-/// permission_denied 为模型门控，附提示；token 过期按报错处理，本期不刷新）。
+/// permission_denied 为模型门控，附提示；鉴权失效 → [`UpstreamError::AuthFailed`]，
+/// 联动凭证守卫；token 自动刷新本期不做，靠后台重新授权恢复）。
 fn map_error_body(status: u16, body: &[u8]) -> UpstreamError {
     let text = String::from_utf8_lossy(body);
     let (code, msg) = serde_json::from_str::<serde_json::Value>(&text)
@@ -149,11 +150,19 @@ fn map_error_body(status: u16, body: &[u8]) -> UpstreamError {
         "failed_precondition" | "permission_denied" => {
             "（提示：该模型可能未解锁于当前 Devin 套餐；Free 计划仅个别模型可用）"
         }
-        "unauthenticated" | "unauthenticated_error" => {
-            "（提示：session token 无效或已过期，请在上游设置中更换凭证）"
-        }
         _ => "",
     };
+    // 凭证失效（token 失效四项之①）：HTTP 401/403 或 body 中的鉴权错误码独立成变体，
+    // 网关据此改判 502 upstream_auth_failed 并联动凭证守卫（跳过该上游 + 后台可见）。
+    // 注意 permission_denied / failed_precondition 属模型门控，不是凭证问题。
+    let auth =
+        crate::upstream::cred::classify(&code).or_else(|| crate::upstream::cred::classify(&msg));
+    if matches!(status, 401 | 403) || auth.is_some() {
+        return UpstreamError::AuthFailed(
+            status,
+            format!("{code}: {msg}（提示：session token 无效或已过期，请在上游设置中重新授权）"),
+        );
+    }
     UpstreamError::Status(status, format!("{code}: {msg}{hint}"))
 }
 
@@ -212,7 +221,14 @@ fn end_frame_error(payload: &[u8]) -> Option<String> {
     if v.is_object() && v.as_object().is_some_and(|o| o.is_empty()) {
         return None;
     }
-    let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    // Connect 错误体实测两种形态：顶层 {code,message}（unary）与嵌套
+    // {"error":{code,message}}（流式 end 帧）——两者都要取错误码，否则鉴权判定与
+    // 后台展示只剩 "（空码）: message"。
+    let code = v
+        .get("code")
+        .or_else(|| v.pointer("/error/code"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
     let msg = v
         .get("message")
         .or_else(|| v.pointer("/error/message"))
@@ -222,7 +238,11 @@ fn end_frame_error(payload: &[u8]) -> Option<String> {
     if code.is_empty() && msg.is_empty() && err.is_none() {
         return None;
     }
-    Some(format!("{code}: {msg}"))
+    Some(match (code.is_empty(), msg.is_empty()) {
+        (false, false) => format!("{code}: {msg}"),
+        (false, true) => code.to_string(),
+        _ => msg.to_string(),
+    })
 }
 
 /// 发起 GetChatMessage 并返回已建立的响应（首字节前失败在这里映射）。
@@ -413,7 +433,11 @@ pub async fn execute_nonstream(
                 end_seen = true;
             }
             if let Err(msg) = frame_events(&mut conv, flags, &payload) {
-                return Err(UpstreamError::Status(502, msg));
+                // 鉴权失效：devin 用 HTTP 200 + end 帧表达（实测），需独立成 AuthFailed
+                return Err(match crate::upstream::cred::classify(&msg) {
+                    Some(_) => UpstreamError::AuthFailed(200, msg),
+                    None => UpstreamError::Status(502, msg),
+                });
             }
         }
     }
@@ -607,27 +631,32 @@ pub async fn probe_status(
     };
     let latency_ms = started.elapsed().as_millis() as u64;
     match res {
-        Ok(info) => serde_json::json!({
-            "ok": true,
-            "status": 200,
-            "latency_ms": latency_ms,
-            "account": info.account_id,
-            "email": info.email,
-            "plan": info.plan,
-            "models": info.models.len(),
-            "quota": info.quota.map(|q| serde_json::json!({
-                "daily_quota": q.daily_quota,
-                "weekly_quota": q.weekly_quota,
-                "percent_value": q.percent_value,
-                "percent_total": q.percent_total,
-                "daily_reset_at": q.daily_reset_at,
-                "weekly_reset_at": q.weekly_reset_at,
-            })),
-        }),
+        Ok(info) => status_json(&info, latency_ms),
         Err(e) => {
             serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })
         }
     }
+}
+
+/// 探测成功 → 统一 JSON（admin 上游测试 / 预设一键接入 / 重新授权共用形状）。可单测。
+pub fn status_json(info: &StatusInfo, latency_ms: u64) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "status": 200,
+        "latency_ms": latency_ms,
+        "account": info.account_id,
+        "email": info.email,
+        "plan": info.plan,
+        "models": info.models.len(),
+        "quota": info.quota.as_ref().map(|q| serde_json::json!({
+            "daily_quota": q.daily_quota,
+            "weekly_quota": q.weekly_quota,
+            "percent_value": q.percent_value,
+            "percent_total": q.percent_total,
+            "daily_reset_at": q.daily_reset_at,
+            "weekly_reset_at": q.weekly_reset_at,
+        })),
+    })
 }
 
 /// 拉登录状态与模型目录（unary）。
@@ -737,6 +766,55 @@ pub async fn user_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn end_frame_error_reads_nested_code() {
+        // 实测流式 end 帧：{"error":{"code":"unauthenticated","message":"…"}}
+        assert_eq!(
+            end_frame_error(br#"{"error":{"code":"unauthenticated","message":"Invalid token"}}"#),
+            Some("unauthenticated: Invalid token".to_string())
+        );
+        // unary 顶层形态
+        assert_eq!(
+            end_frame_error(br#"{"code":"failed_precondition","message":"gated"}"#),
+            Some("failed_precondition: gated".to_string())
+        );
+        // 正常结束帧 / 空载荷 → None；只有码没有文案不产生悬空冒号
+        assert_eq!(end_frame_error(br#"{}"#), None);
+        assert_eq!(end_frame_error(b""), None);
+        assert_eq!(
+            end_frame_error(br#"{"error":{"code":"unavailable"}}"#),
+            Some("unavailable".to_string())
+        );
+    }
+
+    #[test]
+    fn map_error_body_auth_vs_gating() {
+        // 401 + unauthenticated（GetUserStatus / Exchange 实测形态）→ AuthFailed
+        let e = map_error_body(
+            401,
+            br#"{"code":"unauthenticated","message":"failed to validate Devin token: Invalid token"}"#,
+        );
+        assert!(matches!(e, UpstreamError::AuthFailed(401, _)));
+        assert_eq!(
+            e.auth_failure().map(|(s, c, _)| (s, c)),
+            Some((401, "unauthenticated"))
+        );
+        // 200 + end 帧错误体同码（流式形态经非流式聚合上抛）
+        let e = map_error_body(
+            200,
+            br#"{"code":"unauthenticated","message":"Invalid token"}"#,
+        );
+        assert!(matches!(e, UpstreamError::AuthFailed(200, _)));
+        // 模型门控不是凭证问题：维持 Status 且带套餐提示
+        let e = map_error_body(
+            200,
+            br#"{"code":"permission_denied","message":"Upgrade to Pro"}"#,
+        );
+        assert!(matches!(e, UpstreamError::Status(200, _)));
+        assert!(e.auth_failure().is_none());
+        assert!(e.to_string().contains("套餐"));
+    }
 
     #[test]
     fn sentry_trace_only_when_emulation_on() {
