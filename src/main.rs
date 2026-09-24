@@ -32,6 +32,7 @@ mod seed;
 mod settings;
 mod state;
 mod stats;
+mod text;
 mod upstream;
 
 use state::AppState;
@@ -423,13 +424,11 @@ async fn shape_payload_too_large(resp: axum::response::Response) -> axum::respon
     let request_id = uuid::Uuid::new_v4().to_string();
     let mut out = (
         axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-        axum::Json(serde_json::json!({
-            "error": {
-                "message": "请求体超过大小限制 100MiB",
-                "type": "nextapi_error",
-                "code": null
-            }
-        })),
+        axum::Json(crate::error::error_body(
+            "请求体超过大小限制 100MiB",
+            None,
+            &request_id,
+        )),
     )
         .into_response();
     if let Ok(v) = axum::http::HeaderValue::from_str(&request_id) {

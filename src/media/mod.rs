@@ -493,7 +493,7 @@ pub async fn fetch_task_status(
     if !status.is_success() {
         return Err(UpstreamError::Status(
             status.as_u16(),
-            truncate_text(&bytes, 2048),
+            crate::text::truncate_bytes_lossy(&bytes, 2048),
         ));
     }
     let json: serde_json::Value =
@@ -629,18 +629,6 @@ fn gcd(mut a: u32, mut b: u32) -> u32 {
     a
 }
 
-/// 截断错误正文（避免切开 UTF-8 码点，同 upstream::truncate_text 语义）
-fn truncate_text(bytes: &[u8], max_bytes: usize) -> String {
-    let len = bytes.len();
-    if len <= max_bytes {
-        return String::from_utf8_lossy(bytes).into_owned();
-    }
-    let mut end = max_bytes;
-    while end > 0 && (bytes[end - 1] & 0xC0) == 0x80 {
-        end -= 1;
-    }
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
-}
 
 #[cfg(test)]
 mod tests {

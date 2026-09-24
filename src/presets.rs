@@ -661,22 +661,17 @@ async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> 
     upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
 
     let started = std::time::Instant::now();
-    let latency_ms = started.elapsed().as_millis() as u64;
     let resp = client
         .get(&url)
         .headers(headers)
         .timeout(Duration::from_secs(10))
         .send()
         .await;
+    let latency_ms = started.elapsed().as_millis() as u64;
 
     match resp {
-        Ok(r) => {
-            let status = r.status().as_u16();
-            serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms })
-        }
-        Err(e) => {
-            serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() })
-        }
+        Ok(r) => upstream::probe_ok_json(r.status().as_u16(), latency_ms),
+        Err(e) => upstream::probe_err_json(latency_ms, e),
     }
 }
 

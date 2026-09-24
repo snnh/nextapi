@@ -37,12 +37,10 @@ pub struct PriceExportItem {
     pub video: Option<serde_json::Value>,
 }
 
-/// JSON 导出的顶层对象（`schema` 字段按契约固定，解析时不强制校验）。
+/// JSON 导出的顶层对象（导出侧写入 `schema: nextapi-prices/v1`；导入侧忽略未知键，
+/// 因而不在此声明该字段——契约版本变化不影响解析）。
 #[derive(Debug, Deserialize)]
 struct ExportJson {
-    #[serde(default)]
-    #[allow(dead_code)]
-    schema: Option<String>,
     prices: Vec<PriceExportItem>,
 }
 

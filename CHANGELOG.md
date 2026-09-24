@@ -2,6 +2,37 @@
 
 ## [未发布]
 
+### Fixed
+- **安全/健壮性（代码评审修复）**：DevIn Connect 帧解析对恶意 `len` 头做溢出与上限防护
+  （此前 `i + ln` 可回绕绕过守卫并 panic，且巨大 len 会撑爆缓冲）；单帧/缓冲双上限（16MB）。
+- **额度采集覆盖限流场景**：codex 429/5xx 响应此前因「先判状态码再取头」而被丢弃，
+  现改为响应头回调在状态校验前触发（`execute_stream_capture`），限流时也能拿到额度。
+- Devin 流式：`created` 与 `completed` 的 `response.id` 此前可能不同（首帧无 id 时各生成一次），
+  现首次生成即回写；EOF 无结束帧不再当成功（流式补 `response.failed`，非流式报错），
+  避免把截断的半个响应记账为 200；非 JSON 错误体不再丢成 `": "`。
+- Devin 探测/缓存：`GetUserStatus` 未返回额度块时不再落库（避免空快照覆盖上次有效额度）；
+  探测结果 5 分钟内复用（省额度）；`compact` 候选排除 devin（Connect 协议无 `/responses/compact`）。
+- 上游删除时清理额度节流表与 codex 刷新锁表条目（此前只增不减）。
+- 预设接入的连通性探测 `latency_ms` 此前在请求前取值（恒 ~0），改为请求后取值。
+
+### Changed
+- **性能/占用优化（评审）**：`debug_payload` 改为惰性求值（debug 关闭时不再序列化整个响应体）；
+  `LogSink.pending` 回收已完成句柄（此前长时间运行会无界增长）；SSE 解析改游标推进
+  （原逐行 drain 在大 chunk 下退化 O(n²)）；流式记账收集文本改 `mem::take`（省一次 ≤256KB 拷贝）；
+  已知事件类型时不再二次解析 JSON 取 `type`；日志列表/CSV 导出的 Key 名查找改一次建索引
+  （原 O(行数 × Key 数)）；`ProxyRow` 不再持有密码密文（只用明文，减少密文常驻）。
+
+### Removed
+- **代码清理（评审）**：移除 `protocol` 模块级 `#![allow(dead_code)]/#![allow(unused_imports)]`
+  全局抑制（M2 遗留）；删除无引用的 `codex::AUTHORIZE_URL`、`StreamState::stop_seen`（只写不读）、
+  `ProxyRow.password_enc`、前端 `fmtDate`/`WEEKDAY_LABEL`；`ir::ToolCallAggregator` 降级为
+  `#[cfg(test)]`（仅单测聚合校验用）。重复实现合一：新增 `text.rs`（4 份截断实现归一）、
+  `upstream::probe_ok_json/probe_err_json`（4 处探测返回体）、`error::error_body`（错误体手工拼装）、
+  `limit::window_allow`（auth 内另一份滑窗）、`execute_stream_capture`（codex 抓头与普通路径共用）。
+  文档纠正：`docs/protocol-matrix.md` 去掉并不存在的 `passthrough_fallback`（转换失败不回退透传）、
+  `logging` 的 `convert_mode` 注释与实际取值对齐、`AGENTS.md` 目录树补全（text.rs / auth/totp.rs /
+  logging/headers.rs / media/{resolve,download}.rs）并标注 tests/ 目录当前不存在。
+
 ### Added
 - **Devin OAuth 渠道（kind='devin'）**：以 devin CLI 形式接入上游 Devin Connect 协议
   （`GetChatMessage`，protobuf over HTTP + 5 字节信封帧），对外转发为标准接口

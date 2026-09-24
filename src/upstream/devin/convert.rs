@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::proto::{self, put_double, put_msg, put_str, put_uint};
-use crate::protocol::sse::encode_typed_event;
+use crate::protocol::sse::{encode_typed_event, encode_typed_event_with_type};
 
 /// f2 prompt 缺省：调用方未带 instructions 时的极简身份提示（不内嵌 CLI 默认头
 /// 提示词——该提示词与 CLI 内置工具强耦合，网关透传调用方工具时不适用）。
@@ -373,7 +373,6 @@ pub struct StreamConv {
     msg_text: String,
     calls: Vec<FnItem>,
     usage: Option<DevinUsage>,
-    stop_seen: bool,
     finished: bool,
 }
 
@@ -390,15 +389,8 @@ impl StreamConv {
             msg_text: String::new(),
             calls: Vec::new(),
             usage: None,
-            stop_seen: false,
             finished: false,
         }
-    }
-
-    /// 是否已收到 stop 帧（诊断用）。
-    #[allow(dead_code)]
-    pub fn stop_seen(&self) -> bool {
-        self.stop_seen
     }
 
     /// 是否已输出任何事件（决定错误映射为「可重试」还是「流中失败」）。
@@ -462,12 +454,10 @@ impl StreamConv {
             }
         }
 
-        // f5 stop_reason：2=文本结束 / 10=函数调用（FUNCTION_CALL）——均正常完成。
-        // 注意不在本帧收尾：实测 stop 帧后仍有滚动 usage 帧（终值在流末），
+        // f5 stop_reason（2=文本结束 / 10=函数调用 FUNCTION_CALL）仅作存在性判据：
+        // 不能在本帧收尾——实测 stop 帧后仍有滚动 usage 帧（终值在流末），
         // 终止事件统一延迟到流末（EOF / end 帧）由 finish() 发出，保证 usage 取到终值。
-        if stop.is_some() {
-            self.stop_seen = true;
-        }
+        let _ = stop;
         Ok(out)
     }
 
@@ -478,7 +468,7 @@ impl StreamConv {
             out.push(self.event_item_added_message());
         }
         self.msg_text.push_str(text);
-        out.push(encode_typed_event(
+        out.push(encode_typed_event_with_type(
             &json!({
                 "type": "response.output_text.delta",
                 "item_id": self.msg_item_id,
@@ -487,6 +477,7 @@ impl StreamConv {
                 "delta": text,
             })
             .to_string(),
+            Some("response.output_text.delta"),
         ));
         out
     }
@@ -582,8 +573,9 @@ impl StreamConv {
                 json!({ "code": "server_error", "message": message }),
             );
         }
-        vec![encode_typed_event(
+        vec![encode_typed_event_with_type(
             &json!({ "type": "response.failed", "response": resp }).to_string(),
+            Some("response.failed"),
         )]
     }
 
@@ -632,7 +624,7 @@ impl StreamConv {
         out
     }
 
-    fn event_created(&self) -> String {
+    fn event_created(&mut self) -> String {
         encode_typed_event(
             &json!({
                 "type": "response.created",
@@ -713,7 +705,7 @@ impl StreamConv {
         }
     }
 
-    fn build_final(&self, status: &str) -> Value {
+    fn build_final(&mut self, status: &str) -> Value {
         let mut output = Vec::new();
         if self.msg_added {
             output.push(self.item_message("completed"));
@@ -732,12 +724,12 @@ impl StreamConv {
         })
     }
 
-    fn resp_id_or_gen(&self) -> String {
+    /// 响应 id：首次生成后写回（created 与 completed 必须同 id）
+    fn resp_id_or_gen(&mut self) -> String {
         if self.resp_id.is_empty() {
-            format!("resp_{}", uuid::Uuid::new_v4().simple())
-        } else {
-            self.resp_id.clone()
+            self.resp_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
         }
+        self.resp_id.clone()
     }
 
     /// 非流式聚合：完整 Responses JSON。

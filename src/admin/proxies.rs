@@ -350,17 +350,10 @@ async fn test_proxy(
         .await;
     let latency_ms = started.elapsed().as_millis() as u64;
 
-    match resp {
-        Ok(r) => {
-            let status = r.status().as_u16();
-            Ok(Json(
-                serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms }),
-            ))
-        }
-        Err(e) => Ok(Json(
-            serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
-        )),
-    }
+    Ok(Json(match resp {
+        Ok(r) => crate::upstream::probe_ok_json(r.status().as_u16(), latency_ms),
+        Err(e) => crate::upstream::probe_err_json(latency_ms, e),
+    }))
 }
 
 /// 校验代理字段：类型、端口、名称/主机。
@@ -515,7 +508,6 @@ mod tests {
             host: "proxy.example.com".into(),
             port: 8080,
             username: Some("user".into()),
-            password_enc: None,
             password_plain: Some("pass".into()),
             no_proxy: Vec::new(),
             enabled: true,
@@ -530,7 +522,6 @@ mod tests {
             host: "proxy.example.com".into(),
             port: 8080,
             username: Some("us er".into()),
-            password_enc: None,
             password_plain: Some("p@ss:wo/rd#中文".into()),
             no_proxy: Vec::new(),
             enabled: true,
@@ -548,7 +539,6 @@ mod tests {
             host: "10.0.0.1".into(),
             port: 1080,
             username: None,
-            password_enc: None,
             password_plain: None,
             no_proxy: Vec::new(),
             enabled: true,

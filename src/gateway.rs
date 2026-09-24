@@ -187,19 +187,45 @@ async fn exec_http(
     codex_aggregate: bool,
     quota_sink: Option<&QuotaSink<'_>>,
 ) -> Result<ExecOutcome, UpstreamError> {
-    if stream {
-        let resp = upstream::execute_stream(client, url, headers, body, stream_timeout_ms).await?;
-        // M12.1：codex 额度头旁路抓取（不影响响应流）
+    // M12.1：codex 额度头旁路抓取（成功与 4xx/5xx 都抓——429 才最需要额度信息）。
+    // 非 codex 走无回调版本，避免无谓间接层。
+    let capture = |h: &reqwest::header::HeaderMap| {
         if let Some(sink) = quota_sink {
-            sink.capture(resp.headers());
+            sink.capture(h);
         }
+    };
+    let on_headers: Option<&(dyn Fn(&reqwest::header::HeaderMap) + Send + Sync)> = match quota_sink
+    {
+        Some(_) => Some(&capture),
+        None => None,
+    };
+    if stream {
+        let resp = match on_headers {
+            Some(cb) => {
+                upstream::execute_stream_capture(
+                    client,
+                    url,
+                    headers,
+                    body,
+                    stream_timeout_ms,
+                    Some(cb),
+                )
+                .await?
+            }
+            None => {
+                upstream::execute_stream(client, url, headers, body, stream_timeout_ms).await?
+            }
+        };
         Ok(ExecOutcome::Stream(upstream::StreamSource::Http(resp)))
     } else if codex_aggregate {
         // Codex 后端仅流式：非流式入口走流式收取 + 聚合 response.completed 帧。
-        let resp = upstream::execute_stream(client, url, headers, body, timeout_ms).await?;
-        if let Some(sink) = quota_sink {
-            sink.capture(resp.headers());
-        }
+        let resp = match on_headers {
+            Some(cb) => {
+                upstream::execute_stream_capture(client, url, headers, body, timeout_ms, Some(cb))
+                    .await?
+            }
+            None => upstream::execute_stream(client, url, headers, body, timeout_ms).await?,
+        };
         crate::upstream::codex::aggregate_stream_to_json(resp)
             .await
             .map(ExecOutcome::Json)
@@ -352,10 +378,11 @@ fn finalize_stream(stream: &mut TeeStream) {
     let collect = stream.collect.clone();
     let start = stream.start;
     tokio::spawn(async move {
-        let c = collect.lock().unwrap_or_else(|p| p.into_inner());
-        let text = c.text.clone();
-        let ttfb = c.ttfb_ms;
-        drop(c);
+        // take 而非 clone：收集缓冲此后即废弃，避免最多 256KB 的整段拷贝
+        let (text, ttfb) = {
+            let mut c = collect.lock().unwrap_or_else(|p| p.into_inner());
+            (std::mem::take(&mut c.text), c.ttfb_ms)
+        };
 
         let usage = crate::upstream::usage::extract_sse_usage(ctx.entry_protocol, &text);
         let mut ev = ctx.tmpl.clone();
@@ -915,17 +942,6 @@ fn mode_str(mode: Mode) -> &'static str {
     }
 }
 
-/// 错误摘要 ≤2000 字符（不切断 UTF-8 码点）。
-fn truncate_msg(msg: &str) -> String {
-    if msg.len() <= 2000 {
-        return msg.to_string();
-    }
-    let mut end = 2000;
-    while end > 0 && !msg.is_char_boundary(end) {
-        end -= 1;
-    }
-    msg[..end].to_string()
-}
 
 /// 从 Fail 中抽取人类可读的消息摘要。
 fn fail_message(fail: &Fail) -> String {
@@ -939,13 +955,19 @@ fn fail_message(fail: &Fail) -> String {
 }
 
 /// 构建 debug_payload（req 已脱敏；resp 按字节脱敏 + 截断）。
+///
+/// `resp_bytes` 走闭包惰性求值：debug 关闭（`req` 为 None）时短路返回，
+/// 调用方无需先把响应 JSON 序列化成字节（大响应体下是可观开销）。
 fn debug_payload(
     req: &Option<(serde_json::Value, bool)>,
-    resp_bytes: &[u8],
+    resp_bytes: impl FnOnce() -> Vec<u8>,
 ) -> Option<serde_json::Value> {
     let (req, req_trunc) = req.as_ref()?;
-    let (resp, resp_trunc) =
-        crate::logging::redact::redact_and_truncate(resp_bytes, crate::logging::DEBUG_MAX_BYTES);
+    let resp_bytes = resp_bytes();
+    let (resp, resp_trunc) = crate::logging::redact::redact_and_truncate(
+        &resp_bytes,
+        crate::logging::DEBUG_MAX_BYTES,
+    );
     Some(serde_json::json!({
         "request": req.clone(),
         "response": resp,
@@ -990,7 +1012,7 @@ fn log_fail(
 ) {
     let mut ev = tmpl.clone();
     ev.status = status as i32;
-    ev.error = Some(truncate_msg(msg));
+    ev.error = Some(crate::text::truncate_chars(msg, 2000));
     ev.latency_ms = Some(start.elapsed().as_millis() as i32);
     ev.retry_count = retry_count;
     if ev.protocol_out.is_empty() {
@@ -1068,7 +1090,7 @@ fn nonstream_success(
                         response: json_rsp(StatusCode::BAD_GATEWAY, request_id, None, body.clone()),
                         status: 502,
                         degraded: false,
-                        error: Some(truncate_msg(&format!("响应转换失败: {e}"))),
+                        error: Some(crate::text::truncate_chars(&format!("响应转换失败: {e}"), 2000)),
                         final_json: Some(body),
                     }
                 }
@@ -1844,16 +1866,15 @@ async fn run_gateway(
                                 .get_or_create(&lbl)
                                 .inc_by(total.max(0) as u64);
                         }
-                        if let Some(payload) = debug_payload(
-                            &debug_req,
-                            &serde_json::to_vec(
+                        if let Some(payload) = debug_payload(&debug_req, || {
+                            serde_json::to_vec(
                                 outcome
                                     .final_json
                                     .as_ref()
                                     .unwrap_or(&serde_json::Value::Null),
                             )
-                            .unwrap_or_default(),
-                        ) {
+                            .unwrap_or_default()
+                        }) {
                             ev.debug_payload = Some(payload);
                         }
                         // 幂等登记完成（M10.2）：缓存响应体；失败仅告警不阻断响应
@@ -1875,16 +1896,15 @@ async fn run_gateway(
                         if let Some(rid) = idem_rec {
                             let _ = crate::idempotency::fail(&state.db, rid).await;
                         }
-                        if let Some(payload) = debug_payload(
-                            &debug_req,
-                            &serde_json::to_vec(
+                        if let Some(payload) = debug_payload(&debug_req, || {
+                            serde_json::to_vec(
                                 outcome
                                     .final_json
                                     .as_ref()
                                     .unwrap_or(&serde_json::Value::Null),
                             )
-                            .unwrap_or_default(),
-                        ) {
+                            .unwrap_or_default()
+                        }) {
                             ev.debug_payload = Some(payload);
                         }
                         state.log_sink.log(ev);
@@ -2064,7 +2084,13 @@ async fn gemini(
 
 /// 候选上游是否能服务 compact：codex 渠道（chatgpt 后端原生支持）
 /// 或声明支持 openai_responses 协议的上游（按 /responses/compact 透传）。
+///
+/// devin 渠道虽然对外声明 openai_responses，但其上游是 Connect 协议（无 compact 端点），
+/// 必须排除，否则会白白浪费一次候选（请求必然失败）。
 fn compact_capable(up: &UpstreamRow) -> bool {
+    if up.kind == "devin" {
+        return false;
+    }
     up.kind == "codex" || up.protocol_list().contains(&Protocol::OpenaiResponses)
 }
 
@@ -2463,7 +2489,7 @@ async fn openai_responses_compact(
                             .inc_by(total.max(0) as u64);
                     }
                     if let Some(payload) =
-                        debug_payload(&debug_req, &serde_json::to_vec(&out).unwrap_or_default())
+                        debug_payload(&debug_req, || serde_json::to_vec(&out).unwrap_or_default())
                     {
                         ev.debug_payload = Some(payload);
                     }
@@ -3030,10 +3056,9 @@ async fn images_generations(
                             ev.status = 200;
                             ev.images = Some(image_count);
                             ev.image_size = image_size.clone();
-                            if let Some(payload) = debug_payload(
-                                &debug_req,
-                                &serde_json::to_vec(&body_json).unwrap_or_default(),
-                            ) {
+                            if let Some(payload) = debug_payload(&debug_req, || {
+                                serde_json::to_vec(&body_json).unwrap_or_default()
+                            }) {
                                 ev.debug_payload = Some(payload);
                             }
                             // 幂等登记完成（M10.2）：缓存同步图片响应体
@@ -3119,10 +3144,9 @@ async fn images_generations(
                             ev.retry_count = (idx + failed_candidates) as i32;
                             ev.status = 202;
                             // 异步任务无即时图片：images/image_size 保持 NULL
-                            if let Some(payload) = debug_payload(
-                                &debug_req,
-                                &serde_json::to_vec(&body_json).unwrap_or_default(),
-                            ) {
+                            if let Some(payload) = debug_payload(&debug_req, || {
+                                serde_json::to_vec(&body_json).unwrap_or_default()
+                            }) {
                                 ev.debug_payload = Some(payload);
                             }
                             // 幂等登记完成（M10.2）：异步任务缓存 {"task_id":...}，重放返回同一任务

@@ -196,7 +196,8 @@ async function load(probe: boolean) {
       : await upstreamApi.getQuota(props.row.id)
     quota.value = r.quota ?? null
     if (probe) {
-      if (r.ok) ElMessage.success('探测完成')
+      if (r.cached) ElMessage.info('已复用最近 5 分钟内的快照（未再请求上游）')
+      else if (r.ok) ElMessage.success('探测完成')
       else if (r.error) error.value = r.error
     }
   } catch (e) {

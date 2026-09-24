@@ -128,17 +128,6 @@ fn extract_image_urls(raw: &Option<serde_json::Value>) -> Vec<serde_json::Value>
     out
 }
 
-/// 错误摘要 ≤2000 字符（不切断 UTF-8 码点）。
-fn truncate_msg(msg: &str) -> String {
-    if msg.len() <= 2000 {
-        return msg.to_string();
-    }
-    let mut end = 2000;
-    while end > 0 && !msg.is_char_boundary(end) {
-        end -= 1;
-    }
-    msg[..end].to_string()
-}
 
 /// 任务状态归一后的处理类别（纯函数，可测）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -401,7 +390,7 @@ async fn finalize_succeeded(
 
 /// 失败/取消（已归一到 failed）→ 状态 failed + error；LogEvent status=502 不计价。
 async fn finalize_failed(state: &AppState, task: &MediaTaskRow, st: &TaskStatus) -> ApiResult<()> {
-    let error = truncate_msg(&st.error.clone().unwrap_or_else(|| "任务失败".to_string()));
+    let error = crate::text::truncate_chars(&st.error.clone().unwrap_or_else(|| "任务失败".to_string()), 2000);
     let updated = sqlx::query(
         "UPDATE media_tasks SET status='failed', error=$2, raw=$3, finished_at=now(), updated_at=now() \
          WHERE id=$1 AND status IN ('pending','processing')",
@@ -486,15 +475,12 @@ fn json_response(status: u16, body: serde_json::Value) -> Response {
     (status, Json(body)).into_response()
 }
 
-/// 错误响应（OpenAI 形状错误体）。
+/// 错误响应（与网关/管理端同一错误体形状，见 crate::error::error_body）。
 fn err_response(status: u16, message: &str) -> Response {
     let status =
         axum::http::StatusCode::from_u16(status).unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
-    (
-        status,
-        Json(json!({ "error": { "message": message, "type": "nextapi_error" } })),
-    )
-        .into_response()
+    let request_id = uuid::Uuid::new_v4().to_string();
+    (status, Json(crate::error::error_body(message, None, &request_id))).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -558,10 +544,10 @@ mod tests {
     #[test]
     fn truncate_msg_handles_char_boundary() {
         let long = "x".repeat(2500);
-        let t = truncate_msg(&long);
+        let t = crate::text::truncate_chars(&long, 2000);
         assert_eq!(t.len(), 2000);
         assert!(t.is_char_boundary(t.len()));
         // 短消息原样返回
-        assert_eq!(truncate_msg("ok"), "ok");
+        assert_eq!(crate::text::truncate_chars("ok", 2000), "ok");
     }
 }

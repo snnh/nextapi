@@ -79,17 +79,7 @@ fn serialized_len(map: &Map<String, Value>) -> usize {
 
 /// 按字节上限截断 UTF-8 字符串（保证落在字符边界上），截断时追加 `…`。
 fn truncate_bytes(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut out = String::with_capacity(end + 3);
-    out.push_str(&s[..end]);
-    out.push('…');
-    out
+    crate::text::truncate_bytes_ellipsis(s, max)
 }
 
 #[cfg(test)]

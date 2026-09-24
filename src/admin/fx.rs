@@ -150,12 +150,8 @@ async fn refresh_fx(
             let body = serde_json::json!({ "ok": true, "report": report });
             Ok(json_response(StatusCode::OK, body))
         }
-        Err(e) => {
-            let body = serde_json::json!({
-                "error": { "message": e.to_string(), "type": "nextapi_error" }
-            });
-            Ok(json_response(StatusCode::BAD_GATEWAY, body))
-        }
+        // 失败：走统一 ApiError（502 + 标准错误体，与其它管理端接口一致）
+        Err(e) => Err(ApiError::bad_gateway(e.to_string())),
     }
 }
 

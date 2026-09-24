@@ -896,7 +896,7 @@ impl LoginRateLimiter {
                 last_seen: now,
             });
         entry.last_seen = now;
-        window_allow(&mut entry.events, now, limit, window)
+        crate::limit::window_allow(&mut entry.events, now, limit, window)
     }
 }
 
@@ -909,24 +909,6 @@ static LOGIN_RATE_LIMITER: OnceLock<LoginRateLimiter> = OnceLock::new();
 
 fn login_rate_limiter() -> &'static LoginRateLimiter {
     LOGIN_RATE_LIMITER.get_or_init(|| LoginRateLimiter(Mutex::new(HashMap::new())))
-}
-
-/// 纯函数：滑窗判定。先剔除小于 `window` 的过期事件，再判断是否还能容纳一个新事件。
-/// 放行时把 `now` 压入队列；超限返回 false 且不压入。
-fn window_allow(queue: &mut VecDeque<Instant>, now: Instant, limit: u32, window: Duration) -> bool {
-    // 剔除过期事件（队列按时间递增，从头部开始）
-    while let Some(&t) = queue.front() {
-        if now.duration_since(t) > window {
-            queue.pop_front();
-        } else {
-            break;
-        }
-    }
-    if queue.len() as u32 >= limit {
-        return false;
-    }
-    queue.push_back(now);
-    true
 }
 
 /// 管理操作审计：写 admin_audit_logs（独立表，不混入 usage_logs）。
@@ -981,6 +963,7 @@ pub async fn audit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::limit::window_allow;
 
     #[test]
     fn window_allows_within_limit() {
@@ -988,7 +971,7 @@ mod tests {
         let start = Instant::now();
         let window = Duration::from_secs(RATE_WINDOW_SECS);
         // 允许 limit=3 个事件
-        assert!(window_allow(&mut q, start, 3, window));
+        assert!(crate::limit::window_allow(&mut q, start, 3, window));
         assert!(window_allow(
             &mut q,
             start + Duration::from_secs(1),
@@ -1038,15 +1021,13 @@ mod tests {
     }
 
     #[test]
-    fn window_zero_limit_rejects_all() {
+    fn window_zero_limit_disables_limiting() {
+        // limit=0 = 关闭限速（与 LoginRateLimiter::check 及 RPM 限流同口径）：
+        // 一律放行且不记录事件（避免无谓的内存驻留）
         let start = Instant::now();
-        // limit=0 时纯函数任何事件都超限（不放行、不记录）
-        assert!(!window_allow(
-            &mut VecDeque::new(),
-            start,
-            0,
-            Duration::from_secs(1)
-        ));
+        let mut q = VecDeque::new();
+        assert!(window_allow(&mut q, start, 0, Duration::from_secs(1)));
+        assert!(q.is_empty(), "关闭限速时不记录事件");
     }
 
     #[test]

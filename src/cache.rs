@@ -176,7 +176,6 @@ impl EntityCache {
                 host: p.host,
                 port: p.port,
                 username: p.username,
-                password_enc: p.password_enc,
                 password_plain,
                 no_proxy: p.no_proxy,
                 enabled: p.enabled,

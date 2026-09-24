@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::cache::Snapshot;
 use crate::entities::{Overrides, UpstreamRow};
 use crate::protocol::ir::Protocol;
-use crate::protocol::sse::{encode_typed_event, SseParser};
+use crate::protocol::sse::{encode_typed_event, encode_typed_event_with_type, SseParser};
 use crate::protocol::{chunk_from_ir, chunk_to_ir, stream_end, AnyStreamState, ConvCtx};
 
 /// 上游调用错误。
@@ -512,6 +512,17 @@ pub async fn execute_nonstream(
     serde_json::from_slice(&bytes).map_err(|e| UpstreamError::BodyRead(e.to_string()))
 }
 
+/// 连通性测试统一返回体（预设接入、上游 test、代理 test 共用）：
+/// 有响应 → `{ok: status<500, status, latency_ms}`；连不上 → `{ok:false, latency_ms, error}`。
+pub fn probe_ok_json(status: u16, latency_ms: u64) -> serde_json::Value {
+    serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms })
+}
+
+/// 见 [`probe_ok_json`]：连接层失败（超时/DNS/代理错误）。
+pub fn probe_err_json(latency_ms: u64, error: impl std::fmt::Display) -> serde_json::Value {
+    serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": error.to_string() })
+}
+
 /// 流式上游调用：建立 SSE 连接，返回响应（调用方随后消费 body bytes_stream）。
 /// 首字节前的失败表现为本函数返回 Err（可重试/故障转移）；
 /// 首字节后的失败由流自然断流表达（PLAN §4.4 流式错误边界）。
@@ -522,8 +533,26 @@ pub async fn execute_stream(
     body: &serde_json::Value,
     timeout_ms: i32,
 ) -> Result<reqwest::Response, UpstreamError> {
+    execute_stream_capture(client, url, headers, body, timeout_ms, None).await
+}
+
+/// 同 [`execute_stream`]，但把响应头（**含 4xx/5xx 错误响应**）交给 `on_headers`。
+///
+/// 用途：codex 的 `x-codex-*` 额度头在 429 等错误响应上同样回带（实测与社区一致），
+/// 若只在成功分支取头会丢掉最该采集的限流场景。
+pub async fn execute_stream_capture(
+    client: &reqwest::Client,
+    url: &str,
+    headers: reqwest::header::HeaderMap,
+    body: &serde_json::Value,
+    timeout_ms: i32,
+    on_headers: Option<&(dyn Fn(&reqwest::header::HeaderMap) + Send + Sync)>,
+) -> Result<reqwest::Response, UpstreamError> {
     let resp = post_json(client, url, headers, body, timeout_ms).await?;
     let status = resp.status();
+    if let Some(cb) = on_headers {
+        cb(resp.headers());
+    }
     if !status.is_success() {
         let bytes = resp
             .bytes()
@@ -601,7 +630,8 @@ pub fn rewrite_sse_payload(data: &str, model: &str) -> String {
                     }
                 }
             }
-            encode_typed_event(&v.to_string())
+            let event = v.get("type").and_then(|t| t.as_str());
+            encode_typed_event_with_type(&v.to_string(), event)
         }
         Err(_) => encode_typed_event(data),
     }
@@ -1081,7 +1111,6 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 8080,
             username: None,
-            password_enc: None,
             password_plain: None,
             no_proxy: vec![],
             enabled: true,

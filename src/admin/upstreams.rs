@@ -562,6 +562,13 @@ async fn delete_upstream(
         .reload(&state.db, &state.crypto)
         .await
         .map_err(ApiError::internal)?;
+    // 内存侧清理：额度节流表与 codex 刷新锁表（键为 upstream_id，删除后不应残留）
+    crate::upstream::quota::throttle_forget(&state.quota_last, &id);
+    state
+        .codex_locks
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&id);
     auth::audit(
         &state,
         &admin.0,
@@ -623,15 +630,15 @@ async fn quota_probe(
         ));
     }
 
-    // codex：新鲜快照直接复用（不消耗额度）
-    if up.kind == "codex" {
-        if let Some(c) = cached.as_ref() {
-            if crate::upstream::quota::is_fresh(c, QUOTA_CACHE_SECS) {
-                return Ok(Json(serde_json::json!({
-                    "ok": true, "probed": false, "cached": true, "latency_ms": 0, "quota": c,
-                })));
-            }
+    // 新鲜快照直接复用（codex/devin 同策；避免无谓消耗上游额度）
+    if let Some(c) = cached.as_ref() {
+        if crate::upstream::quota::is_fresh(c, QUOTA_CACHE_SECS) {
+            return Ok(Json(serde_json::json!({
+                "ok": true, "probed": false, "cached": true, "latency_ms": 0, "quota": c,
+            })));
         }
+    }
+    if up.kind == "codex" {
         let (token, account) = match crate::upstream::codex::ensure_token(&state, &up).await {
             Ok(t) => t,
             Err(e) => {
@@ -734,10 +741,15 @@ async fn quota_probe(
     match crate::upstream::devin::user_status(&client, base, tok, 10_000).await {
         Ok(info) => {
             let s = crate::upstream::devin::quota_snapshot(&info);
-            crate::upstream::quota::store(&state.db, id, &s).await;
+            // 上游未返回额度块（quota 为 None）时不落库：避免用「无额度」的空快照
+            // 覆盖上一次的有效额度；此时仍返回本次探测到的套餐/账号/模型数
+            if info.quota.is_some() {
+                crate::upstream::quota::store(&state.db, id, &s).await;
+            }
             Ok(Json(serde_json::json!({
                 "ok": true, "probed": true, "status": 200,
                 "latency_ms": started.elapsed().as_millis() as u64, "quota": s,
+                "stored": info.quota.is_some(),
             })))
         }
         Err(e) => Ok(Json(serde_json::json!({
@@ -851,17 +863,10 @@ async fn test_upstream(
         .await;
     let latency_ms = started.elapsed().as_millis() as u64;
 
-    match resp {
-        Ok(r) => {
-            let status = r.status().as_u16();
-            Ok(Json(
-                serde_json::json!({ "ok": status < 500, "status": status, "latency_ms": latency_ms }),
-            ))
-        }
-        Err(e) => Ok(Json(
-            serde_json::json!({ "ok": false, "latency_ms": latency_ms, "error": e.to_string() }),
-        )),
-    }
+    Ok(Json(match resp {
+        Ok(r) => crate::upstream::probe_ok_json(r.status().as_u16(), latency_ms),
+        Err(e) => crate::upstream::probe_err_json(latency_ms, e),
+    }))
 }
 
 /// 校验模型同步策略与排除名单边界（review P2 风格：长度/数量上限）。

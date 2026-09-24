@@ -47,6 +47,7 @@ pub fn parse_codex_headers(headers: &HeaderMap) -> Option<serde_json::Value> {
         && secondary_used.is_none()
         && credits_balance.is_none()
         && credits_has.is_none()
+        && credits_unlimited.is_none()
     {
         return None;
     }
@@ -163,14 +164,13 @@ pub fn capture_codex_headers(state: &AppState, upstream_id: Uuid, headers: &Head
     let db = state.db.clone();
     let now = chrono::Utc::now().timestamp();
     let digest = digest_of(&snap);
-    // 节流：同一上游 60s 内且额度内容完全一致 → 只刷新内存时间戳，不写库
-    if let Some((ts, prev)) = throttle_get(&state.quota_last, &upstream_id) {
-        if prev == digest && now.saturating_sub(ts) < 60 {
-            throttle_put(&state.quota_last, upstream_id, ts, prev);
+    // 节流（原子 check-and-set）：同一上游 60s 内且额度内容完全一致 → 滑动时间戳、不写库；
+    // 并发首请求只有第一个胜出，避免同内容重复 spawn 多个 UPDATE
+    if let Some(skip) = throttle_claim(&state.quota_last, upstream_id, now, &digest) {
+        if skip {
             return;
         }
     }
-    throttle_put(&state.quota_last, upstream_id, now, digest);
     tokio::spawn(async move {
         store(&db, upstream_id, &snap).await;
     });
@@ -179,19 +179,24 @@ pub fn capture_codex_headers(state: &AppState, upstream_id: Uuid, headers: &Head
 /// 侧面节流表：per-upstream 最近一次写入时间戳 + 内容指纹（仅用于减少无谓 UPDATE）。
 pub type QuotaThrottle = std::sync::Mutex<std::collections::HashMap<Uuid, (i64, String)>>;
 
-/// 查节流记录（锁中毒按空表处理，不影响主链路）。
-pub fn throttle_get(t: &QuotaThrottle, id: &Uuid) -> Option<(i64, String)> {
-    t.lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(id)
-        .cloned()
+/// 原子「占用写入机会」：内容一致且在窗口内 → 返回 `Some(true)`（跳过写库，仅滑动时间戳）；
+/// 否则登记本次写入（`Some(false)`）并放行。全程单次持锁，避免并发重复写。
+pub fn throttle_claim(t: &QuotaThrottle, id: Uuid, now: i64, digest: &str) -> Option<bool> {
+    let mut m = t.lock().unwrap_or_else(|p| p.into_inner());
+    let fresh_same = m
+        .get(&id)
+        .is_some_and(|(ts, prev)| prev == digest && now.saturating_sub(*ts) < 60);
+    if fresh_same {
+        m.insert(id, (now, digest.to_string()));
+        return Some(true);
+    }
+    m.insert(id, (now, digest.to_string()));
+    Some(false)
 }
 
-/// 记录节流条目。
-pub fn throttle_put(t: &QuotaThrottle, id: Uuid, ts: i64, digest: String) {
-    t.lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(id, (ts, digest));
+/// 上游删除时清理节流条目（防长期运行的表缓慢膨胀）。
+pub fn throttle_forget(t: &QuotaThrottle, id: &Uuid) {
+    t.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
 }
 
 /// 快照内容指纹（用于节流比较；captured_at 不参与）。可单测。
@@ -289,6 +294,18 @@ mod tests {
         assert!(is_fresh(&snap, 300), "刚生成的快照应新鲜");
         assert!(!is_fresh(&snap, -1), "负 TTL → 过期");
         assert!(!is_fresh(&serde_json::json!({"kind": "codex"}), 300), "缺 captured_at → 过期");
+    }
+
+    #[test]
+    fn throttle_claim_dedups_and_slides() {
+        let t: QuotaThrottle = std::sync::Mutex::new(std::collections::HashMap::new());
+        let id = Uuid::new_v4();
+        assert_eq!(throttle_claim(&t, id, 100, "A"), Some(false), "首次写入放行");
+        assert_eq!(throttle_claim(&t, id, 110, "A"), Some(true), "同内容窗口内跳过");
+        assert_eq!(throttle_claim(&t, id, 170, "A"), Some(false), "超出 60s 窗口再次放行");
+        assert_eq!(throttle_claim(&t, id, 175, "B"), Some(false), "内容变化立即放行");
+        throttle_forget(&t, &id);
+        assert!(t.lock().unwrap().get(&id).is_none(), "删除后无残留");
     }
 
     #[test]

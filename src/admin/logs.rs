@@ -212,9 +212,10 @@ async fn list_logs(
     };
 
     let snap = state.cache.snapshot();
+    let idx = NameIndex::new(&snap);
     let items: Vec<LogItem> = rows
         .into_iter()
-        .map(|row| attach_names(row, &snap))
+        .map(|row| attach_names(row, &idx))
         .collect();
 
     Ok(Json(serde_json::json!({
@@ -256,6 +257,7 @@ async fn export_csv(
     let slice = if truncated { &rows[..LIMIT] } else { &rows[..] };
 
     let snap = state.cache.snapshot();
+    let idx = NameIndex::new(&snap);
     let mut out = String::new();
     out.push_str(
         "request_id,ts,key_name,model,upstream_model,upstream_name,protocol_in,protocol_out,convert_mode,stream,\
@@ -264,7 +266,7 @@ async fn export_csv(
     );
     for row in slice {
         out.push('\n');
-        out.push_str(&csv_record(row, &snap));
+        out.push_str(&csv_record(row, &idx));
     }
     if truncated {
         out.push_str("\n# truncated at 100000");
@@ -299,7 +301,8 @@ async fn get_log(
     let row = row.ok_or(ApiError::NotFound)?;
 
     let snap = state.cache.snapshot();
-    let item = attach_names(row, &snap);
+    let idx = NameIndex::new(&snap);
+    let item = attach_names(row, &idx);
     Ok(Json(serde_json::json!(item)))
 }
 
@@ -525,12 +528,36 @@ fn parse_uuid(s: &str) -> ApiResult<Uuid> {
     Uuid::parse_str(s).map_err(|e| ApiError::bad_request(format!("UUID 解析失败: {e}")))
 }
 
-/// 内存快照 join：key 按 id 遍历 values 查找（量小可接受）；upstream 按 id 直查。
-fn attach_names(row: UsageLogRow, snap: &Snapshot) -> LogItem {
-    let key = row
-        .key_id
-        .and_then(|id| snap.api_keys.values().find(|k| k.id == id));
-    let upstream = row.upstream_id.and_then(|id| snap.upstreams.get(&id));
+/// 快照 join 索引：一次构建 key_id → Key 行映射。
+///
+/// 列表页/CSV 导出按行查 Key 名，若逐行 `values().find()` 最坏是 O(rows × keys)
+/// （导出上限 10 万行），故按请求建一次索引。
+struct NameIndex<'a> {
+    keys: std::collections::HashMap<Uuid, &'a crate::entities::ApiKeyRow>,
+    snap: &'a Snapshot,
+}
+
+impl<'a> NameIndex<'a> {
+    fn new(snap: &'a Snapshot) -> Self {
+        Self {
+            keys: snap.api_keys.values().map(|k| (k.id, k)).collect(),
+            snap,
+        }
+    }
+
+    fn key(&self, id: Uuid) -> Option<&'a crate::entities::ApiKeyRow> {
+        self.keys.get(&id).copied()
+    }
+
+    fn upstream(&self, id: Uuid) -> Option<&'a crate::entities::UpstreamRow> {
+        self.snap.upstreams.get(&id)
+    }
+}
+
+/// 内存快照 join：key 走索引；upstream 按 id 直查。
+fn attach_names(row: UsageLogRow, idx: &NameIndex<'_>) -> LogItem {
+    let key = row.key_id.and_then(|id| idx.key(id));
+    let upstream = row.upstream_id.and_then(|id| idx.upstream(id));
     LogItem {
         row,
         key_name: key.map(|k| k.name.clone()),
@@ -540,11 +567,9 @@ fn attach_names(row: UsageLogRow, snap: &Snapshot) -> LogItem {
 }
 
 /// 组装 CSV 单行（列序固定，按契约 §10）。
-fn csv_record(row: &UsageLogRow, snap: &Snapshot) -> String {
-    let key = row
-        .key_id
-        .and_then(|id| snap.api_keys.values().find(|k| k.id == id));
-    let upstream = row.upstream_id.and_then(|id| snap.upstreams.get(&id));
+fn csv_record(row: &UsageLogRow, idx: &NameIndex<'_>) -> String {
+    let key = row.key_id.and_then(|id| idx.key(id));
+    let upstream = row.upstream_id.and_then(|id| idx.upstream(id));
     let fields = [
         row.request_id.clone(),
         row.ts.to_rfc3339(),
