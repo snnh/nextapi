@@ -132,11 +132,19 @@ struct Tc {
 }
 
 /// 归一后的会话消息（ChatMessagePrompt 三形态）。
+///
+/// 请求侧槽位与响应侧一一对应（实测 CLI 抓帧）：`f3` = 正文文本（user / assistant
+/// 共用），`f11` = assistant 思维链（CLI 的 preserved_thinking），`f6` = tool_calls，
+/// `f7` = tool_call_id。此前把 assistant 正文写进 f11，会被上游当思维链，已修正。
 enum Msg {
     /// source=1：user / system（CLI 的 system_info 注入也是 user 源）
     User { text: String },
-    /// source=2：assistant 文本（f11）+ 工具调用（f6 repeated）
-    Assistant { text: String, calls: Vec<Tc> },
+    /// source=2：assistant 正文（f3）+ 思维链（f11）+ 工具调用（f6）
+    Assistant {
+        text: String,
+        thinking: String,
+        calls: Vec<Tc>,
+    },
     /// source=4：工具结果（f3 + f7 tool_call_id）
     Tool { call_id: String, text: String },
 }
@@ -167,15 +175,38 @@ fn content_text(content: &Value) -> String {
     }
 }
 
+/// 从 Responses `reasoning` item 提取思维链文本（summary / content 段）。
+/// encrypted_content 为上游不透传密文，忽略。
+fn reasoning_text(item: &Value) -> String {
+    let mut out = Vec::new();
+    for key in ["summary", "content"] {
+        if let Some(arr) = item.get(key).and_then(|v| v.as_array()) {
+            for p in arr {
+                if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                    if !t.is_empty() {
+                        out.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out.join("\n")
+}
+
 /// Responses `input`（string | items）→ 归一消息列表；连续 assistant 项（文本 +
-/// function_call）合并为一条 ChatMessagePrompt（CLI 形态：f11 + f6 同帧）。
+/// function_call）合并为一条 ChatMessagePrompt（CLI 形态：f3 正文 + f6 工具 + f11 思维）。
+/// `reasoning` 项（客户端回传的思维链）挂到紧随其后的 assistant 消息，走 f11。
 fn input_to_messages(input: &Value) -> Result<Vec<Msg>, String> {
     let mut out: Vec<Msg> = Vec::new();
-    let mut pending: Option<(String, Vec<Tc>)> = None;
+    let mut pending: Option<(String, String, Vec<Tc>)> = None;
 
-    let flush = |pending: &mut Option<(String, Vec<Tc>)>, out: &mut Vec<Msg>| {
-        if let Some((text, calls)) = pending.take() {
-            out.push(Msg::Assistant { text, calls });
+    let flush = |pending: &mut Option<(String, String, Vec<Tc>)>, out: &mut Vec<Msg>| {
+        if let Some((text, thinking, calls)) = pending.take() {
+            out.push(Msg::Assistant {
+                text,
+                thinking,
+                calls,
+            });
         }
     };
 
@@ -201,6 +232,16 @@ fn input_to_messages(input: &Value) -> Result<Vec<Msg>, String> {
                             out.push(Msg::User { text });
                         }
                     }
+                    "reasoning" => {
+                        // 客户端回传的思维链：绑定到紧随其后的 assistant 消息（f11）
+                        let think = reasoning_text(item);
+                        if !think.is_empty() {
+                            pending
+                                .get_or_insert_with(Default::default)
+                                .1
+                                .push_str(&think);
+                        }
+                    }
                     "function_call" => {
                         let tc = Tc {
                             call_id: item
@@ -220,7 +261,7 @@ fn input_to_messages(input: &Value) -> Result<Vec<Msg>, String> {
                                 .unwrap_or("{}")
                                 .to_string(),
                         };
-                        pending.get_or_insert_with(Default::default).1.push(tc);
+                        pending.get_or_insert_with(Default::default).2.push(tc);
                     }
                     "function_call_output" => {
                         flush(&mut pending, &mut out);
@@ -238,7 +279,7 @@ fn input_to_messages(input: &Value) -> Result<Vec<Msg>, String> {
                             text,
                         });
                     }
-                    // reasoning / 其它扩展项：Devin 无对应字段，跳过
+                    // 其它扩展项：Devin 无对应字段，跳过
                     _ => {}
                 }
             }
@@ -258,17 +299,24 @@ fn encode_message(msg: &Msg, idx: usize, seed: &str) -> BytesMut {
             put_uint(&mut b, 2, 1);
             put_str(&mut b, 3, text);
         }
-        Msg::Assistant { text, calls } => {
+        Msg::Assistant {
+            text,
+            thinking,
+            calls,
+        } => {
             put_uint(&mut b, 2, 2);
+            if !text.is_empty() {
+                put_str(&mut b, 3, text);
+            }
+            if !thinking.is_empty() {
+                put_str(&mut b, 11, thinking);
+            }
             for c in calls {
                 let mut sub = BytesMut::new();
                 put_str(&mut sub, 1, &c.call_id);
                 put_str(&mut sub, 2, &c.name);
                 put_str(&mut sub, 3, &c.args);
                 put_msg(&mut b, 6, &sub);
-            }
-            if !text.is_empty() {
-                put_str(&mut b, 11, text);
             }
         }
         Msg::Tool { call_id, text } => {
@@ -429,15 +477,30 @@ struct FnItem {
 }
 
 /// Devin 响应流 → Responses 事件状态机（流式 SSE 与非流式聚合共用）。
+///
+/// 两条文本流（实测：真实 CLI 会话经本地中转抓帧 + CLI 会话库对照）：
+/// - `f3`（伴随 `f4` 分段标记）= **回答正文** → Responses message / output_text；
+/// - `f9` = **思维链（CoT）** → Responses reasoning item / reasoning_summary_text。
+///
+/// 官方 CLI 把 f3 存为消息正文、把 f11（请求侧同槽位）作为 preserved_thinking
+/// 回传，故 f3/f9 语义与请求侧 f3/f11 一一对应，不可互换。
 pub struct StreamConv {
     model: String,
     resp_id: String,
     created_at: i64,
+    /// 思维链（响应 f9）→ reasoning item
+    reasoning_item_id: String,
+    reasoning_index: u64,
+    reasoning_added: bool,
+    reasoning_text: String,
+    /// 回答正文（响应 f3）→ message item
     msg_item_id: String,
     msg_index: u64,
     created: bool,
     msg_added: bool,
     msg_text: String,
+    /// 下一个 output_index（reasoning / message / function_call 按出现顺序分配）
+    next_index: u64,
     calls: Vec<FnItem>,
     usage: Option<DevinUsage>,
     finished: bool,
@@ -449,11 +512,16 @@ impl StreamConv {
             model: model.into(),
             resp_id: String::new(),
             created_at: chrono::Utc::now().timestamp(),
+            reasoning_item_id: format!("rs_{}", uuid::Uuid::new_v4().simple()),
+            reasoning_index: 0,
+            reasoning_added: false,
+            reasoning_text: String::new(),
             msg_item_id: format!("msg_{}", uuid::Uuid::new_v4().simple()),
             msg_index: 0,
             created: false,
             msg_added: false,
             msg_text: String::new(),
+            next_index: 0,
             calls: Vec::new(),
             usage: None,
             finished: false,
@@ -513,6 +581,13 @@ impl StreamConv {
                     }
                 }
                 9 => {
+                    // 思维链增量（f9）
+                    if let Some(s) = v.as_str() {
+                        out.extend(self.feed_thinking(s));
+                    }
+                }
+                3 => {
+                    // 回答正文增量（f3，f4 为分段标记，忽略）
                     if let Some(s) = v.as_str() {
                         out.extend(self.feed_text(s));
                     }
@@ -528,10 +603,13 @@ impl StreamConv {
         Ok(out)
     }
 
+    /// 回答正文增量（f3）→ message item / output_text.delta。
     fn feed_text(&mut self, text: &str) -> Vec<String> {
         let mut out = Vec::new();
         if !self.msg_added {
             self.msg_added = true;
+            self.msg_index = self.next_index;
+            self.next_index += 1;
             out.push(self.event_item_added_message());
         }
         self.msg_text.push_str(text);
@@ -545,6 +623,30 @@ impl StreamConv {
             })
             .to_string(),
             Some("response.output_text.delta"),
+        ));
+        out
+    }
+
+    /// 思维链增量（f9）→ reasoning item / reasoning_summary_text.delta。
+    fn feed_thinking(&mut self, text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.reasoning_added {
+            self.reasoning_added = true;
+            self.reasoning_index = self.next_index;
+            self.next_index += 1;
+            out.push(self.event_item_added_reasoning());
+        }
+        self.reasoning_text.push_str(text);
+        out.push(encode_typed_event_with_type(
+            &json!({
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": self.reasoning_item_id,
+                "output_index": self.reasoning_index,
+                "summary_index": 0,
+                "delta": text,
+            })
+            .to_string(),
+            Some("response.reasoning_summary_text.delta"),
         ));
         out
     }
@@ -569,12 +671,14 @@ impl StreamConv {
             match self.calls.iter().position(|c| c.call_id == call_id) {
                 Some(i) => i,
                 None => {
+                    let output_index = self.next_index;
+                    self.next_index += 1;
                     self.calls.push(FnItem {
                         call_id: call_id.clone(),
                         name,
                         args: String::new(),
                         item_id: format!("fc_{}", uuid::Uuid::new_v4().simple()),
-                        output_index: self.msg_index + 1 + self.calls.len() as u64,
+                        output_index,
                     });
                     let i = self.calls.len() - 1;
                     out.push(self.event_item_added_fn(i));
@@ -660,36 +764,74 @@ impl StreamConv {
             return Vec::new();
         }
         self.finished = true;
-        let mut out = Vec::new();
-        if self.msg_added {
-            out.push(encode_typed_event(
-                &json!({
-                    "type": "response.output_text.done",
-                    "item_id": self.msg_item_id,
-                    "output_index": self.msg_index,
-                    "text": self.msg_text,
-                })
-                .to_string(),
+        // 终止事件按 output_index 顺序补发（reasoning → message → function_call）
+        let mut done: Vec<(u64, String)> = Vec::new();
+        if self.reasoning_added {
+            done.push((
+                self.reasoning_index,
+                encode_typed_event(
+                    &json!({
+                        "type": "response.reasoning_summary_text.done",
+                        "item_id": self.reasoning_item_id,
+                        "output_index": self.reasoning_index,
+                        "summary_index": 0,
+                        "text": self.reasoning_text,
+                    })
+                    .to_string(),
+                ),
             ));
-            out.push(encode_typed_event(
-                &json!({
-                    "type": "response.output_item.done",
-                    "output_index": self.msg_index,
-                    "item": self.item_message("completed"),
-                })
-                .to_string(),
+            done.push((
+                self.reasoning_index,
+                encode_typed_event(
+                    &json!({
+                        "type": "response.output_item.done",
+                        "output_index": self.reasoning_index,
+                        "item": self.item_reasoning("completed"),
+                    })
+                    .to_string(),
+                ),
+            ));
+        }
+        if self.msg_added {
+            done.push((
+                self.msg_index,
+                encode_typed_event(
+                    &json!({
+                        "type": "response.output_text.done",
+                        "item_id": self.msg_item_id,
+                        "output_index": self.msg_index,
+                        "text": self.msg_text,
+                    })
+                    .to_string(),
+                ),
+            ));
+            done.push((
+                self.msg_index,
+                encode_typed_event(
+                    &json!({
+                        "type": "response.output_item.done",
+                        "output_index": self.msg_index,
+                        "item": self.item_message("completed"),
+                    })
+                    .to_string(),
+                ),
             ));
         }
         for i in 0..self.calls.len() {
-            out.push(encode_typed_event(
-                &json!({
-                    "type": "response.output_item.done",
-                    "output_index": self.calls[i].output_index,
-                    "item": self.item_fn(i, "completed"),
-                })
-                .to_string(),
+            done.push((
+                self.calls[i].output_index,
+                encode_typed_event(
+                    &json!({
+                        "type": "response.output_item.done",
+                        "output_index": self.calls[i].output_index,
+                        "item": self.item_fn(i, "completed"),
+                    })
+                    .to_string(),
+                ),
             ));
         }
+        done.sort_by_key(|(idx, _)| *idx);
+        let mut out: Vec<String> = done.into_iter().map(|(_, ev)| ev).collect();
         out.push(encode_typed_event(
             &json!({
                 "type": "response.completed",
@@ -729,6 +871,17 @@ impl StreamConv {
         )
     }
 
+    fn event_item_added_reasoning(&self) -> String {
+        encode_typed_event(
+            &json!({
+                "type": "response.output_item.added",
+                "output_index": self.reasoning_index,
+                "item": self.item_reasoning("in_progress"),
+            })
+            .to_string(),
+        )
+    }
+
     fn event_item_added_fn(&self, i: usize) -> String {
         encode_typed_event(
             &json!({
@@ -751,6 +904,16 @@ impl StreamConv {
             "status": status,
             "role": "assistant",
             "content": content,
+        })
+    }
+
+    /// reasoning item（思维链）：summary 单段 summary_text，与 IR→Responses 编码保持一致。
+    fn item_reasoning(&self, status: &str) -> Value {
+        json!({
+            "id": self.reasoning_item_id,
+            "type": "reasoning",
+            "status": status,
+            "summary": [{ "type": "summary_text", "text": self.reasoning_text }],
         })
     }
 
@@ -782,13 +945,19 @@ impl StreamConv {
     }
 
     fn build_final(&mut self, status: &str) -> Value {
-        let mut output = Vec::new();
+        // 按 output_index 排列（reasoning → message → function_call）
+        let mut items: Vec<(u64, Value)> = Vec::new();
+        if self.reasoning_added {
+            items.push((self.reasoning_index, self.item_reasoning("completed")));
+        }
         if self.msg_added {
-            output.push(self.item_message("completed"));
+            items.push((self.msg_index, self.item_message("completed")));
         }
         for i in 0..self.calls.len() {
-            output.push(self.item_fn(i, "completed"));
+            items.push((self.calls[i].output_index, self.item_fn(i, "completed")));
         }
+        items.sort_by_key(|(idx, _)| *idx);
+        let output: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
         json!({
             "id": self.resp_id_or_gen(),
             "object": "response",
@@ -836,6 +1005,7 @@ mod tests {
             "instructions": "You are helpful.",
             "input": [
                 {"role": "user", "content": "hi"},
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "先看用户意图"}]},
                 {"role": "assistant", "content": "calling"},
                 {"type": "function_call", "call_id": "call_1", "name": "exec", "arguments": "{\"c\":1}"},
                 {"type": "function_call_output", "call_id": "call_1", "output": "ok"}
@@ -860,11 +1030,12 @@ mod tests {
             Some("swe-1-6-slow")
         );
         assert_eq!(proto::get_all(&fields, 10).len(), 1);
-        // assistant 消息：f6 工具调用 + f11 文本
+        // assistant 消息：f3 正文 + f6 工具调用 + f11 思维链（reasoning 回传）
         let assistant = proto::get_all(&fields, 3)[1].as_bytes().unwrap().clone();
         let af = proto::decode(&assistant).unwrap();
         assert_eq!(proto::get(&af, 2).unwrap().as_uint(), Some(2));
-        assert_eq!(proto::get(&af, 11).unwrap().as_str(), Some("calling"));
+        assert_eq!(proto::get(&af, 3).unwrap().as_str(), Some("calling"));
+        assert_eq!(proto::get(&af, 11).unwrap().as_str(), Some("先看用户意图"));
         let tc = proto::get(&af, 6).unwrap().as_bytes().unwrap().clone();
         let tf = proto::decode(&tc).unwrap();
         assert_eq!(proto::get(&tf, 1).unwrap().as_str(), Some("call_1"));
@@ -876,66 +1047,137 @@ mod tests {
     }
 
     #[test]
-    fn stream_text_and_tool_to_responses_events() {
+    fn stream_thinking_and_answer_to_responses_events() {
         let mut conv = StreamConv::new("swe-1-6-slow");
-        // 帧：消息 id + 文本增量
+        // 帧：消息 id + 思维链增量（f9）
         let mut f1 = BytesMut::new();
         put_str(&mut f1, 1, "bot-abc");
-        put_str(&mut f1, 9, "Hello");
+        put_str(&mut f1, 9, "The user wants ");
         let ev1 = conv.feed(&f1).unwrap();
         assert!(ev1.iter().any(|e| e.contains("response.created")));
-        assert!(ev1.iter().any(|e| e.contains("response.output_text.delta")));
+        assert!(ev1
+            .iter()
+            .any(|e| e.contains("response.reasoning_summary_text.delta")));
+        assert!(!ev1.iter().any(|e| e.contains("response.output_text.delta")));
+        let mut f2 = BytesMut::new();
+        put_str(&mut f2, 9, "the answer.");
+        let ev2 = conv.feed(&f2).unwrap();
+        // 思维链只在首帧加 item（reasoning），output_index=0
+        assert!(!ev2.iter().any(|e| e.contains("response.output_item.added")));
+        let ev2_data = sse_data(&ev2[0]);
+        assert_eq!(ev2_data["output_index"], 0);
+        assert_eq!(ev2_data["summary_index"], 0);
+        assert_eq!(ev2_data["delta"], "the answer.");
+
+        // 帧：回答正文增量（f3，伴 f4 分段标记）→ message / output_text
+        let mut f3 = BytesMut::new();
+        put_str(&mut f3, 3, "Hello");
+        put_uint(&mut f3, 4, 2);
+        let ev3 = conv.feed(&f3).unwrap();
+        assert!(ev3.iter().any(|e| e.contains("response.output_item.added")));
+        assert!(ev3.iter().any(|e| e.contains("response.output_text.delta")));
+        // 正文 item 排在 reasoning 之后：output_index=1
+        let added = ev3
+            .iter()
+            .find(|e| e.contains("output_item.added"))
+            .map(|e| sse_data(e))
+            .unwrap();
+        assert_eq!(added["item"]["type"], "message");
+        assert_eq!(added["output_index"], 1);
+
         // 帧：工具调用（id+name 后参数增量）
         let mut sub = BytesMut::new();
         put_str(&mut sub, 1, "call_x");
         put_str(&mut sub, 2, "exec");
-        let mut f2 = BytesMut::new();
-        put_msg(&mut f2, 6, &sub);
-        let ev2 = conv.feed(&f2).unwrap();
-        assert!(ev2.iter().any(|e| e.contains("response.output_item.added")));
+        let mut f4 = BytesMut::new();
+        put_msg(&mut f4, 6, &sub);
+        let ev4 = conv.feed(&f4).unwrap();
+        assert!(ev4.iter().any(|e| e.contains("response.output_item.added")));
         let mut sub3 = BytesMut::new();
         put_str(&mut sub3, 3, "{\"a\"");
-        let mut f3 = BytesMut::new();
-        put_msg(&mut f3, 6, &sub3);
-        let ev3 = conv.feed(&f3).unwrap();
-        assert!(ev3
+        let mut f5 = BytesMut::new();
+        put_msg(&mut f5, 6, &sub3);
+        let ev5 = conv.feed(&f5).unwrap();
+        assert!(ev5
             .iter()
             .any(|e| e.contains("response.function_call_arguments.delta")));
+
         // 帧：stop + usage
         let mut u = BytesMut::new();
         put_uint(&mut u, 2, 100);
         put_uint(&mut u, 3, 20);
         put_uint(&mut u, 5, 50);
-        let mut f4 = BytesMut::new();
-        put_uint(&mut f4, 5, 10);
-        put_msg(&mut f4, 7, &u);
+        let mut f6 = BytesMut::new();
+        put_uint(&mut f6, 5, 10);
+        put_msg(&mut f6, 7, &u);
         // stop 帧不立即收尾（usage 终值可能在后续帧），流末才出终止事件
-        let ev4 = conv.feed(&f4).unwrap();
-        assert!(!ev4.iter().any(|e| e.contains("response.completed")));
-        let ev5 = conv.finish();
-        assert!(ev5.iter().any(|e| e.contains("response.completed")));
+        let ev6 = conv.feed(&f6).unwrap();
+        assert!(!ev6.iter().any(|e| e.contains("response.completed")));
+        let ev7 = conv.finish();
+        assert!(ev7.iter().any(|e| e.contains("response.completed")));
+        // 结束事件按 output_index 顺序：reasoning_summary_text.done → output_item.done(reasoning)
+        // → output_text.done → output_item.done(message) → output_item.done(function_call)
+        let seq: Vec<&str> = ev7
+            .iter()
+            .filter_map(|e| e.lines().next())
+            .map(|l| l.trim_start_matches("event: "))
+            .collect();
+        assert_eq!(seq[0], "response.reasoning_summary_text.done");
+        assert_eq!(seq[1], "response.output_item.done");
+        assert_eq!(seq[2], "response.output_text.done");
+        assert_eq!(seq.last().copied(), Some("response.completed"));
+        // 思维链完整文本进 reasoning item
+        let rdone = sse_data(&ev7[0]);
+        assert_eq!(rdone["text"], "The user wants the answer.");
+        let ritem = sse_data(&ev7[1]);
+        assert_eq!(ritem["item"]["type"], "reasoning");
+        assert_eq!(
+            ritem["item"]["summary"][0]["text"],
+            "The user wants the answer."
+        );
+
         // 终止事件里的 usage：input=150（未缓存100+缓存50）output=20
-        let done = ev5
+        let done = ev7
             .iter()
             .find(|e| e.contains("response.completed"))
             .unwrap();
         assert!(done.contains("\"input_tokens\":150"));
         assert!(done.contains("\"cached_tokens\":50"));
         assert!(done.contains("\"output_tokens\":20"));
-        // 工具参数聚合（事件为 SSE 编码：event 行 + data 行）
-        let data = done
+        // 终态 output 顺序：reasoning → message → function_call，正文只含回答（不含思维链）
+        let v = sse_data(done);
+        let output = v["response"]["output"].as_array().unwrap();
+        assert_eq!(output[0]["type"], "reasoning");
+        assert_eq!(output[1]["type"], "message");
+        assert_eq!(output[1]["content"][0]["text"], "Hello");
+        assert_eq!(output[2]["type"], "function_call");
+        assert_eq!(output[2]["name"], "exec");
+        assert_eq!(output[2]["arguments"], "{\"a\"");
+    }
+
+    #[test]
+    fn non_stream_aggregate_keeps_thinking_out_of_text() {
+        let mut conv = StreamConv::new("swe-1-6-slow");
+        let mut f1 = BytesMut::new();
+        put_str(&mut f1, 1, "bot-xyz");
+        put_str(&mut f1, 9, "思考中");
+        conv.feed(&f1).unwrap();
+        let mut f2 = BytesMut::new();
+        put_str(&mut f2, 3, "最终回答");
+        conv.feed(&f2).unwrap();
+        let json = conv.final_json();
+        assert_eq!(json["output"][0]["type"], "reasoning");
+        assert_eq!(json["output"][0]["summary"][0]["text"], "思考中");
+        assert_eq!(json["output"][1]["type"], "message");
+        assert_eq!(json["output"][1]["content"][0]["text"], "最终回答");
+    }
+
+    /// 从 SSE 事件串取出 data 行并解析为 JSON。
+    fn sse_data(event: &str) -> Value {
+        let line = event
             .lines()
             .find(|l| l.starts_with("data: "))
-            .and_then(|l| l.strip_prefix("data: "))
-            .unwrap();
-        let v: Value = serde_json::from_str(data).unwrap();
-        let fitem = v["response"]["output"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|i| i["type"] == "function_call")
-            .unwrap();
-        assert_eq!(fitem["name"], "exec");
-        assert_eq!(fitem["arguments"], "{\"a\"");
+            .expect("SSE 事件应含 data 行");
+        serde_json::from_str(line.trim_start_matches("data: ")).unwrap()
     }
 }
