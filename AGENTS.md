@@ -68,7 +68,9 @@ src/
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
 │   ├── devin/       # Devin Connect 渠道：proto wire 编解码 + Responses↔Devin 转换 +
-│   │                # CLI 形态请求（工具循环三形态消息）+ PKCE 兑换 + GetUserStatus 探测
+│   │                # CLI 形态请求（工具循环三形态消息：f3 正文 / f6 工具 / f11 思维链）
+│   │                # + 响应双流分流（f9 思维链→reasoning、f3 回答→output_text）
+│   │                # + PKCE 兑换 + GetUserStatus 探测
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
 ├── upstream/quota.rs # 上游额度快照（codex：x-codex-* 响应头解析，网关旁路抓头 + 节流落库；
 │                    # devin：GetUserStatus 额度块）→ upstreams.extra.quota

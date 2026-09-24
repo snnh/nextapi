@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Devin 渠道思维链与回答串流（严重）**：响应侧字段语义此前判反——真实 CLI 会话抓帧
+  证明 `f9` 是**思维链（CoT）**、`f3`（伴 `f4` 分段标记）才是**回答正文**（与官方 CLI
+  打印/落库的 assistant content 逐字一致）。此前把 CoT 当正文转发、真正的回答被丢弃，
+  表现为「思考过程和回答混在一起、甚至只有思考过程」。现 `f9` → Responses
+  `reasoning` item + `response.reasoning_summary_text.delta`，`f3` → message /
+  `response.output_text.delta`，output_index 按 reasoning → message → function_call
+  顺序分配；非流式聚合与终止事件同序。
+  请求侧同槽位一并纠正：assistant 正文写 `f3`、思维链写 `f11`（CLI 的 preserved_thinking），
+  此前正文误写 `f11` 会被上游当思维链、正文槽位为空；客户端回传的 `reasoning` item
+  （summary/content 文本）现回填到紧随其后的 assistant 消息。协议表见
+  `.owc/devin-ref/RESEARCH.md` §6/§7.1。
+
 ## [0.3.8] - 2026-09-24
 
 ### Fixed
