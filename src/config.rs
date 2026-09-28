@@ -134,6 +134,10 @@ pub struct GatewayCfg {
     /// M11.3 Key 级粘性路由：同 Key 同模型固定落到同优先级组内最近成功的上游
     /// （便于利用上游缓存）；pinned 上游不可用（禁用/熔断/缺能力）自动回落加权随机。
     pub sticky_routing: bool,
+    /// 渠道自动禁用（熔断）总开关：连续失败达 breaker_threshold → 自动禁用 + 冷却 + 半开探活。
+    /// false = 全局关闭（渠道永不自动禁用，失败只记日志并照常重试/故障转移）；
+    /// 单个渠道可用 extra.auto_disable=false 单独关闭；手动禁用不受影响。
+    pub auto_disable_upstreams: bool,
 }
 
 impl Default for GatewayCfg {
@@ -162,6 +166,7 @@ impl Default for GatewayCfg {
             quota_check_cache_secs: 3,
             quota_exceed_action: "block".into(),
             sticky_routing: false,
+            auto_disable_upstreams: true,
         }
     }
 }

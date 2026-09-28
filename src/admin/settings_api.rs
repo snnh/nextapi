@@ -44,7 +44,24 @@ async fn put_settings(
     Json(req): Json<PutSettingsReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let keys: Vec<String> = req.settings.keys().cloned().collect();
+    // 本次保存是否把「渠道自动禁用」总开关关掉（幂等：已是关也走一次清理，无行受影响即空转）
+    let auto_disable_off = req
+        .settings
+        .get("gateway.auto_disable_upstreams")
+        .and_then(|v| v.as_bool())
+        == Some(false);
     state.settings.put(req.settings).await?;
+    // 总开关关闭的联动：立即解除全部历史自动禁用（disabled_by='auto'），
+    // 让这些渠道马上回到候选池（明细行为不变：失败照常记日志与重试）
+    if auto_disable_off {
+        match state.clear_auto_disabled_upstreams().await {
+            Ok(n) if n > 0 => {
+                tracing::info!(count = n, "渠道自动禁用已关闭，解除历史自动禁用状态");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "解除历史自动禁用状态失败（不影响设置保存）"),
+        }
+    }
     // 审计只记键名（值可能含敏感项，不落审计）
     auth::audit(
         &state,

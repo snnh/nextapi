@@ -602,7 +602,8 @@ async fn update_upstream(
     };
 
     // enabled 切换：disabled_by / cooldown_until / consecutive_failures 联动
-    let (disabled_by, cooldown_until, consecutive_failures) = if body.enabled.is_some() {
+    let (mut disabled_by, mut cooldown_until, mut consecutive_failures) = if body.enabled.is_some()
+    {
         if enabled {
             (None, None, 0)
         } else {
@@ -619,6 +620,16 @@ async fn update_upstream(
             row.consecutive_failures,
         )
     };
+    // 渠道级「自动禁用」由开 → 关：立即解除该渠道的历史自动禁用状态
+    // （disabled_by='auto' → NULL + 清冷却/计数 + 清内存熔断状态），
+    // 让它马上回到候选池，而不是等首个成功请求才刷新状态与标签。
+    let auto_disable_just_off = crate::entities::auto_disable_allowed_in(&row.extra)
+        && !crate::entities::auto_disable_allowed_in(&extra);
+    if auto_disable_just_off && disabled_by.as_deref() == Some("auto") {
+        disabled_by = None;
+        cooldown_until = None;
+        consecutive_failures = 0;
+    }
 
     sqlx::query(
         "UPDATE upstreams SET name=$1, kind=$2, base_url=$3, api_key_enc=$4, protocols=$5, \
@@ -655,7 +666,7 @@ async fn update_upstream(
         .await
         .map_err(ApiError::internal)?;
     // 启停切换后清除内存熔断状态
-    if body.enabled.is_some() {
+    if body.enabled.is_some() || auto_disable_just_off {
         state.breaker.reset(id);
     }
     // 凭证变更（换 Key / 清 Key / 换 auth.json）→ 立即解除凭证失效隔离（token 失效四项之④）
@@ -681,6 +692,7 @@ async fn update_upstream(
         "upstream",
         Some(&id.to_string()),
         serde_json::json!({ "name": name, "enabled": enabled, "disabled_by": disabled_by,
+                            "auto_disable": crate::entities::auto_disable_allowed_in(&extra),
                             "api_key_changed": api_key_changed }),
         None,
     )

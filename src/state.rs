@@ -52,6 +52,36 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// 「自动禁用」（熔断）当前是否对某上游生效：全局总开关
+    /// `gateway.auto_disable_upstreams` 开启 **且** 渠道未显式关闭
+    /// （`extra.auto_disable=false`）。为 false 时该渠道失败不计连续失败、不冷却、
+    /// 不写 `disabled_by='auto'`（手动禁用仍优先）。
+    pub fn auto_disable_active(&self, up: &crate::entities::UpstreamRow) -> bool {
+        self.hot.load().gateway.auto_disable_upstreams && up.auto_disable_allowed()
+    }
+
+    /// 「渠道自动禁用」总开关由开转关时的联动清理：立即解除全部历史自动禁用
+    /// （`disabled_by='auto'` → NULL，清冷却与连续失败计数）并清内存熔断状态，
+    /// 这些渠道随即回到候选池；否则要等各自首个成功请求才刷新状态与标签。
+    /// 返回解除的渠道数。
+    pub async fn clear_auto_disabled_upstreams(&self) -> Result<u64, sqlx::Error> {
+        let ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "UPDATE upstreams SET disabled_by=NULL, cooldown_until=NULL, consecutive_failures=0, \
+             updated_at=now() WHERE disabled_by='auto' RETURNING id",
+        )
+        .fetch_all(&self.db)
+        .await?;
+        for id in &ids {
+            self.breaker.reset(*id);
+        }
+        if !ids.is_empty() {
+            if let Err(e) = self.cache.reload(&self.db, &self.crypto).await {
+                tracing::warn!(error = %e, "解除自动禁用后刷新实体快照失败");
+            }
+        }
+        Ok(ids.len() as u64)
+    }
+
     /// 记录上游凭证失效（token 失效四项之②③）：内存守卫立即生效（后续请求跳过该上游），
     /// 内容有变化时异步把详情写入 `upstreams.extra.auth_state`（同一次失效期内不重复写库）。
     pub fn mark_auth_failure(&self, id: uuid::Uuid, failure: crate::upstream::cred::AuthFailure) {

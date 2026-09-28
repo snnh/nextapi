@@ -1500,7 +1500,7 @@ async fn run_gateway(
                 cap_filtered.push(format!("{} 凭证失效（{}）", up.name, f.code));
                 continue;
             }
-            if up.enabled && state.breaker.allow(&up) {
+            if up.enabled && state.breaker.allow(&up, state.auto_disable_active(&up)) {
                 candidates.push(Candidate {
                     route,
                     upstream: up,
@@ -2070,7 +2070,10 @@ async fn run_gateway(
                     note_auth_failure(&state, upstream, &e);
                     let retryable = e.retryable(&route.retry_status_codes);
                     if retryable {
-                        state.breaker.on_failure(&state.db, upstream).await;
+                        state
+                            .breaker
+                            .on_failure(&state.db, upstream, state.auto_disable_active(upstream))
+                            .await;
                     }
                     // 客户端成因的 4xx（400/404/422 等）：同一 body 换候选必然同样失败
                     // 且每个候选都可能计费——不故障转移，直接返回当前错误（发布审阅 L12）。
@@ -2399,7 +2402,7 @@ async fn openai_responses_compact(
                 filtered.push(format!("{} 凭证失效（{}）", up.name, f.code));
                 continue;
             }
-            if up.enabled && state.breaker.allow(&up) {
+            if up.enabled && state.breaker.allow(&up, state.auto_disable_active(&up)) {
                 candidates.push(Candidate {
                     route,
                     upstream: up,
@@ -2648,7 +2651,10 @@ async fn openai_responses_compact(
                     note_auth_failure(&state, upstream, &e);
                     let retryable = e.retryable(&route.retry_status_codes);
                     if retryable {
-                        state.breaker.on_failure(&state.db, upstream).await;
+                        state
+                            .breaker
+                            .on_failure(&state.db, upstream, state.auto_disable_active(upstream))
+                            .await;
                     }
                     // compact 特判：404 = 端点不支持，属候选级问题 → 故障转移；
                     // 其余客户端成因 4xx 不转移（同 body 换候选必然同样失败）。
@@ -2936,7 +2942,10 @@ async fn images_generations(
             if state.cred_guard.blocking(&up.id).is_some() {
                 continue;
             }
-            if up.enabled && media::image_api_of(&up).is_some() && state.breaker.allow(&up) {
+            if up.enabled
+                && media::image_api_of(&up).is_some()
+                && state.breaker.allow(&up, state.auto_disable_active(&up))
+            {
                 candidates.push(Candidate {
                     route,
                     upstream: up,
@@ -3308,7 +3317,10 @@ async fn images_generations(
                     note_auth_failure(&state, upstream, &e);
                     let retryable = e.retryable(&route.retry_status_codes);
                     if retryable {
-                        state.breaker.on_failure(&state.db, upstream).await;
+                        state
+                            .breaker
+                            .on_failure(&state.db, upstream, state.auto_disable_active(upstream))
+                            .await;
                     }
                     let no_failover = e.client_causal();
                     last_upstream = Some(upstream.name.clone());

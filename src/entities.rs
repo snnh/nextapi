@@ -199,6 +199,20 @@ impl UpstreamRow {
             max_context: c["max_context"].as_u64(),
         }
     }
+
+    /// 渠道级「自动禁用」开关：`extra.auto_disable` 显式 false = 该渠道永不自动禁用
+    /// （熔断完全不参与该渠道；仍需全局 `gateway.auto_disable_upstreams` 一起生效）。
+    pub fn auto_disable_allowed(&self) -> bool {
+        auto_disable_allowed_in(&self.extra)
+    }
+}
+
+/// 上游 extra 中「自动禁用」开关的键名（渠道表单写入）。
+pub const AUTO_DISABLE_EXTRA_KEY: &str = "auto_disable";
+
+/// 从 extra 读「自动禁用」是否允许：仅显式布尔 false 视为关闭（缺省/true/非布尔 = 允许）。
+pub fn auto_disable_allowed_in(extra: &serde_json::Value) -> bool {
+    extra.get(AUTO_DISABLE_EXTRA_KEY).and_then(|v| v.as_bool()) != Some(false)
 }
 
 /// 上游能力矩阵（M10.3）。三态：None = 未配置（假设支持）；Some(false) = 明确不支持

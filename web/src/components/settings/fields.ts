@@ -226,6 +226,12 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     default: false,
     help: '同一 Key 同模型固定落到最近成功的上游（便于利用上游缓存）；pinned 上游不可用自动回落加权随机。默认 false',
   },
+  'gateway.auto_disable_upstreams': {
+    label: '渠道自动禁用',
+    type: 'boolean',
+    default: true,
+    help: '连续失败达阈值的上游自动禁用 + 冷却 + 半开探活（熔断）。关闭后所有渠道都不会被自动禁用，失败只记日志并照常重试/故障转移；单个渠道可在渠道表单里单独关闭。手动禁用不受影响。默认 true',
+  },
   'gateway.quota_exceed_action': {
     label: '超配额动作',
     type: 'string',
@@ -503,8 +509,8 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
   {
     id: 'scn-routing',
     title: '路由策略',
-    desc: '上游选择与粘性',
-    keys: ['gateway.sticky_routing'],
+    desc: '上游选择、粘性与自动禁用',
+    keys: ['gateway.sticky_routing', 'gateway.auto_disable_upstreams'],
   },
   {
     id: 'scn-pricing',

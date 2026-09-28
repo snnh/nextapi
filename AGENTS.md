@@ -64,7 +64,8 @@ src/
 ├── metrics.rs       # Prometheus /metrics（prometheus-client；requests/errors/latency/tokens + 日志队列深度/溢出）
 ├── entities.rs      # 业务实体行结构（api_keys/upstreams/model_routes/proxy_configs/usage_logs/usage_hourly）
 ├── cache.rs         # 实体内存快照（RwLock<Arc<Snapshot>>，写路径失效刷新）
-├── routing/mod.rs   # 模型通配匹配、优先级分组 + 加权随机、熔断状态机（含半开探活/指数退避）
+├── routing/mod.rs   # 模型通配匹配、优先级分组 + 加权随机、熔断状态机（含半开探活/指数退避；
+│                    # 自动禁用可整体关闭：全局 gateway.auto_disable_upstreams + 渠道 extra.auto_disable）
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
 │   ├── devin/       # Devin Connect 渠道：proto wire 编解码 + Responses↔Devin 转换 +
@@ -157,7 +158,7 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - **日志存储**：`usage_logs` 按 `ts` 声明式分区（每 30 天一个分区），**不自动清理**，管理员手动整分区 DROP（支持 dry_run）；`usage_hourly` 滚动聚合与明细并存；配额用独立 `quota_usage` 计数器（与日志清理解耦，request_id 幂等）。
 - **计价**：`cost = matched_price × quantity`；价格规则按「上游 + 模型名」绑定，**模型名取上游实际模型名**（`upstream_model`：路由 `override_model` 改写后的名字；未改写 = 入口名）——按别名/入口名查价属回归（v0.3.3 修复）；未设价格即不计价（记 NULL）；分段有序第一命中（时间 ∧ 上下文长度条件），无命中回落 `base_price`；CNY/USD 双币种快照 + `price_used`/`fx_snapshot` 入账；展示统一舍入 6 位小数；视频秒数向上取整至少 1 秒。
 - **模型名三段语义**：`requested_model`（客户端原始名，仅别名命中时记录）→ `model`（网关侧入口名，别名解析后）→ `upstream_model`（`override_model` 改写后真正发往上游的名字，仅与入口名不同时记录）；白名单/路由按 `model`，计价按 `upstream_model ?? model`，日志页展示「入口名 → 上游名」。
-- **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。
+- **路由容灾**：重试参数只在 `model_routes` 维护；熔断连续失败自动禁用 + 冷却 + 半开探活；手动禁用不被自动恢复；SSE 首字节后不可换上游。**自动禁用可关闭**：全局热配置 `gateway.auto_disable_upstreams`（默认 true）+ 渠道级 `extra.auto_disable=false`，两者都开才生效——关闭后该渠道失败不计连续失败、不冷却、不写 `disabled_by='auto'`（仍在候选池，失败照常记日志与故障转移；手动禁用仍优先）；关掉全局总开关会立即解除全部历史自动禁用状态。
 - **Codex 渠道**：`kind='codex'` 走 OAuth（auth.json）→ Responses；出站默认按官方客户端做**指纹模拟**（UA/originator/session-id/thread-id/x-client-request-id/x-codex-window-id/x-codex-turn-metadata + body 补齐 client_metadata/include/prompt_cache_key/reasoning/parallel_tool_calls/tool_choice；用户 overrides 与入站既有值优先）；传输默认 `auto`（先 Responses WebSocket，握手/首事件失败回落 HTTP SSE，代理下自动只用 HTTP），可用上游 `extra.codex_transport`（auto/ws/http）与 `extra.codex_fingerprint`（false 关闭或对象覆盖）调整。服务端 compact（`/v1/responses/compact`，兼收单数拼写）为**直接转发**通道：不进 IR，候选限 codex/支持 responses 的上游，codex 仅 HTTP、body 只补 client_metadata，上游 404 故障转移、其余 4xx 原样回错（客户端自行回落本地压缩），日志 `protocol_in=openai_responses_compact`。
 - **usage 口径**：四协议原始字段的缓存语义不同——Chat `prompt_tokens`、Responses/Codex `input_tokens`、Gemini `promptTokenCount` 含缓存命中，Anthropic `input_tokens` 不含 `cache_read`；入库统一归为「未缓存输入」（`usage_logs.prompt_tokens`），历史数据不回填；字段缺失 / cached 大于 prompt / 负值等脏数据一律钳制或忽略，不得 panic。
 - **请求与响应保真**：流式 `id` 一律保真（透传、转换、非流式聚合均不改写）；`max_tokens` 不主动注入（Anthropic 必填，缺省 65536 并记录降级；两字段并存取 `max_completion_tokens`）；Responses 输入中 assistant 只接受 `output_text`/`refusal`，user 用 `input_text`。

@@ -68,6 +68,10 @@ gateway:
   quota_exceed_action: "block"      # block=429 硬阻断 | warn=仅日志告警
   sticky_routing: false             # Key 粘性路由：同 Key 同模型固定落到最近成功上游
                                     #（便于利用上游缓存；pinned 不可用自动回落加权随机）
+  auto_disable_upstreams: true      # 渠道自动禁用（熔断）：连续失败达 breaker_threshold
+                                    # → 自动禁用 + 冷却 + 半开探活（关闭后渠道永不自动禁用，
+                                    # 失败只记日志并照常重试/故障转移）。单个渠道可用
+                                    # extra.auto_disable=false 单独关闭；手动禁用不受影响
 
 # -----------------------------------------------------------------------------
 # seed 类：管理员账号（仅首次初始化写入 DB）

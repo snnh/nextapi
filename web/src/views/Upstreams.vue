@@ -150,6 +150,15 @@
         <el-table-column v-if="!isNarrow" label="状态" min-width="240">
           <template #default="{ row }">
             <el-tag :type="statusMeta(row).type" size="small">{{ statusMeta(row).text }}</el-tag>
+            <el-tooltip
+              v-if="row.extra?.auto_disable === false"
+              content="该渠道已关闭自动禁用：连续失败不会被熔断/禁用，失败只记日志并故障转移"
+              placement="top"
+            >
+              <el-tag type="info" size="small" effect="plain" style="margin-left: 6px">
+                不自动禁用
+              </el-tag>
+            </el-tooltip>
             <!-- 凭证失效（token 失效四项之③）：悬停看时间/错误码/上游原文 -->
             <el-tooltip v-if="row.auth_state" :content="authTooltip(row)" placement="top">
               <el-tag type="danger" size="small" effect="dark" style="margin-left: 6px">
@@ -236,6 +245,8 @@
       完整 Key 默认不可再次查看；如需查看，点行内「查看 Key」并输入管理员密码二次验证（已启用 TOTP 时还需动态码），
       验证通过后明文仅弹窗内本次展示。
       默认值：timeout_ms = 300000、breaker_threshold = 5；图片媒体地址留空时回退 base_url。启用/禁用直接切换行内开关（禁用后 disabled_by = manual）。
+      自动禁用（熔断）：连续失败达阈值即自动禁用并冷却，成功后自动恢复；在渠道表单关闭「自动禁用」可让该渠道永不自动禁用
+      （标记「不自动禁用」；需系统设置 gateway.auto_disable_upstreams 为开启，全局关闭时所有渠道都不再自动禁用）。
       凭证失效（如 Devin session token 过期）由网关自动识别：命中后临时跳过该上游 5 分钟并标注「凭证失效」，
       点「重新授权」用 Devin 账号换取新 token 即可恢复（无需手动冷却）。
     </div>

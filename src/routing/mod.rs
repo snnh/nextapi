@@ -1,7 +1,9 @@
 //! 路由决策：模型通配匹配、优先级/加权轮询、熔断与自动禁用（PLAN.md §5.3）。
 //!
 //! 重试参数只在 model_routes 目标级维护；熔断连续失败自动禁用 + 冷却 + 半开探活；
-//! 手动禁用（disabled_by='manual'）优先于一切自动逻辑。
+//! 手动禁用（disabled_by='manual'）优先于一切自动逻辑。**自动禁用可整体关闭**：
+//! 全局热配置 `gateway.auto_disable_upstreams` + 渠道级 `extra.auto_disable=false`
+//! （两者都开启才生效），关闭后熔断不计数、不冷却、不写 disabled_by='auto'。
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -223,7 +225,8 @@ enum DbUpdate {
 }
 
 /// 熔断器：内存状态机；自动禁用时回写 DB（disabled_by='auto' + cooldown_until）。
-/// 手动禁用（DB 行 disabled_by='manual'）优先于一切自动逻辑。
+/// 手动禁用（DB 行 disabled_by='manual'）优先于一切自动逻辑；
+/// 「自动禁用」被关闭（全局 / 渠道级）时本状态机对该上游整体旁路。
 #[derive(Default)]
 pub struct Breaker {
     states: Mutex<HashMap<Uuid, BreakerState>>,
@@ -238,11 +241,21 @@ impl Breaker {
 
     /// 是否放行该上游的请求。手动禁用/自动冷却中的上游返回 false；
     /// 冷却到期自动进入半开，放行一个探测请求。
-    pub fn allow(&self, up: &UpstreamRow) -> bool {
+    ///
+    /// `auto_disable` 为「自动禁用」是否对该上游生效（全局总开关 + 渠道 extra，
+    /// 由 [`crate::state::AppState::auto_disable_active`] 计算）。为 false 时熔断完全旁路：
+    /// 忽略 DB 冷却与内存状态直接放行（手动禁用仍然拦截）。
+    pub fn allow(&self, up: &UpstreamRow, auto_disable: bool) -> bool {
         if !up.enabled || up.disabled_by.as_deref() == Some("manual") {
             return false;
         }
         let id = up.id;
+        // 自动禁用被关闭：连残留状态一并清掉，避免开关重新打开后旧冷却继续拦流量
+        // （渠道被自动禁用期间关闭开关 → 下一个请求立即回到候选池）。
+        if !auto_disable {
+            self.reset(id);
+            return true;
+        }
         let now = Utc::now();
         // 重启恢复（review P4）：熔断自动禁用会回写 DB（disabled_by='auto' + cooldown_until），
         // 而内存状态机重启即空。冷启动后若 DB 行仍处于冷却期，把状态导入 Open 并拒绝放行，
@@ -344,8 +357,11 @@ impl Breaker {
     /// 记录失败：连续失败 ≥ breaker_threshold → 自动禁用 + 冷却（默认 60s）
     /// 并回写 DB（disabled_by='auto', cooldown_until, consecutive_failures）；
     /// 半开探测失败 → 重新冷却，连续打开次数 +1，冷却时长指数退避（×2，上限 30min）。
-    pub async fn on_failure(&self, pool: &sqlx::PgPool, up: &UpstreamRow) {
-        if up.disabled_by.as_deref() == Some("manual") {
+    ///
+    /// `auto_disable` 为 false（全局关闭 / 渠道 extra.auto_disable=false）时完全不计：
+    /// 内存不累计连续失败、不冷却、不写 DB（失败仍由调用方照常记日志与故障转移）。
+    pub async fn on_failure(&self, pool: &sqlx::PgPool, up: &UpstreamRow, auto_disable: bool) {
+        if up.disabled_by.as_deref() == Some("manual") || !auto_disable {
             return;
         }
         let id = up.id;
@@ -719,19 +735,19 @@ mod tests {
         let id = up.id;
 
         // 初始（无记录）→ 初始化 Closed 并放行
-        assert!(br.allow(&up));
+        assert!(br.allow(&up, true));
 
         // 一次失败（threshold=2，未达阈值）→ 仍在 Closed，放行
-        br.on_failure(&pool, &up).await;
-        assert!(br.allow(&up));
+        br.on_failure(&pool, &up, true).await;
+        assert!(br.allow(&up, true));
         assert!(matches!(
             br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::Closed { failures: 1 }
         ));
 
         // 第二次失败达到阈值 → Open，拒绝
-        br.on_failure(&pool, &up).await;
-        assert!(!br.allow(&up));
+        br.on_failure(&pool, &up, true).await;
+        assert!(!br.allow(&up, true));
         assert!(matches!(
             br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::Open { .. }
@@ -745,9 +761,9 @@ mod tests {
                 consecutive_opens: 1,
             },
         );
-        assert!(br.allow(&up));
+        assert!(br.allow(&up, true));
         // 探测在飞，再次 allow 应被拒绝
-        assert!(!br.allow(&up));
+        assert!(!br.allow(&up, true));
         assert!(matches!(
             br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::HalfOpen { .. }
@@ -759,7 +775,7 @@ mod tests {
             br.states.lock().unwrap().get(&id).unwrap(),
             BreakerState::Closed { failures: 0 }
         ));
-        assert!(br.allow(&up));
+        assert!(br.allow(&up, true));
     }
 
     #[tokio::test]
@@ -777,7 +793,7 @@ mod tests {
             },
         );
         let before = Utc::now();
-        br.on_failure(&pool, &up).await;
+        br.on_failure(&pool, &up, true).await;
         let after = Utc::now();
         let guard = br.states.lock().unwrap();
         match guard.get(&id).unwrap() {
@@ -811,14 +827,14 @@ mod tests {
             },
         );
         br.halfopen_since.lock().unwrap().insert(id, Utc::now());
-        assert!(!br.allow(&up));
+        assert!(!br.allow(&up, true));
 
         // 持续超 120s 未收敛 → 重置计时并再放行一个
         br.halfopen_since
             .lock()
             .unwrap()
             .insert(id, Utc::now() - Duration::seconds(121));
-        assert!(br.allow(&up));
+        assert!(br.allow(&up, true));
     }
 
     #[tokio::test]
@@ -829,14 +845,14 @@ mod tests {
         up.disabled_by = Some("manual".into());
 
         // manual 禁用：allow 恒为 false
-        assert!(!br.allow(&up));
+        assert!(!br.allow(&up, true));
 
         // on_failure 遇到 manual 直接返回，不改变内存状态
         br.states
             .lock()
             .unwrap()
             .insert(up.id, BreakerState::Closed { failures: 0 });
-        br.on_failure(&pool, &up).await;
+        br.on_failure(&pool, &up, true).await;
         assert!(matches!(
             br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Closed { failures: 0 }
@@ -862,6 +878,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn breaker_auto_disable_off_bypasses_state_and_db() {
+        let pool = lazy_pool();
+        let br = Breaker::new();
+        let mut up = upstream(2, Some("auto"));
+        up.consecutive_failures = 4;
+        up.cooldown_until = Some(Utc::now() + Duration::seconds(120));
+
+        // 关闭自动禁用：DB 冷却与内存状态一律旁路 → 放行，且残留状态被清掉
+        assert!(br.allow(&up, false));
+        assert!(br.states.lock().unwrap().get(&up.id).is_none());
+
+        // 已 Open（内存冷却中）同样旁路
+        br.states.lock().unwrap().insert(
+            up.id,
+            BreakerState::Open {
+                until: Utc::now() + Duration::seconds(600),
+                consecutive_opens: 5,
+            },
+        );
+        assert!(br.allow(&up, false));
+        assert!(br.states.lock().unwrap().get(&up.id).is_none());
+
+        // on_failure 关闭时不计：内存不累计、不进入 Open（DB 回写同样跳过）
+        br.on_failure(&pool, &up, false).await;
+        assert!(br.states.lock().unwrap().get(&up.id).is_none());
+
+        // 手动禁用仍然优先（关闭自动禁用不等于解除手动禁用）
+        up.disabled_by = Some("manual".into());
+        assert!(!br.allow(&up, false));
+
+        // 开关重新打开：从干净状态开始正常熔断
+        up.disabled_by = None;
+        up.cooldown_until = None;
+        up.consecutive_failures = 0;
+        assert!(br.allow(&up, true));
+        br.on_failure(&pool, &up, true).await;
+        br.on_failure(&pool, &up, true).await;
+        assert!(!br.allow(&up, true));
+    }
+
+    #[test]
+    fn breaker_effective_from_global_and_channel_flags() {
+        // 生效条件 = 全局开启 && 渠道未显式关闭
+        let cases = [
+            (true, None, true),
+            (true, Some(true), true),
+            (true, Some(false), false),
+            (false, None, false),
+            (false, Some(true), false),
+            (false, Some(false), false),
+        ];
+        for (global, channel, want) in cases {
+            let mut up = upstream(5, None);
+            if let Some(v) = channel {
+                up.extra = serde_json::json!({ crate::entities::AUTO_DISABLE_EXTRA_KEY: v });
+            }
+            assert_eq!(
+                global && up.auto_disable_allowed(),
+                want,
+                "global={global} channel={channel:?}"
+            );
+        }
+        // 非布尔值（字符串/数字/null）不视为关闭
+        for extra in [
+            serde_json::json!({ crate::entities::AUTO_DISABLE_EXTRA_KEY: "false" }),
+            serde_json::json!({ crate::entities::AUTO_DISABLE_EXTRA_KEY: 0 }),
+            serde_json::json!({ crate::entities::AUTO_DISABLE_EXTRA_KEY: null }),
+            serde_json::json!({}),
+        ] {
+            assert!(crate::entities::auto_disable_allowed_in(&extra), "{extra}");
+        }
+    }
+
+    #[tokio::test]
     async fn breaker_db_cooldown_blocks_after_restart() {
         // review P4：进程重启后内存状态为空，但 DB 行 disabled_by='auto' 且冷却未到期 →
         // allow() 应拒绝放行并导入 Open 状态（冷却期内的流量不得直击故障上游）。
@@ -870,7 +960,7 @@ mod tests {
         let mut up = upstream(2, Some("auto"));
         up.consecutive_failures = 4;
         up.cooldown_until = Some(Utc::now() + Duration::seconds(120));
-        assert!(!br.allow(&up));
+        assert!(!br.allow(&up, true));
         assert!(matches!(
             br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Open {
@@ -881,7 +971,7 @@ mod tests {
         // 冷却已过期（如重放刚过期的半开窗口）：放行探测，且不导入 Open
         br.reset(up.id);
         up.cooldown_until = Some(Utc::now() - Duration::seconds(1));
-        assert!(br.allow(&up));
+        assert!(br.allow(&up, true));
         assert!(matches!(
             br.states.lock().unwrap().get(&up.id).unwrap(),
             BreakerState::Closed { failures: 0 }
@@ -894,7 +984,7 @@ mod tests {
                 consecutive_opens: 1,
             },
         );
-        assert!(!br.allow(&up));
+        assert!(!br.allow(&up, true));
     }
 }
 

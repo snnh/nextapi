@@ -463,7 +463,25 @@
         </el-col>
         <el-col :xs="24" :sm="12">
           <el-form-item label="熔断阈值" prop="breaker_threshold">
-            <el-input-number v-model="form.breaker_threshold" :min="0" :step="1" style="width: 200px" />
+            <el-input-number
+              v-model="form.breaker_threshold"
+              :min="0"
+              :step="1"
+              :disabled="!form.autoDisable"
+              style="width: 200px"
+            />
+          </el-form-item>
+        </el-col>
+        <el-col :xs="24" :sm="12">
+          <el-form-item label="自动禁用" prop="autoDisable">
+            <div class="switch-line">
+              <el-switch v-model="form.autoDisable" />
+              <span class="hint">
+                {{ form.autoDisable
+                  ? '连续失败达阈值自动禁用（熔断 + 冷却 + 半开探活；需系统设置总开关开启）'
+                  : '已关闭：该渠道不会因失败被自动禁用，失败仅记日志并故障转移' }}
+              </span>
+            </div>
           </el-form-item>
         </el-col>
         <el-col :xs="24" :sm="12">
@@ -648,6 +666,8 @@ interface FormState {
   protocolPriority: ProtocolName[]
   timeout_ms: number
   breaker_threshold: number
+  /** 渠道自动禁用（extra.auto_disable；关闭=该渠道永不自动禁用） */
+  autoDisable: boolean
   probe_model: string
   enabled: boolean
   use_proxy: boolean
@@ -693,6 +713,7 @@ function defaultForm(): FormState {
     protocolPriority: [...DEFAULT_PRIORITY],
     timeout_ms: 300000,
     breaker_threshold: 5,
+    autoDisable: true,
     probe_model: '',
     enabled: true,
     use_proxy: false,
@@ -1237,6 +1258,7 @@ function open(upstream?: UpstreamOut) {
     base.protocolPriority = computePriority(upstream.protocols, upstream.extra?.protocol_priority)
     base.timeout_ms = upstream.timeout_ms
     base.breaker_threshold = upstream.breaker_threshold
+    base.autoDisable = upstream.extra?.auto_disable !== false
     base.probe_model = upstream.probe_model ?? ''
     base.enabled = upstream.enabled
     base.use_proxy = upstream.use_proxy
@@ -1320,6 +1342,9 @@ function buildExtra(): UpstreamExtra {
   } else {
     delete extra.capabilities
   }
+  // 渠道自动禁用：开启=默认（不落 extra）；关闭写 false（该渠道永不自动禁用）
+  if (form.autoDisable) delete extra.auto_disable
+  else extra.auto_disable = false
   // Codex 传输方式：auto 为预设，不落 extra
   if (form.codexTransport && form.codexTransport !== 'auto') {
     extra.codex_transport = form.codexTransport
@@ -1603,6 +1628,12 @@ defineExpose({ open })
 .models-actions {
   margin-top: 10px;
   display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.switch-line {
+  display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
