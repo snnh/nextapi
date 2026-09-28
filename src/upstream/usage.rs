@@ -33,6 +33,20 @@ fn uncached_prompt(prompt: Option<i64>, cached: Option<i64>) -> Option<i64> {
     prompt.map(|p| p.saturating_sub(cached.unwrap_or(0).max(0)).max(0))
 }
 
+/// 全量 token 口径（统计报表优化）：prompt（未缓存输入）+ completion + cache_read + cache_write。
+///
+/// 与 `usage_logs`/`usage_hourly` 落库列、`quota_usage` tokens 配额、`/api/stats/*` 的
+/// `total_tokens` 完全一致；Prometheus `nextapi_gateway_tokens` 亦用此函数，避免指标与报表背离。
+/// 负数脏数据按 0 计（max(0)），saturating_add 防溢出。纯函数，可测。
+pub fn total_tokens(u: &Usage) -> i64 {
+    u.prompt_tokens
+        .unwrap_or(0)
+        .max(0)
+        .saturating_add(u.completion_tokens.unwrap_or(0).max(0))
+        .saturating_add(u.cache_read_tokens.unwrap_or(0).max(0))
+        .saturating_add(u.cache_write_tokens.unwrap_or(0).max(0))
+}
+
 /// 非流式：按协议路径取 usage 对象。
 pub fn extract_json_usage(p: Protocol, v: &serde_json::Value) -> Usage {
     let mut u = Usage::default();
@@ -491,5 +505,35 @@ mod tests {
     fn request_params_meta_empty() {
         let meta = request_params_meta(Protocol::OpenaiChat, &json!({}));
         assert_eq!(meta, json!({}));
+    }
+
+    #[test]
+    fn total_tokens_includes_cache_both_sides() {
+        // 全量口径：prompt（未缓存）+ completion + cache_read + cache_write
+        let u = Usage {
+            prompt_tokens: Some(6),
+            completion_tokens: Some(5),
+            cache_read_tokens: Some(4),
+            cache_write_tokens: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(total_tokens(&u), 17);
+        // 缓存缺失（None）按 0 计，不 panic
+        let plain = Usage {
+            prompt_tokens: Some(10),
+            completion_tokens: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(total_tokens(&plain), 13);
+        // 全 None → 0（调用方 total > 0 才打点）
+        assert_eq!(total_tokens(&Usage::default()), 0);
+        // 负数脏数据钳 0，不产生负总量
+        let dirty = Usage {
+            prompt_tokens: Some(-5),
+            completion_tokens: Some(7),
+            cache_read_tokens: Some(-3),
+            ..Default::default()
+        };
+        assert_eq!(total_tokens(&dirty), 7);
     }
 }

@@ -45,11 +45,13 @@ const props = defineProps<{
   currency: StatsCurrency
 }>()
 
-// 指标释义（与 Dashboard.vue 同口径）
+// 指标释义（与 Dashboard.vue 同口径；Token 全量口径见 0017 迁移与 src/stats.rs）
 const LABEL_TIPS = {
   requests: '统计区间内的网关请求总数',
   success: '成功率 = 状态码 < 400 的请求占比',
-  tokens: '总 Token 数 = 输入（提示）+ 输出（生成）token 合计',
+  tokens: '总 Token 数 = 输入（未缓存）+ 输出 + 缓存命中（读）+ 缓存写入，与配额口径一致',
+  cacheRead: '缓存命中（读）Token：各协议已归一（OpenAI/Gemini 上游含缓存的输入已拆分）',
+  cacheHitRate: '缓存命中率 = 缓存命中 ÷（输入未缓存 + 缓存命中 + 缓存写入），仅统计输入侧',
   cost: '按所选币种折算的合计成本；未计价（无定价规则）条数不计入',
 } as const
 
@@ -60,12 +62,42 @@ interface CardItem {
   tip: string
 }
 
+/** Token 构成子标题（无数据时省略，避免全 0 噪声） */
+function tokenSub(s: StatsSummary | null): string {
+  if (!s) return ''
+  const parts = [
+    `输入 ${fmtInt(s.prompt_tokens)}`,
+    `输出 ${fmtInt(s.completion_tokens)}`,
+  ]
+  if (s.cache_read_tokens > 0) parts.push(`缓存读 ${fmtInt(s.cache_read_tokens)}`)
+  if (s.cache_write_tokens > 0) parts.push(`缓存写 ${fmtInt(s.cache_write_tokens)}`)
+  return parts.join(' · ')
+}
+
 const cards = computed<CardItem[]>(() => {
   const s = props.summary
   return [
     { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: LABEL_TIPS.requests },
     { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: LABEL_TIPS.success },
-    { label: '总 Tokens', value: fmtInt(s?.total_tokens), sub: '', tip: LABEL_TIPS.tokens },
+    {
+      label: '总 Tokens（含缓存）',
+      value: fmtInt(s?.total_tokens),
+      sub: tokenSub(s),
+      tip: LABEL_TIPS.tokens,
+    },
+    {
+      label: '缓存命中 Tokens',
+      value: fmtInt(s?.cache_read_tokens),
+      sub: '',
+      tip: LABEL_TIPS.cacheRead,
+    },
+    {
+      label: '缓存命中率',
+      // 分母为 0（无输入 token）→ 后端 null → 展示 '-'，不误报 0%
+      value: s?.cache_hit_rate != null ? fmtPct(s.cache_hit_rate) : '-',
+      sub: '',
+      tip: LABEL_TIPS.cacheHitRate,
+    },
     {
       label: `成本（${props.currency}）`,
       value: fmtMoney(s?.cost_display),

@@ -101,8 +101,9 @@ src/
 │                    # + 打点（tee 收集/失败记账）
 ├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
 ├── text.rs          # 文本截断工具（字节/字符上限 + UTF-8 边界安全，单一实现）
-├── stats.rs         # 统计聚合查询（summary/series；长区间优先 usage_hourly，dimension 非 model 回退明细；
-│                    # cost_display 展示币种合计 + cost_na_count 缺失计数）
+├── stats.rs         # 统计聚合查询（summary/series/model_rank；长区间优先 usage_hourly，dimension 非 model 回退明细；
+│                    # cost_display 展示币种合计 + cost_na_count 缺失计数；Token 全量口径
+│                    # total = prompt+completion+cache_read+cache_write，命中率 = cache_read/输入侧合计）
 ├── billing/         # 计价引擎（只统计不扣费）：mod（规则匹配/分段命中/成本计算/price_batch 回填；
 │                    # 计价模型名 = 上游实际模型名 upstream_model ?? 入口 model）、
 │                    # fx（manual 优先 + auto stale + 逆汇率 + frankfurter/ecb/custom 拉取）、
@@ -131,15 +132,15 @@ src/
     ├── settings_api.rs # /api/settings + /api/config(+reload)
     ├── logs.rs      # /api/logs 查询（默认当天）/ {request_id} 详情 / cleanup 手动整分区 DROP /
     │                # export.csv（列表/详情/CSV 展示「入口名 → 上游名」）
-    ├── stats_api.rs # /api/stats/summary + /api/stats/series
+    ├── stats_api.rs # /api/stats/summary + /api/stats/series + /api/stats/model-rank（模型 Top-N 排行）
     ├── pricing.rs   # /api/pricing CRUD + preview + suggest + unpriced + export/import（XML/JSON）
     ├── fx.rs        # /api/fx 查询/手动 upsert/refresh（代理矩阵）
     ├── presets.rs   # /api/presets 列表 + /{name}/provision 一键接入
     ├── system.rs    # /api/system/version + check-update（GitHub Releases，代理矩阵）+ 定时检查任务
     └── audit.rs     # /api/audit 分页查询
-migrations/          # 0001_init ~ 0016_usage_upstream_model（sqlx::migrate! 启动自动执行；
+migrations/          # 0001_init ~ 0017_usage_hourly_cache（sqlx::migrate! 启动自动执行；
                      # 含分区/计价/媒体/加固/别名/幂等/TOTP/模型同步/Codex OAuth/
-                     # 日志索引与游标/请求头/上游模型名 upstream_model）
+                     # 日志索引与游标/请求头/上游模型名 upstream_model/汇总表缓存列与回填）
 tests/               # 集成测试目录（当前不存在：测试全部为 src/** 内联 #[cfg(test)]，
                      # 无外部依赖；建立集成测试需 PG + mock 上游）
 web/                 # Vue3 管理后台：src/views 9 页面（含模型别名）+ components/{pricing,settings,upstreams,stats}/

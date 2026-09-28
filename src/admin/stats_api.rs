@@ -32,12 +32,17 @@ struct StatsQuery {
     granularity: Option<String>,
     dimension: Option<String>,
     currency: Option<String>,
+    /// 仅 /model-rank 使用：排序字段（total_tokens|requests|cost|cache_read|errors）。
+    order_by: Option<String>,
+    /// 仅 /model-rank 使用：Top-N 条数（clamp 1..=100）。
+    limit: Option<i64>,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/summary", get(summary))
         .route("/series", get(series))
+        .route("/model-rank", get(model_rank))
 }
 
 /// 统计查询超时（M11.2 资源治理）：30s 未返回 → 503，防慢聚合拖垮连接池。
@@ -109,6 +114,49 @@ async fn series(
     let mut v = serde_json::json!({ "currency": currency, "points": points });
     round_cost_value(&mut v, precision);
     Ok(Json(v))
+}
+
+/// GET /api/stats/model-rank：区间内按模型聚合的 Top-N（P5-a 高级统计）。
+/// 恒用明细源（需全维度过滤 + 延迟均值）；排序字段白名单校验，limit clamp 1..=100。
+async fn model_rank(
+    State(state): State<Arc<AppState>>,
+    _admin: AdminUsername,
+    Query(q): Query<StatsQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let tz = state.hot.load().gateway.billing_timezone.clone();
+    let f = build_stats_filter(&q, &tz)?;
+    let currency = resolve_currency(&q, &state)?;
+    let order_by = validate_order_by(q.order_by.as_deref())?;
+    let limit = q.limit.unwrap_or(10);
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '31s'")
+        .execute(&mut *tx)
+        .await?;
+    let rows = with_timeout(stats::model_rank(&mut tx, &f, &currency, order_by, limit)).await?;
+    let _ = tx.rollback().await;
+    let precision = state.hot.load().gateway.display_precision;
+    let mut v = serde_json::json!({
+        "currency": currency,
+        "order_by": order_by,
+        "rows": rows,
+    });
+    round_cost_value(&mut v, precision);
+    Ok(Json(v))
+}
+
+/// order_by 白名单校验（缺省 total_tokens）；非法值 400。
+fn validate_order_by(o: Option<&str>) -> ApiResult<&'static str> {
+    match o.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok("total_tokens"),
+        Some("total_tokens") => Ok("total_tokens"),
+        Some("requests") => Ok("requests"),
+        Some("cost") => Ok("cost"),
+        Some("cache_read") => Ok("cache_read"),
+        Some("errors") => Ok("errors"),
+        Some(other) => Err(ApiError::bad_request(format!(
+            "order_by 必须为 total_tokens/requests/cost/cache_read/errors: {other}"
+        ))),
+    }
 }
 
 /// 解析查询参数为 StatsFilter（from_ts/to_ts 缺省 = billing_timezone 当天 00:00 → 现在）。
@@ -208,14 +256,21 @@ fn resolve_currency_value(c: Option<&str>, default: &str) -> ApiResult<String> {
 }
 
 /// 展示层舍入：对响应中成本数值字段（cost_cny/cost_usd/cost_display）应用 round_dp(precision)。
+///
+/// 递归遍历对象与数组：`/series` 的 `{points:[…]}`、`/model-rank` 的 `{rows:[…]}` 都是
+/// 「成本字段嵌在数组元素里」，此前 Object 分支只看本层三个键、不递归其它值，
+/// 导致这两个端点的展示舍入实际落空（DB 原样精度直接透出）。
 fn round_cost_value(v: &mut serde_json::Value, precision: u32) {
     match v {
         serde_json::Value::Object(obj) => {
-            for key in ["cost_cny", "cost_usd", "cost_display"] {
-                if let Some(val) = obj.get_mut(key) {
+            for (k, val) in obj.iter_mut() {
+                if matches!(k.as_str(), "cost_cny" | "cost_usd" | "cost_display") {
                     if let Some(d) = json_to_decimal(val) {
                         *val = serde_json::json!(d.round_dp(precision));
                     }
+                } else {
+                    // 非成本键继续下钻（points / rows / 嵌套对象）
+                    round_cost_value(val, precision);
                 }
             }
         }
@@ -357,5 +412,43 @@ mod tests {
         };
         let f = build_stats_filter(&q, "Asia/Shanghai").unwrap();
         assert!(f.from_ts <= f.to_ts);
+    }
+
+    #[test]
+    fn validate_order_by_whitelist_and_default() {
+        // 缺省 / 空串 → total_tokens（总 token 含缓存降序）
+        assert_eq!(validate_order_by(None).unwrap(), "total_tokens");
+        assert_eq!(validate_order_by(Some("  ")).unwrap(), "total_tokens");
+        for v in ["total_tokens", "requests", "cost", "cache_read", "errors"] {
+            assert_eq!(validate_order_by(Some(v)).unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn validate_order_by_rejects_unknown() {
+        // 非白名单必须 400（防 SQL 注入拼接）
+        assert!(validate_order_by(Some("model; DROP TABLE usage_logs")).is_err());
+        assert!(validate_order_by(Some("latency")).is_err());
+    }
+
+    #[test]
+    fn round_cost_value_recurses_into_nested_payloads() {
+        // /series 的 {points:[…]} 与 /model-rank 的 {rows:[…]}：成本字段嵌在数组元素里，
+        // 对象分支必须继续下钻，否则展示精度舍入整个落空（透出 DB 原样 10 位小数）。
+        let mut v = serde_json::json!({
+            "currency": "CNY",
+            "rows": [
+                { "model": "m1", "cost_cny": "0.1234567891", "cost_display": "0.1234567891" },
+                { "model": "m2", "cost_usd": "1.5", "cost_na_count": 2 },
+            ],
+        });
+        round_cost_value(&mut v, 4);
+        assert_eq!(v["rows"][0]["cost_cny"], serde_json::json!("0.1235"));
+        assert_eq!(v["rows"][0]["cost_display"], serde_json::json!("0.1235"));
+        assert_eq!(v["rows"][1]["cost_usd"], serde_json::json!("1.5"));
+        // 非成本字段不受影响
+        assert_eq!(v["rows"][0]["model"], serde_json::json!("m1"));
+        assert_eq!(v["rows"][1]["cost_na_count"], serde_json::json!(2));
+        assert_eq!(v["currency"], serde_json::json!("CNY"));
     }
 }

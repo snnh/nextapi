@@ -242,7 +242,7 @@ type Range = 'today' | '7d'
 const LABEL_TIPS = {
   requests: '统计区间内的网关请求总数',
   success: '成功率 = 状态码 < 400 的请求占比',
-  tokens: '总 Token 数 = 输入（提示）+ 输出（生成）token 合计',
+  tokens: '总 Token 数 = 输入（未缓存）+ 输出 + 缓存命中（读）+ 缓存写入，与配额口径一致',
   cost: '按所选币种折算的合计成本；未计价（无定价规则）条数不计入',
 } as const
 
@@ -385,7 +385,7 @@ const metricCards = computed<MetricCard[]>(() => {
   return [
     { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: LABEL_TIPS.requests },
     { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: LABEL_TIPS.success },
-    { label: '总 Token 数', value: fmtInt(s?.total_tokens), sub: '', tip: LABEL_TIPS.tokens },
+    { label: '总 Token 数（含缓存）', value: fmtInt(s?.total_tokens), sub: '', tip: LABEL_TIPS.tokens },
     {
       label: `成本（${currency.value}）`,
       value: fmtMoney(s?.cost_display),
@@ -408,7 +408,11 @@ function aggregateDim(points: SeriesPoint[]): TopRow[] {
     const name = p.dimension || '—'
     const row = map.get(name) ?? { name, requests: 0, tokens: 0, cost: 0 }
     row.requests += p.requests
-    row.tokens += (p.prompt_tokens ?? 0) + (p.completion_tokens ?? 0)
+    row.tokens +=
+      (p.prompt_tokens ?? 0) +
+      (p.completion_tokens ?? 0) +
+      (p.cache_read_tokens ?? 0) +
+      (p.cache_write_tokens ?? 0)
     row.cost += Number(p.cost_display ?? 0)
     map.set(name, row)
   }

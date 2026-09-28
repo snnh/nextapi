@@ -693,15 +693,27 @@ export interface StatsQuery {
   currency?: StatsCurrency
   granularity?: SeriesGranularity
   dimension?: SeriesDimension
+  /** 仅 /model-rank：排序字段 */
+  order_by?: ModelRankOrder
+  /** 仅 /model-rank：Top-N（1..=100） */
+  limit?: number
 }
 
 export interface StatsSummary {
   requests: number
   errors: number
   success_rate: number
+  /** 未命中缓存的输入 token */
   prompt_tokens: number
   completion_tokens: number
+  /** 缓存命中（读）token */
+  cache_read_tokens: number
+  /** 缓存写入 token */
+  cache_write_tokens: number
+  /** 总 token = prompt + completion + cache_read + cache_write（含缓存） */
   total_tokens: number
+  /** 输入侧缓存命中率 = cache_read / (prompt + cache_read + cache_write)；无输入 → null */
+  cache_hit_rate: number | null
   cost_cny: string | null
   cost_usd: string | null
   /** 按展示币种列合计（已舍入） */
@@ -722,6 +734,10 @@ export interface SeriesPoint {
   errors: number
   prompt_tokens: number
   completion_tokens: number
+  /** 缓存命中（读）token */
+  cache_read_tokens: number
+  /** 缓存写入 token */
+  cache_write_tokens: number
   cost_cny: string | null
   cost_usd: string | null
   cost_display: string | null
@@ -731,6 +747,35 @@ export interface SeriesPoint {
 export interface SeriesResp {
   currency: StatsCurrency
   points: SeriesPoint[]
+}
+
+/** 模型排行排序字段（后端白名单） */
+export type ModelRankOrder = 'total_tokens' | 'requests' | 'cost' | 'cache_read' | 'errors'
+
+/** 模型排行行（区间内按模型聚合，含缓存口径与输入侧命中率） */
+export interface ModelRankRow {
+  model: string
+  requests: number
+  errors: number
+  prompt_tokens: number
+  completion_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  /** 总 token（含缓存） */
+  total_tokens: number
+  /** 输入侧缓存命中率；无输入 → null */
+  cache_hit_rate: number | null
+  avg_latency_ms: number | null
+  cost_cny: string | null
+  cost_usd: string | null
+  cost_display: string | null
+  cost_na_count: number
+}
+
+export interface ModelRankResp {
+  currency: StatsCurrency
+  order_by: ModelRankOrder
+  rows: ModelRankRow[]
 }
 
 // ---------------------------------------------------------------------------

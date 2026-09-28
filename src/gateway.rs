@@ -422,16 +422,14 @@ fn finalize_stream(stream: &mut TeeStream) {
         }
         ctx.state.log_sink.log(ev);
 
-        let total = usage
-            .prompt_tokens
-            .unwrap_or(0)
-            .saturating_add(usage.completion_tokens.unwrap_or(0));
+        // 全量 token 口径（含缓存读/写）：与 /api/stats、usage_hourly、配额保持一致
+        let total = crate::upstream::usage::total_tokens(&usage);
         if total > 0 {
             ctx.state
                 .metrics
                 .gateway_tokens
                 .get_or_create(&ctx.labels)
-                .inc_by(total.max(0) as u64);
+                .inc_by(total as u64);
         }
     });
 }
@@ -1966,16 +1964,14 @@ async fn run_gateway(
                             "params": params_meta.clone(),
                             "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
                         }));
-                        let total = usage
-                            .prompt_tokens
-                            .unwrap_or(0)
-                            .saturating_add(usage.completion_tokens.unwrap_or(0));
+                        // 全量 token 口径（含缓存读/写）
+                        let total = crate::upstream::usage::total_tokens(&usage);
                         if total > 0 {
                             state
                                 .metrics
                                 .gateway_tokens
                                 .get_or_create(&lbl)
-                                .inc_by(total.max(0) as u64);
+                                .inc_by(total as u64);
                         }
                         if let Some(payload) = debug_payload(&debug_req, || {
                             serde_json::to_vec(
@@ -2596,16 +2592,14 @@ async fn openai_responses_compact(
                         "params": params_meta.clone(),
                         "usage": usage.raw.clone().unwrap_or(serde_json::Value::Null),
                     }));
-                    let total = usage
-                        .prompt_tokens
-                        .unwrap_or(0)
-                        .saturating_add(usage.completion_tokens.unwrap_or(0));
+                    // 全量 token 口径（含缓存读/写）
+                    let total = crate::upstream::usage::total_tokens(&usage);
                     if total > 0 {
                         state
                             .metrics
                             .gateway_tokens
                             .get_or_create(&lbl)
-                            .inc_by(total.max(0) as u64);
+                            .inc_by(total as u64);
                     }
                     if let Some(payload) =
                         debug_payload(&debug_req, || serde_json::to_vec(&out).unwrap_or_default())

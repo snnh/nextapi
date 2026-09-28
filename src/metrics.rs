@@ -66,7 +66,7 @@ impl Metrics {
         );
         registry.register(
             "nextapi_gateway_tokens",
-            "token 计数",
+            "总 token 计数（含缓存读/写：prompt+completion+cache_read+cache_write，与 /api/stats 同口径）",
             gateway_tokens.clone(),
         );
         registry.register(

@@ -83,8 +83,11 @@
           <el-radio-group v-model="metric" size="small">
             <el-radio-button value="requests">请求数</el-radio-button>
             <el-radio-button value="tokens">Token 数</el-radio-button>
+            <el-radio-button value="cache">缓存命中</el-radio-button>
+            <el-radio-button value="hit">命中率</el-radio-button>
             <el-radio-button value="cost">成本</el-radio-button>
           </el-radio-group>
+          <span class="hint">Token 口径：输入（未缓存）+ 输出 + 缓存读 + 缓存写；命中率仅统计输入侧。</span>
         </div>
       </el-card>
 
@@ -102,13 +105,89 @@
           <el-table-column label="错误" width="88" align="right">
             <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
           </el-table-column>
-          <el-table-column label="Token 数" width="128" align="right">
-            <template #default="{ row }">{{ fmtInt((row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0)) }}</template>
+          <el-table-column label="Token 数（含缓存）" width="148" align="right">
+            <template #default="{ row }">{{ fmtInt(totalTokensOf(row)) }}</template>
+          </el-table-column>
+          <el-table-column label="缓存命中" width="116" align="right">
+            <template #default="{ row }">{{ fmtInt(row.cache_read_tokens ?? 0) }}</template>
+          </el-table-column>
+          <el-table-column label="命中率" width="96" align="right">
+            <template #default="{ row }">{{ fmtPctOrNull(hitRateOf(row)) }}</template>
           </el-table-column>
           <el-table-column label="成本" width="128" align="right">
             <template #default="{ row }">{{ fmtMoney(row.cost_display) }}</template>
           </el-table-column>
         </el-table>
+      </el-card>
+
+      <!-- 模型排行（P5-a 高级统计）：区间内 Top-N 模型，点击模型名钻取到日志页 -->
+      <el-card shadow="never" class="page-card" v-loading="rankLoading">
+        <template #header>
+          <div class="rank-header">
+            <span>模型排行 · Top {{ rankLimit }}</span>
+            <div class="rank-actions">
+              <span class="hint">排序：</span>
+              <el-select v-model="rankOrder" size="small" style="width: 132px">
+                <el-option label="总 Token" value="total_tokens" />
+                <el-option label="请求数" value="requests" />
+                <el-option label="成本" value="cost" />
+                <el-option label="缓存命中" value="cache_read" />
+                <el-option label="错误数" value="errors" />
+              </el-select>
+              <el-select v-model="rankLimit" size="small" style="width: 88px">
+                <el-option v-for="n in [10, 20, 50, 100]" :key="n" :label="`Top ${n}`" :value="n" />
+              </el-select>
+              <el-button
+                size="small"
+                plain
+                :icon="Download"
+                :loading="exportingRank"
+                :disabled="!rankRows.length"
+                @click="exportRankCsv"
+              >
+                CSV
+              </el-button>
+            </div>
+          </div>
+        </template>
+        <el-table v-if="rankRows.length" :data="rankRows" stripe max-height="460">
+          <el-table-column label="模型" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              <el-link type="primary" :underline="false" @click="drillToLogs(row.model)">
+                {{ row.model || '—' }}
+              </el-link>
+            </template>
+          </el-table-column>
+          <el-table-column label="请求数" width="100" align="right">
+            <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
+          </el-table-column>
+          <el-table-column label="错误" width="84" align="right">
+            <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
+          </el-table-column>
+          <el-table-column label="Token 数（含缓存）" width="150" align="right">
+            <template #default="{ row }">{{ fmtInt(row.total_tokens) }}</template>
+          </el-table-column>
+          <el-table-column label="缓存命中" width="116" align="right">
+            <template #default="{ row }">{{ fmtInt(row.cache_read_tokens) }}</template>
+          </el-table-column>
+          <el-table-column label="命中率" width="96" align="right">
+            <template #default="{ row }">{{ fmtPctOrNull(row.cache_hit_rate) }}</template>
+          </el-table-column>
+          <el-table-column label="平均延迟" width="104" align="right">
+            <template #default="{ row }">{{ fmtDur(row.avg_latency_ms) }}</template>
+          </el-table-column>
+          <el-table-column label="成本" width="128" align="right">
+            <template #default="{ row }">
+              {{ fmtMoney(row.cost_display) }}
+              <span v-if="row.cost_na_count > 0" class="hint">（{{ row.cost_na_count }} 未计价）</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty
+          v-else
+          :description="rankError ? `排行加载失败：${rankError}` : '当前条件下暂无模型数据'"
+          :image-size="80"
+        />
       </el-card>
     </div>
   </div>
@@ -117,6 +196,7 @@
 <script setup lang="ts">
 // 统计报表页（M8 §4.8）：汇总卡 + 趋势图 + 维度明细 + CSV 导出
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { Download, Search } from '@element-plus/icons-vue'
@@ -127,6 +207,8 @@ import { keyApi, statsApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type {
   ApiKeyRow,
+  ModelRankOrder,
+  ModelRankRow,
   SeriesDimension,
   SeriesPoint,
   StatsCurrency,
@@ -136,9 +218,10 @@ import type {
 } from '@/api/types'
 import { CURRENCIES, DIMENSION_OPTIONS, PROTOCOL_IN_LABELS } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
-import { fmtInt, fmtMoney } from '@/utils/format'
+import { fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
 
-type Metric = 'requests' | 'tokens' | 'cost'
+/** 趋势图指标：请求数 / 总 Token（含缓存）/ 缓存命中 Token / 缓存命中率 / 成本 */
+type Metric = 'requests' | 'tokens' | 'cache' | 'hit' | 'cost'
 
 // —— 筛选状态 ——
 const range = ref<[Date, Date] | null>([
@@ -153,9 +236,67 @@ const keys = ref<ApiKeyRow[]>([])
 const upstreams = ref<UpstreamOut[]>([])
 const metric = ref<Metric>('requests')
 
+// —— 模型排行（P5-a）——
+const router = useRouter()
+const rankOrder = ref<ModelRankOrder>('total_tokens')
+const rankLimit = ref(10)
+const rankRows = ref<ModelRankRow[]>([])
+/** 排行独立加载态（与整页 loading 解耦：排行慢不遮住已返回的主查询结果） */
+const rankLoading = ref(false)
+/** 排行加载失败原因（失败即清空行，空态常驻展示原因；错误期间禁用 CSV 导出） */
+const rankError = ref('')
+
+/** 总 Token（含缓存）：明细行与序列行同形状，统一在此计算 */
+function totalTokensOf(r: {
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
+}): number {
+  return (
+    (r.prompt_tokens ?? 0) +
+    (r.completion_tokens ?? 0) +
+    (r.cache_read_tokens ?? 0) +
+    (r.cache_write_tokens ?? 0)
+  )
+}
+
+/** 输入侧缓存命中率 = cache_read / (prompt + cache_read + cache_write)；分母 0 → null。
+ *  分量各自钳 0（与后端 stats::cache_hit_rate 同式），避免脏数据算出 >100%。 */
+function hitRateOf(r: {
+  prompt_tokens?: number | null
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
+}): number | null {
+  const cr = Math.max(0, r.cache_read_tokens ?? 0)
+  const input =
+    Math.max(0, r.prompt_tokens ?? 0) + cr + Math.max(0, r.cache_write_tokens ?? 0)
+  if (input <= 0) return null
+  return cr / input
+}
+
+/** 命中率展示：null → '-'（分母为 0 时不误报 0%） */
+function fmtPctOrNull(v: number | null | undefined): string {
+  return v === null || v === undefined ? '-' : fmtPct(v)
+}
+
+/** 钻取：跳转日志页并带上当前区间/筛选 + 模型名（Logs 页挂载时从 URL query 恢复） */
+function drillToLogs(model: string) {
+  const q: Record<string, string> = { model }
+  if (range.value) {
+    q.from_ts = dayjs(range.value[0]).toISOString()
+    q.to_ts = dayjs(range.value[1]).toISOString()
+  }
+  if (keyId.value) q.key_id = keyId.value
+  if (upstreamId.value) q.upstream_id = upstreamId.value
+  router.push({ name: 'logs', query: q })
+}
+
 // —— 数据状态 ——
 const loading = ref(false)
 const exporting = ref(false)
+/** 模型排行 CSV 导出中 */
+const exportingRank = ref(false)
 /** 是否成功加载过一次（区分「从未有数据」与「当前区间无数据」） */
 const loadedOnce = ref(false)
 const summary = ref<StatsSummary | null>(null)
@@ -237,9 +378,13 @@ function buildSeriesQuery(): StatsQuery {
 }
 
 let reqSeq = 0
+/** 排行请求的独立竞态序号（与主查询各自计数，互不干扰） */
+let rankSeq = 0
 
 // 查询期间不清空旧数据：失败保留旧 summary/points 仅提示，空态只在从未成功加载过时出现。
-async function loadData() {
+// 主查询与「模型排行」彻底解耦：排行恒走明细源（长区间可能慢/503），
+// 若与主查询同批 await，会让已返回的 summary/series 被整页 loading 遮罩拖住不渲染。
+async function loadMain() {
   const my = ++reqSeq
   loading.value = true
   try {
@@ -263,20 +408,61 @@ async function loadData() {
   }
 }
 
+/** 模型排行：独立加载态与独立竞态序号；失败清空旧行（避免表头排序/区间与表内数据不符） */
+async function loadRank() {
+  const my = ++rankSeq
+  rankLoading.value = true
+  try {
+    // 排行与区间/Key/上游筛选一致（不受 dimension 影响：恒按模型聚合）
+    const r = await statsApi.modelRank({
+      ...buildBaseQuery(),
+      order_by: rankOrder.value,
+      limit: rankLimit.value,
+    })
+    if (my !== rankSeq) return
+    rankRows.value = r.rows
+    rankError.value = ''
+  } catch (e) {
+    if (my !== rankSeq) return
+    rankRows.value = []
+    rankError.value = errMsg(e)
+    ElMessage.warning(`模型排行加载失败：${rankError.value}`)
+  } finally {
+    if (my === rankSeq) rankLoading.value = false
+  }
+}
+
+/** 并发触发两路查询，互不阻塞（各自维护 loading 与错误态） */
+function loadData() {
+  void loadMain()
+  void loadRank()
+}
+
 /** 「查询」按钮：手动立即触发（先取消待执行的自动防抖查询） */
 let autoTimer: ReturnType<typeof setTimeout> | null = null
+let rankTimer: ReturnType<typeof setTimeout> | null = null
 function onQuery() {
   if (autoTimer) {
     clearTimeout(autoTimer)
     autoTimer = null
   }
+  if (rankTimer) {
+    clearTimeout(rankTimer)
+    rankTimer = null
+  }
   loadData()
 }
 
-// 时间/币种/维度/Key/上游 变化自动查询：300ms 防抖
+// 时间/币种/维度/Key/上游 变化 → 主查询 + 排行都刷新：300ms 防抖
 watch([range, currency, dimension, keyId, upstreamId], () => {
   if (autoTimer) clearTimeout(autoTimer)
   autoTimer = setTimeout(loadData, 300)
+})
+
+// 排行的排序字段/条数变化 → 只刷新排行，不重拉 summary/series（后者可能走明细 + 百分位，代价高）
+watch([rankOrder, rankLimit], () => {
+  if (rankTimer) clearTimeout(rankTimer)
+  rankTimer = setTimeout(loadRank, 300)
 })
 
 onMounted(() => {
@@ -337,28 +523,34 @@ const detailRows = computed(() =>
 
 // —— 趋势图 ——
 const metricName = computed(() => {
-  if (metric.value === 'tokens') return 'Token 数'
+  if (metric.value === 'tokens') return '总 Token 数（含缓存）'
+  if (metric.value === 'cache') return '缓存命中 Token'
+  if (metric.value === 'hit') return '缓存命中率'
   if (metric.value === 'cost') return `成本(${currency.value})`
   return '请求数'
 })
 
-/** 当前指标在维度分组下的数值（请求/Token/成本），null 表示无值 */
+/** 当前指标的数值（请求/总Token/缓存命中/命中率/成本），null 表示无值 */
 function metricValue(p: SeriesPoint): number | null {
-  if (metric.value === 'tokens') return (p.prompt_tokens ?? 0) + (p.completion_tokens ?? 0)
+  if (metric.value === 'tokens') return totalTokensOf(p)
+  if (metric.value === 'cache') return p.cache_read_tokens ?? 0
+  if (metric.value === 'hit') return hitRateOf(p)
   if (metric.value === 'cost') return p.cost_display != null ? Number(p.cost_display) : null
   return p.requests
 }
 
-/** 指标值格式化：成本用货币千分位，计数用千分位（tooltip / 图例共用） */
+/** 指标值格式化：命中率百分比、成本货币千分位、计数千分位（tooltip / 图例共用） */
 function fmtMetricValue(v: unknown): string {
   if (v === null || v === undefined || v === '') return '-'
   const n = Number(v)
   if (!Number.isFinite(n)) return String(v)
+  if (metric.value === 'hit') return fmtPct(n)
   return metric.value === 'cost' ? fmtMoney(n) : fmtInt(n)
 }
 
-/** 坐标轴数字：大数缩写 + 千分位；成本保持货币格式 */
+/** 坐标轴数字：命中率百分比、成本货币格式，其余大数缩写 + 千分位 */
 function fmtAxisValue(n: number): string {
+  if (metric.value === 'hit') return `${(n * 100).toFixed(0)}%`
   if (metric.value === 'cost') return fmtMoney(n)
   const abs = Math.abs(n)
   if (abs >= 1e8) return `${(n / 1e8).toFixed(1)}亿`
@@ -412,9 +604,18 @@ const chartOption = computed<EChartsOption>(() => {
       seriesType = 'bar'
       data = pts.map((p) => p.requests)
     } else if (metric.value === 'tokens') {
-      seriesName = '总 Token 数'
+      seriesName = '总 Token 数（含缓存）'
       seriesType = 'line'
-      data = pts.map((p) => (p.prompt_tokens ?? 0) + (p.completion_tokens ?? 0))
+      data = pts.map(totalTokensOf)
+    } else if (metric.value === 'cache') {
+      seriesName = '缓存命中 Token'
+      seriesType = 'line'
+      data = pts.map((p) => p.cache_read_tokens ?? 0)
+    } else if (metric.value === 'hit') {
+      // 命中率：单轴百分比（0–1 数值 + 轴/tooltip 百分比格式化），不引双轴
+      seriesName = '缓存命中率'
+      seriesType = 'line'
+      data = pts.map(hitRateOf)
     } else {
       seriesName = `成本(${currency.value})`
       seriesType = 'line'
@@ -496,11 +697,36 @@ function statsCsvFilename(): string {
 async function exportCsv() {
   exporting.value = true
   try {
-    const header = ['bucket', 'dimension', 'requests', 'errors', 'prompt_tokens', 'completion_tokens', 'cost_display']
-    const lines = ['# nextapi stats', header.map(csvCell).join(',')]
+    const header = [
+      'bucket',
+      'dimension',
+      'requests',
+      'errors',
+      'prompt_tokens',
+      'completion_tokens',
+      'cache_read_tokens',
+      'cache_write_tokens',
+      'total_tokens',
+      'cache_hit_rate',
+      'cost_display',
+    ]
+    const lines = ['# nextapi stats（总 Token 含缓存读/写；命中率=cache_read/(prompt+cache_read+cache_write)）', header.map(csvCell).join(',')]
     for (const p of sortedPoints.value) {
+      const hit = hitRateOf(p)
       lines.push(
-        [p.bucket, dimLabel(p.dimension), p.requests, p.errors, p.prompt_tokens ?? '', p.completion_tokens ?? '', p.cost_display ?? '']
+        [
+          p.bucket,
+          dimLabel(p.dimension),
+          p.requests,
+          p.errors,
+          p.prompt_tokens ?? '',
+          p.completion_tokens ?? '',
+          p.cache_read_tokens ?? '',
+          p.cache_write_tokens ?? '',
+          totalTokensOf(p),
+          hit === null ? '' : hit.toFixed(6),
+          p.cost_display ?? '',
+        ]
           .map(csvCell)
           .join(','),
       )
@@ -513,6 +739,57 @@ async function exportCsv() {
     ElMessage.error(`导出失败：${errMsg(e)}`)
   } finally {
     exporting.value = false
+  }
+}
+
+/** 导出模型排行 CSV（与页面排行表列一致） */
+async function exportRankCsv() {
+  exportingRank.value = true
+  try {
+    const header = [
+      'model',
+      'requests',
+      'errors',
+      'prompt_tokens',
+      'completion_tokens',
+      'cache_read_tokens',
+      'cache_write_tokens',
+      'total_tokens',
+      'cache_hit_rate',
+      'avg_latency_ms',
+      'cost_display',
+    ]
+    const lines = [
+      `# nextapi stats model-rank（order_by=${rankOrder.value}, top ${rankLimit.value}）`,
+      header.map(csvCell).join(','),
+    ]
+    for (const r of rankRows.value) {
+      lines.push(
+        [
+          r.model,
+          r.requests,
+          r.errors,
+          r.prompt_tokens,
+          r.completion_tokens,
+          r.cache_read_tokens,
+          r.cache_write_tokens,
+          r.total_tokens,
+          r.cache_hit_rate === null ? '' : r.cache_hit_rate.toFixed(6),
+          r.avg_latency_ms ?? '',
+          r.cost_display ?? '',
+        ]
+          .map(csvCell)
+          .join(','),
+      )
+    }
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const filename = statsCsvFilename().replace(/^stats_/, 'stats_models_')
+    downloadBlob(blob, filename)
+    ElMessage.success(`已导出 ${filename}`)
+  } catch (e) {
+    ElMessage.error(`导出失败：${errMsg(e)}`)
+  } finally {
+    exportingRank.value = false
   }
 }
 </script>
@@ -550,5 +827,18 @@ async function exportCsv() {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+.rank-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rank-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

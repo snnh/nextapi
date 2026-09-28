@@ -51,6 +51,7 @@ import type {
   StatsQuery,
   StatsSummary,
   SeriesResp,
+  ModelRankResp,
   SuggestResp,
   TestResp,
   UnpricedItem,
@@ -255,6 +256,10 @@ export const statsApi = {
     http.get<StatsSummary>('/api/stats/summary', { params: clean({ ...q }) }).then((r) => r.data),
   series: (q: StatsQuery) =>
     http.get<SeriesResp>('/api/stats/series', { params: clean({ ...q }) }).then((r) => r.data),
+  modelRank: (q: StatsQuery) =>
+    http
+      .get<ModelRankResp>('/api/stats/model-rank', { params: clean({ ...q }) })
+      .then((r) => r.data),
 }
 
 // ---------------------------------------------------------------------------

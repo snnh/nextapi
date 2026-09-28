@@ -217,6 +217,10 @@ fn window_hit(start: &str, end: &str, minutes: i32) -> bool {
 }
 
 /// 上下文长度判定值（context_basis：prompt_tokens 默认 | total_tokens=prompt+completion）。
+///
+/// 注意：此处 `total_tokens` 是**计价规则的上下文长度口径**（仅 prompt+completion，用于分段
+/// 命中判定），与统计报表的 `total_tokens`（含 cache_read/cache_write 的全量用量）**同名不同义**。
+/// 不要为「口径统一」把缓存 token 加进来——那会改变既有分段计价行为。
 fn context_value(rule: &PriceRuleRow, input: &PricingInput) -> i64 {
     if rule.context_basis == "total_tokens" {
         input

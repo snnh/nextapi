@@ -1,5 +1,61 @@
 # Changelog
 
+## [Unreleased]
+
+### ⚠️ Breaking
+- **统计报表 Token 口径改为「含缓存全量」**：`/api/stats/summary`、`/api/stats/series`、
+  `/api/stats/model-rank` 的 `total_tokens`（及前端「总 Token 数」）语义变更为
+  输入（未缓存）+ 输出 + **缓存命中（读）** + **缓存写入**，与 `quota_usage` 的 tokens
+  配额口径统一。此前统计只加 `prompt + completion`，缓存 token 完全不进报表——
+  高缓存命中场景（Claude Code / Codex 类长上下文）实际用量被严重低估。
+  **直接消费这些字段的下游（看板/脚本）数值会变大**，历史数据同样按新口径重算
+  （明细列一直在写，无需回填明细；汇总表的回填见下）。
+  - 各协议上游返回口径不同（OpenAI Chat / Responses、Gemini 的输入 token **含**缓存命中，
+    Anthropic 的 `input_tokens` **不含**），但入站已在协议适配层统一归一
+    （`prompt_tokens` 恒为「未缓存输入」，缓存 token 落独立列），故统计层为纯加法，
+    **不存在重复计数**；透传路径同样在 `upstream/usage.rs` 归一。
+  - 计价与配额规则不受影响（本就按未缓存输入 + 独立缓存项计价；计价规则的
+    `context_basis='total_tokens'` 仍是 prompt+completion 的上下文长度口径，未改动）。
+- **Prometheus `nextapi_gateway_tokens` 同步为全量口径**（含缓存读/写）。
+  此前该计数器只累加 prompt+completion，与新报表口径背离；升级后计数值会跳变，
+  **基于该指标做环比/告警阈值的看板需要重新校准**。新增公共函数
+  `upstream::usage::total_tokens()`，网关三处打点（流式 / 非流式 / Responses）统一复用。
+
+### Added
+- **缓存命中指标**：`/api/stats/summary` 新增 `cache_read_tokens` / `cache_write_tokens` /
+  `cache_hit_rate`；`/api/stats/series` 每个点新增 `cache_read_tokens` / `cache_write_tokens`。
+  命中率采用**输入侧口径** = `cache_read ÷ (prompt + cache_read + cache_write)`
+  （Anthropic 官方后台同口径），分母为 0 时返回 `null`（前端显示 `-`，不误报 0%）；
+  分量钳 0，脏数据下比率恒在 0–100%。
+- **模型排行（高级统计）**：新增 `GET /api/stats/model-rank`
+  （`order_by=total_tokens|requests|cost|cache_read|errors`，白名单校验、非法值 400；
+  `limit` clamp 1..=100），返回区间内按模型聚合的请求数/错误/四类 token/总 token/
+  命中率/平均延迟/成本。统计页新增「模型排行 · Top N」卡片（排序字段与 Top 10/20/50/100
+  可切、独立 CSV 导出、**独立加载态**——排行慢或超时不再遮住已返回的汇总与趋势），
+  点击模型名**钻取**到日志页并带上当前区间与 Key/上游筛选。
+- 统计页展示面全面补齐缓存口径：汇总卡（总 Tokens 含缓存 + 缓存命中 Tokens + 缓存命中率，
+  总 Token 卡附输入/输出/缓存构成）、趋势图指标切换（请求数 / Token 数 / 缓存命中 /
+  命中率 / 成本，命中率为单轴百分比）、维度明细表（Token 含缓存 / 缓存命中 / 命中率列）、
+  CSV 导出（追加 `cache_read_tokens` / `cache_write_tokens` / `total_tokens` / `cache_hit_rate`）。
+- 迁移 `0017_usage_hourly_cache`：`usage_hourly` 汇总表补 `cache_read_tokens` /
+  `cache_write_tokens` 列（此前缺失 → 长区间 >7 天与日粒度查询走汇总源时缓存恒 0），
+  并**回填历史**（按 hour+model 聚合 `usage_logs` 明细）。回填的小时截断显式走 UTC，
+  与写入侧 `hour_bucket()` 严格一致（裸 `date_trunc('hour', ts)` 会按 DB 会话时区截断，
+  在 +05:30 一类半小时时区下会与 `usage_hourly.hour` 对不上而**静默回填 0 行**）；
+  带守卫条件可重复执行，只覆盖现存分区与「缓存列全 0」的桶。写路径 upsert 同步累加两列。
+
+### Fixed
+- **汇总源与明细源的分桶时区不一致**：`series` 走 `usage_hourly`（长区间 / 日粒度）时
+  用裸 `date_trunc(g, hour)`（DB 会话时区），走 `usage_logs` 时用 `billing_timezone`，
+  同一条请求在两种源里会落到不同的「天」——区间跨过 7 天阈值触发换源时图表分桶跳变。
+  现汇总源同样按 `billing_timezone` 截断，两源完全一致。
+- **展示精度舍入在 `/api/stats/series` 与 `/model-rank` 上落空**：`round_cost_value`
+  的对象分支只看本层 `cost_*` 三个键、不递归其它值，而这两个端点的成本字段嵌在
+  `points[]` / `rows[]` 里，导致 `display_precision` 从未生效（透出 DB 原样 10 位小数）。
+  现改为对非成本键继续下钻。
+- 仪表盘 Top5 模型/上游表的 token 合计只加 prompt+completion，与同页「总 Token 数」卡片
+  口径不一致 → 已同步为全量口径。
+
 ## [0.3.10] - 2026-09-24
 
 ### Added

@@ -325,12 +325,16 @@ fn usage_logs_insert_sql() -> String {
 }
 
 /// usage_hourly 单桶聚合累计（含成本可选累加）。
+/// 缓存列（cache_write/cache_read）与明细表 usage_logs 同口径：
+/// 落库 prompt_tokens 恒为「未命中缓存的输入」，缓存 token 独立累加（见 0017 迁移）。
 #[derive(Default)]
 struct HourlyAcc {
     requests: i64,
     errors: i64,
     prompt_tokens: i64,
     completion_tokens: i64,
+    cache_write_tokens: i64,
+    cache_read_tokens: i64,
     cost_cny: Option<Decimal>,
     cost_usd: Option<Decimal>,
 }
@@ -502,7 +506,8 @@ pub async fn insert_batch(
     }
 
     // ---- 2) usage_hourly 聚合 upsert（小时桶 + model 维度）----
-    // 聚合项: (requests, errors, prompt_tokens, completion_tokens, cost_cny, cost_usd)
+    // 聚合项: (requests, errors, prompt_tokens, completion_tokens,
+    //          cache_write_tokens, cache_read_tokens, cost_cny, cost_usd)
     let mut hourly: HashMap<(DateTime<Utc>, String), HourlyAcc> = HashMap::new();
     for ev in priced
         .iter()
@@ -516,19 +521,24 @@ pub async fn insert_batch(
         }
         agg.prompt_tokens += ev.prompt_tokens.unwrap_or(0);
         agg.completion_tokens += ev.completion_tokens.unwrap_or(0);
+        agg.cache_write_tokens += ev.cache_write_tokens.unwrap_or(0);
+        agg.cache_read_tokens += ev.cache_read_tokens.unwrap_or(0);
         add_opt_sum(&mut agg.cost_cny, ev.cost_cny);
         add_opt_sum(&mut agg.cost_usd, ev.cost_usd);
     }
     for ((hour, model), agg) in hourly {
         sqlx::query(
             "INSERT INTO usage_hourly \
-             (hour, model, requests, errors, prompt_tokens, completion_tokens, cost_cny, cost_usd) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) \
+             (hour, model, requests, errors, prompt_tokens, completion_tokens, \
+              cache_write_tokens, cache_read_tokens, cost_cny, cost_usd) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
              ON CONFLICT (hour, model) DO UPDATE SET \
                requests = usage_hourly.requests + EXCLUDED.requests, \
                errors = usage_hourly.errors + EXCLUDED.errors, \
                prompt_tokens = usage_hourly.prompt_tokens + EXCLUDED.prompt_tokens, \
                completion_tokens = usage_hourly.completion_tokens + EXCLUDED.completion_tokens, \
+               cache_write_tokens = usage_hourly.cache_write_tokens + EXCLUDED.cache_write_tokens, \
+               cache_read_tokens = usage_hourly.cache_read_tokens + EXCLUDED.cache_read_tokens, \
                cost_cny = CASE WHEN EXCLUDED.cost_cny IS NULL THEN usage_hourly.cost_cny \
                                ELSE COALESCE(usage_hourly.cost_cny, 0) + EXCLUDED.cost_cny END, \
                cost_usd = CASE WHEN EXCLUDED.cost_usd IS NULL THEN usage_hourly.cost_usd \
@@ -540,6 +550,8 @@ pub async fn insert_batch(
         .bind(agg.errors)
         .bind(agg.prompt_tokens)
         .bind(agg.completion_tokens)
+        .bind(agg.cache_write_tokens)
+        .bind(agg.cache_read_tokens)
         .bind(agg.cost_cny)
         .bind(agg.cost_usd)
         .execute(&mut *tx)
@@ -586,12 +598,15 @@ pub async fn insert_batch(
         }
         let window = window.as_deref().unwrap_or("total");
         let period_start = window_start(window, billing_tz, ev.ts);
+        // 全量口径（含缓存读/写），各分量钳 0：与 upstream::usage::total_tokens、
+        // /api/stats 的 total_tokens 同式，避免脏数据（负值）让配额与报表背离。
         let tokens = ev
             .prompt_tokens
             .unwrap_or(0)
-            .saturating_add(ev.completion_tokens.unwrap_or(0))
-            .saturating_add(ev.cache_write_tokens.unwrap_or(0))
-            .saturating_add(ev.cache_read_tokens.unwrap_or(0));
+            .max(0)
+            .saturating_add(ev.completion_tokens.unwrap_or(0).max(0))
+            .saturating_add(ev.cache_write_tokens.unwrap_or(0).max(0))
+            .saturating_add(ev.cache_read_tokens.unwrap_or(0).max(0));
         let entry = quota_tokens
             .entry((key_id, window.to_string(), period_start))
             .or_insert(Decimal::ZERO);
