@@ -334,8 +334,12 @@ async fn change_password(
         return Err(ApiError::bad_request("原密码不正确"));
     }
 
-    // argon2 哈希新密码并更新
-    let new_hash = hash_password(&body.new_password).map_err(ApiError::internal)?;
+    // argon2 哈希新密码并更新（内存成本可配：gateway.argon2_memory_kib，默认 19 MiB）
+    let new_hash = hash_password(
+        &body.new_password,
+        state.hot.load().gateway.argon2_memory_kib,
+    )
+    .map_err(ApiError::internal)?;
     sqlx::query("UPDATE admin_users SET password_hash = $1, session_version = session_version + 1 WHERE username = $2")
         .bind(&new_hash)
         .bind(&username)
@@ -849,11 +853,24 @@ fn verify_password(hash: &str, password: &str) -> bool {
     }
 }
 
-/// argon2（默认参数）计算 PHC 哈希。
-fn hash_password(password: &str) -> anyhow::Result<String> {
+/// 按配置的内存成本构造 argon2 实例（用于**生成**新哈希）。
+///
+/// 校验路径不用它：`verify_password` 走 `Argon2::default()`，因为 PHC 串自带参数，
+/// 校验时按库里哈希的参数分配内存——这也是「调低成本后需改一次密码才见效」的原因。
+/// `memory_kib` 经钳制（8192–1048576），非法则回落默认参数（19 MiB）。
+fn argon2_with_memory(memory_kib: u32) -> Argon2<'static> {
+    let m = crate::config::clamp_argon2_memory_kib(memory_kib);
+    match argon2::Params::new(m, 2, 1, None) {
+        Ok(p) => Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, p),
+        Err(_) => Argon2::default(),
+    }
+}
+
+/// argon2 计算 PHC 哈希（内存成本取调用方给的配置值，默认 19 MiB）。
+fn hash_password(password: &str, memory_kib: u32) -> anyhow::Result<String> {
     use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
     let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
+    let hash = argon2_with_memory(memory_kib)
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| anyhow::anyhow!("argon2 哈希失败: {e}"))?;
     Ok(hash.to_string())
@@ -1265,7 +1282,7 @@ mod tests {
 
     #[test]
     fn argon2_verify_logic() {
-        let hash = hash_password("test-password").unwrap();
+        let hash = hash_password("test-password", 19_456).unwrap();
         assert!(verify_password(&hash, "test-password"));
         assert!(!verify_password(&hash, "wrong"));
         assert!(!verify_password("not-a-hash", "x"));

@@ -6,9 +6,12 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-pub async fn connect(url: &str) -> anyhow::Result<PgPool> {
+/// 建连接池。`max_connections` 由调用方从 `database.max_connections` /
+/// `NEXTAPI_DB_MAX_CONNECTIONS` 解析，并经 [`crate::config::pool_max_connections`] 钳制
+/// （1–256，默认 16）——内存受限的部署可调低，高并发场景可调高。
+pub async fn connect(url: &str, max_connections: u32) -> anyhow::Result<PgPool> {
     let pool = PgPoolOptions::new()
-        .max_connections(16)
+        .max_connections(crate::config::clamp_pool_max_connections(max_connections))
         .acquire_timeout(std::time::Duration::from_secs(10))
         .connect(url)
         .await?;

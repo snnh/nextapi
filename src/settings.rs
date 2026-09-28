@@ -266,7 +266,7 @@ impl SettingsEngine {
 
         // 逐键校验，收集合法更新
         let mut validated: Vec<(String, serde_json::Value, bool, bool)> = Vec::new();
-        for (key, value) in updates {
+        for (key, mut value) in updates {
             // 掩码回传值：保持原值，跳过该键
             if is_mask_sentinel(&value) {
                 continue;
@@ -278,12 +278,11 @@ impl SettingsEngine {
                 )));
             }
             if is_startup {
-                // 启动类键：值为字符串（监听地址/URL/secret）
-                if !value.is_string() {
-                    return Err(crate::error::ApiError::bad_request(format!(
-                        "启动类配置键 {key} 的值必须是字符串"
-                    )));
-                }
+                // 启动类键：字符串（监听地址/URL/secret）或数字（连接池大小等数值键）；
+                // 数值型键在这里做整数与范围校验，统一按字符串落库。
+                let normalized = normalize_startup_value(&key, &value)
+                    .map_err(crate::error::ApiError::bad_request)?;
+                value = serde_json::Value::String(normalized);
             } else {
                 // hot 键：先用 apply_overrides 试算做类型校验
                 crate::config::apply_overrides(&base, &[(key.clone(), value.clone())]).map_err(
@@ -420,8 +419,39 @@ fn startup_yaml_value(cfg: &ConfigFile, key: &str) -> Option<String> {
         "server.listen" => Some(cfg.server.listen.clone()),
         "database.url" => Some(cfg.database.url.clone()),
         "server.admin_jwt_secret" => Some(cfg.server.admin_jwt_secret.clone()),
+        "database.max_connections" => Some(cfg.database.max_connections.to_string()),
         _ => None,
     }
+}
+
+/// 启动类键中的数值型键及其取值范围（UI 保存时做类型/范围校验，统一按字符串落库）。
+const NUMERIC_STARTUP_KEYS: &[(&str, u32, u32)] = &[("database.max_connections", 1, 256)];
+
+/// 启动类键的值规范化：字符串或数字均可（数字统一转成字符串落库）；
+/// 数值型键额外做整数与范围校验。返回落库用的字符串形式。
+fn normalize_startup_value(key: &str, value: &serde_json::Value) -> Result<String, String> {
+    let numeric = NUMERIC_STARTUP_KEYS.iter().find(|(k, _, _)| *k == key);
+    let raw: String = match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) if numeric.is_some() => n.to_string(),
+        _ => {
+            return Err(if numeric.is_some() {
+                format!("启动类配置键 {key} 的值必须是整数或数字字符串")
+            } else {
+                format!("启动类配置键 {key} 的值必须是字符串")
+            })
+        }
+    };
+    if let Some((_, min, max)) = numeric {
+        let n: u32 = raw
+            .trim()
+            .parse()
+            .map_err(|_| format!("{key} 必须是整数（{min}–{max}）"))?;
+        if n < *min || n > *max {
+            return Err(format!("{key} 超出范围（{min}–{max}）"));
+        }
+    }
+    Ok(raw)
 }
 
 /// 生成启动类键值快照（用于 view 在 env/UI 覆盖后回退到 YAML 基准值）。
@@ -476,6 +506,9 @@ mod tests {
         assert!(is_writable_key("server.listen", &hot_keys));
         assert!(!is_writable_key("database.url", &hot_keys));
         assert!(is_writable_key("server.admin_jwt_secret", &hot_keys));
+        // 连接池大小：启动类键，UI 可保存（下次启动生效）
+        assert!(is_writable_key("database.max_connections", &hot_keys));
+        assert!(key_is_restart("database.max_connections"));
 
         // 非法：seed 类（admin.*）、业务实体字段、未知键
         assert!(!is_writable_key("admin.username", &hot_keys));
@@ -491,6 +524,38 @@ mod tests {
         assert!(!is_mask_sentinel(&serde_json::json!(42)));
         assert!(!is_mask_sentinel(&serde_json::json!({ "a": "***" })));
         assert!(!is_mask_sentinel(&serde_json::json!(null)));
+    }
+
+    #[test]
+    fn numeric_startup_value_normalization() {
+        // 数值型启动键：字符串与数字都接受，统一按字符串落库（UI 控件给数字）
+        assert_eq!(
+            normalize_startup_value("database.max_connections", &serde_json::json!("8")).unwrap(),
+            "8"
+        );
+        assert_eq!(
+            normalize_startup_value("database.max_connections", &serde_json::json!(8)).unwrap(),
+            "8"
+        );
+        // 范围/整数校验
+        assert!(
+            normalize_startup_value("database.max_connections", &serde_json::json!(0)).is_err()
+        );
+        assert!(
+            normalize_startup_value("database.max_connections", &serde_json::json!(257)).is_err()
+        );
+        assert!(
+            normalize_startup_value("database.max_connections", &serde_json::json!("abc")).is_err()
+        );
+        assert!(
+            normalize_startup_value("database.max_connections", &serde_json::json!(1.5)).is_err()
+        );
+        // 非数值启动键：只接受字符串（保持原行为）
+        assert_eq!(
+            normalize_startup_value("server.listen", &serde_json::json!("0.0.0.0:3220")).unwrap(),
+            "0.0.0.0:3220"
+        );
+        assert!(normalize_startup_value("server.listen", &serde_json::json!(3220)).is_err());
     }
 
     #[test]
@@ -544,6 +609,7 @@ mod tests {
             },
             database: crate::config::DatabaseCfg {
                 url: "postgres://u:p@h/db".into(),
+                max_connections: 8,
             },
             ..Default::default()
         };
@@ -558,6 +624,10 @@ mod tests {
         assert_eq!(
             startup_yaml_value(&cfg, "server.admin_jwt_secret").unwrap(),
             "s3cret"
+        );
+        assert_eq!(
+            startup_yaml_value(&cfg, "database.max_connections").unwrap(),
+            "8"
         );
         assert!(startup_yaml_value(&cfg, "nonexistent").is_none());
     }

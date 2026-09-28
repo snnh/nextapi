@@ -13,14 +13,20 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 需重启才生效的启动类配置键（UI 标注用）。
-pub const RESTART_REQUIRED_KEYS: &[&str] =
-    &["server.listen", "database.url", "server.admin_jwt_secret"];
+pub const RESTART_REQUIRED_KEYS: &[&str] = &[
+    "server.listen",
+    "database.url",
+    "server.admin_jwt_secret",
+    // 连接池大小：池先于设置引擎建立（自举矛盾），UI 保存后**下次启动**生效
+    "database.max_connections",
+];
 
 /// 启动类配置键 → 环境变量映射（env 仅启动时读取，UI 只读展示）。
 pub const STARTUP_ENV_MAP: &[(&str, &str)] = &[
     ("server.listen", "NEXTAPI_LISTEN"),
     ("database.url", "DATABASE_URL"),
     ("server.admin_jwt_secret", "NEXTAPI_ADMIN_JWT_SECRET"),
+    ("database.max_connections", "NEXTAPI_DB_MAX_CONNECTIONS"),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -85,10 +91,23 @@ impl Default for ServerCfg {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DatabaseCfg {
     pub url: String,
+    /// 数据库连接池上限（默认 16）。启动类参数：env `NEXTAPI_DB_MAX_CONNECTIONS` > YAML；
+    /// 不提供 UI 编辑（连接池在设置引擎之前建立，与 database.url 同属自举矛盾）。
+    /// 钳制到 1–256。
+    pub max_connections: u32,
+}
+
+impl Default for DatabaseCfg {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            max_connections: 16,
+        }
+    }
 }
 
 /// hot 类：网关运行参数（全部 UI 可配、热生效）。
@@ -134,10 +153,18 @@ pub struct GatewayCfg {
     /// M11.3 Key 级粘性路由：同 Key 同模型固定落到同优先级组内最近成功的上游
     /// （便于利用上游缓存）；pinned 上游不可用（禁用/熔断/缺能力）自动回落加权随机。
     pub sticky_routing: bool,
-    /// 渠道自动禁用（熔断）总开关：连续失败达 breaker_threshold → 自动禁用 + 冷却 + 半开探活。
-    /// false = 全局关闭（渠道永不自动禁用，失败只记日志并照常重试/故障转移）；
-    /// 单个渠道可用 extra.auto_disable=false 单独关闭；手动禁用不受影响。
+    /// 渠道自动禁用（熔断）总开关：**默认 false**（不自动禁用任何渠道，失败只记日志并照常
+    /// 重试/故障转移）；置 true 后才按 breaker_threshold 自动禁用 + 冷却 + 半开探活，
+    /// 且单个渠道仍可用 extra.auto_disable=false 单独排除。手动禁用不受本开关影响。
     pub auto_disable_upstreams: bool,
+    /// 单请求体上限（MiB，默认 100）。网关把请求体整体读入内存再解析，
+    /// 调低可显著压低大 body（多图 base64 等）请求的内存峰值。
+    /// ⚠️ 仅启动时生效（改动需重启）；钳制到 1–1024。
+    pub max_body_mb: u64,
+    /// 管理员密码 argon2 的内存成本（KiB，默认 19456 = 19 MiB）。
+    /// 只影响**新生成**的哈希（改密 / 首次种子）——登录校验按库里哈希自带的参数分配，
+    /// 因此调低后需改一次密码才会让登录峰值下降。钳制到 8192–1048576（安全性下限）。
+    pub argon2_memory_kib: u32,
 }
 
 impl Default for GatewayCfg {
@@ -166,7 +193,9 @@ impl Default for GatewayCfg {
             quota_check_cache_secs: 3,
             quota_exceed_action: "block".into(),
             sticky_routing: false,
-            auto_disable_upstreams: true,
+            auto_disable_upstreams: false,
+            max_body_mb: 100,
+            argon2_memory_kib: 19_456,
         }
     }
 }
@@ -474,6 +503,28 @@ pub fn hot_flat(hot: &HotConfig) -> Vec<(String, serde_json::Value)> {
     out
 }
 
+/// 单请求体上限字节数（1–1024 MiB，越界钳制；默认 100 MiB 与旧行为一致）。
+pub fn body_limit_bytes(max_body_mb: u64) -> usize {
+    (max_body_mb.clamp(1, 1024) as usize) * 1024 * 1024
+}
+
+/// argon2 内存成本钳制（KiB，8192–1048576）。
+pub fn clamp_argon2_memory_kib(v: u32) -> u32 {
+    v.clamp(8 * 1024, 1024 * 1024)
+}
+
+/// 数据库连接池上限钳制（1–256）。
+pub fn clamp_pool_max_connections(v: u32) -> u32 {
+    v.clamp(1, 256)
+}
+
+/// 连接池上限取值优先级：env > UI > YAML。三者逐个尝试解析（空串/非法值跳过），
+/// 都不可用时用 YAML 值，最终钳制到 1–256。
+pub fn resolve_pool_max_connections(env: Option<&str>, ui: Option<&str>, yaml: u32) -> u32 {
+    let parse = |v: Option<&str>| v.and_then(|s| s.trim().parse::<u32>().ok());
+    clamp_pool_max_connections(parse(env).or_else(|| parse(ui)).unwrap_or(yaml))
+}
+
 /// 沿点分路径写入新值；路径段为空、中间键缺失或中间值非对象 → UnknownKey。
 fn set_json_path(
     value: &mut serde_json::Value,
@@ -636,6 +687,59 @@ pub fn watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_disable_off_by_default() {
+        // 渠道自动禁用默认关闭：默认不自动禁用任何渠道（需手动在系统设置打开）；
+        // 同时保证新键进入 hot 键空间（UI 可读可写）
+        let flat = hot_flat(&HotConfig::default());
+        let map: std::collections::BTreeMap<_, _> = flat.into_iter().collect();
+        assert_eq!(
+            map.get("gateway.auto_disable_upstreams").unwrap(),
+            &serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn memory_knobs_defaults_and_clamps() {
+        // 默认值与旧行为一致：请求体 100 MiB、argon2 内存 19456 KiB、连接池 16
+        let map: std::collections::BTreeMap<_, _> =
+            hot_flat(&HotConfig::default()).into_iter().collect();
+        assert_eq!(
+            map.get("gateway.max_body_mb").unwrap(),
+            &serde_json::json!(100)
+        );
+        assert_eq!(
+            map.get("gateway.argon2_memory_kib").unwrap(),
+            &serde_json::json!(19_456)
+        );
+        assert_eq!(DatabaseCfg::default().max_connections, 16);
+
+        // 钳制：请求体 1–1024 MiB
+        assert_eq!(body_limit_bytes(0), 1024 * 1024);
+        assert_eq!(body_limit_bytes(100), 100 * 1024 * 1024);
+        assert_eq!(body_limit_bytes(u64::MAX), 1024 * 1024 * 1024);
+        // 钳制：argon2 8192–1048576 KiB、连接池 1–256
+        assert_eq!(clamp_argon2_memory_kib(1), 8 * 1024);
+        assert_eq!(clamp_argon2_memory_kib(19_456), 19_456);
+        assert_eq!(clamp_argon2_memory_kib(u32::MAX), 1024 * 1024);
+        assert_eq!(clamp_pool_max_connections(0), 1);
+        assert_eq!(clamp_pool_max_connections(16), 16);
+        assert_eq!(clamp_pool_max_connections(9_999), 256);
+    }
+
+    #[test]
+    fn pool_max_connections_precedence_env_ui_yaml() {
+        // env > UI > YAML
+        assert_eq!(resolve_pool_max_connections(Some("4"), Some("8"), 16), 4);
+        assert_eq!(resolve_pool_max_connections(None, Some("8"), 16), 8);
+        assert_eq!(resolve_pool_max_connections(None, None, 16), 16);
+        // 非法/空值逐级回落，最终结果钳制
+        assert_eq!(resolve_pool_max_connections(Some("x"), Some("8"), 16), 8);
+        assert_eq!(resolve_pool_max_connections(Some(" "), Some(""), 16), 16);
+        assert_eq!(resolve_pool_max_connections(Some("9999"), None, 16), 256);
+        assert_eq!(resolve_pool_max_connections(Some("0"), None, 16), 1);
+    }
 
     #[test]
     fn hot_flat_keys_and_values() {

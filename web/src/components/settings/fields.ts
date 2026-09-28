@@ -57,6 +57,14 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     default: 'postgres://nextapi:nextapi@localhost:5432/nextapi',
     help: 'Postgres 连接串。启动类，需重启；优先级 env DATABASE_URL > UI > YAML。默认 postgres://nextapi:nextapi@localhost:5432/nextapi',
   },
+  'database.max_connections': {
+    label: '数据库连接池',
+    type: 'number',
+    min: 1,
+    max: 256,
+    default: 16,
+    help: 'PostgreSQL 连接池上限。启动类，保存后需重启生效；优先级 env NEXTAPI_DB_MAX_CONNECTIONS > UI > YAML。内存吃紧可调低（每条连接都有收发缓冲与语句缓存），高并发可调高。默认 16',
+  },
 
   // —— gateway 网关运行参数 ——
   'gateway.default_rate_limit_rpm': {
@@ -226,11 +234,29 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     default: false,
     help: '同一 Key 同模型固定落到最近成功的上游（便于利用上游缓存）；pinned 上游不可用自动回落加权随机。默认 false',
   },
+  'gateway.max_body_mb': {
+    label: '请求体上限',
+    type: 'number',
+    min: 1,
+    max: 1024,
+    unit: 'MiB',
+    default: 100,
+    help: '单请求体上限。请求体会整体读入内存再解析，调低可明显压低大 body（多图 base64 等）请求的内存峰值，代价是超大请求会被拒（413）。仅启动时生效（改动需重启）。默认 100',
+  },
+  'gateway.argon2_memory_kib': {
+    label: 'Argon2 内存成本',
+    type: 'number',
+    min: 8192,
+    max: 1048576,
+    unit: 'KiB',
+    default: 19456,
+    help: '管理员密码 argon2 哈希的内存成本（默认 19456 KiB = 19 MiB）。调低可减小登录/改密时的内存峰值；只作用于新生成的哈希，调低后需改一次密码才见效（登录校验按库中哈希自带参数分配）。范围 8192–1048576',
+  },
   'gateway.auto_disable_upstreams': {
     label: '渠道自动禁用',
     type: 'boolean',
-    default: true,
-    help: '连续失败达阈值的上游自动禁用 + 冷却 + 半开探活（熔断）。关闭后所有渠道都不会被自动禁用，失败只记日志并照常重试/故障转移；单个渠道可在渠道表单里单独关闭。手动禁用不受影响。默认 true',
+    default: false,
+    help: '默认关闭：不自动禁用任何渠道，失败只记日志并照常重试/故障转移。打开后，连续失败达阈值的渠道自动禁用 + 冷却 + 半开探活（熔断），单个渠道可在渠道表单里用「自动禁用」开关排除。手动禁用不受本开关影响',
   },
   'gateway.quota_exceed_action': {
     label: '超配额动作',
@@ -476,6 +502,7 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
       'gateway.default_timeout_secs',
       'gateway.stream_timeout_secs',
       'gateway.anthropic_default_max_tokens',
+      'gateway.max_body_mb',
     ],
   },
   {
@@ -485,6 +512,7 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
     keys: [
       'gateway.default_rate_limit_rpm',
       'gateway.admin_login_rate_limit_per_min',
+      'gateway.argon2_memory_kib',
       'gateway.quota_check_cache_secs',
       'gateway.quota_exceed_action',
     ],
@@ -492,8 +520,9 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
   {
     id: 'scn-logging',
     title: '日志与审计',
-    desc: '落库、队列、WAL 与保留',
+    desc: '落库、队列、WAL、连接池与保留',
     keys: [
+      'database.max_connections',
       'gateway.log_async',
       'gateway.log_queue_capacity',
       'gateway.batch_insert_interval_ms',

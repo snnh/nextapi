@@ -207,7 +207,7 @@ export interface UpstreamExtra {
   /**
    * 渠道自动禁用开关：缺省（或 true）= 允许被熔断自动禁用；false = 该渠道永不自动禁用
    * （连续失败不累计、不冷却、不写 disabled_by='auto'，仍在候选池；手动禁用不受影响）。
-   * 需全局 gateway.auto_disable_upstreams 开启才可能生效。
+   * 全局 gateway.auto_disable_upstreams 默认关闭，打开后本开关才有意义。
    */
   auto_disable?: boolean | null
   /**

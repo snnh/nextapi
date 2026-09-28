@@ -37,6 +37,28 @@ mod upstream;
 
 use state::AppState;
 
+/// 启动早期读取某个启动类键的 UI 保存值（用于连接池这类「先于设置引擎」的参数）。
+///
+/// 设置引擎还没起来，这里用一次性连接直查 `system_settings`：库/表还不存在（首次启动尚未
+/// 迁移）或查询失败都返回 None，由调用方按 env > UI > YAML 的优先级回落。值是 JSONB，
+/// 字符串与数字都接受。
+async fn read_ui_startup_value(db_url: &str, key: &str) -> Option<String> {
+    use sqlx::Connection;
+    let mut conn = sqlx::PgConnection::connect(db_url).await.ok()?;
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT value FROM system_settings WHERE key = $1 AND source = 'ui'")
+            .bind(key)
+            .fetch_optional(&mut conn)
+            .await
+            .ok()?;
+    let _ = conn.close().await;
+    match row?.0 {
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -65,11 +87,21 @@ async fn main() -> anyhow::Result<()> {
     if db_url.is_empty() {
         anyhow::bail!("数据库未配置：请设置 DATABASE_URL 或 config.yaml 的 database.url");
     }
+    // 连接池上限：env NEXTAPI_DB_MAX_CONNECTIONS > UI > YAML。连接池必须先于设置引擎
+    // 建立（自举矛盾，与 database.url 同理），因此 UI 保存值在这里用一次性连接直接读；
+    // 保存后**下次启动**生效（设置页标注 restart_required）。非法值逐级回落，最终钳制 1–256。
+    let db_max_connections = config::resolve_pool_max_connections(
+        std::env::var("NEXTAPI_DB_MAX_CONNECTIONS").ok().as_deref(),
+        read_ui_startup_value(&db_url, "database.max_connections")
+            .await
+            .as_deref(),
+        cfg.database.max_connections,
+    );
     // PG 可能尚未就绪（compose 健康门外竞态/升级重启）：指数退避重试约 30s
     let pool = {
         let mut attempt = 0u32;
         loop {
-            match db::connect(&db_url).await {
+            match db::connect(&db_url, db_max_connections).await {
                 Ok(p) => break p,
                 Err(e) => {
                     attempt += 1;
@@ -339,6 +371,8 @@ async fn main() -> anyhow::Result<()> {
 
     // 7. 路由（state 之后被 with_state 消费，先保留 log_sink 供优雅关闭）
     let log_sink_for_close = state.log_sink.clone();
+    // 请求体上限（启动时固化：DefaultBodyLimit 是静态层，改动需重启）
+    let max_body_mb = state.hot.load().gateway.max_body_mb.clamp(1, 1024);
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -363,11 +397,16 @@ async fn main() -> anyhow::Result<()> {
         // M8：管理后台静态资源（web/dist 内嵌；SPA fallback）
         .fallback(embed::spa_fallback)
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        // 单请求体上限 100 MiB（发布审阅 M7：16MiB 会误拒多图 base64 请求）；
+        // 单请求体上限：gateway.max_body_mb（默认 100 MiB，见 config.example.yaml；
+        // 发布审阅 M7：16MiB 会误拒多图 base64 请求）。请求体是整体读入内存的，
+        // 内存吃紧可调低。取「引擎合并后」的 hot（UI > YAML），启动时生效；
+        // 413 文案用同一个值，避免与实际生效上限不一致。
         // map_response 把提取器产生的 413（纯文本、无 request_id）塑形为统一
         // JSON 错误体 + x-request-id。
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
-        .layer(middleware::map_response(shape_payload_too_large))
+        .layer(DefaultBodyLimit::max(config::body_limit_bytes(max_body_mb)))
+        .layer(middleware::map_response(move |resp| async move {
+            shape_payload_too_large(resp, max_body_mb)
+        }))
         .with_state(state);
 
     let addr: SocketAddr = listen
@@ -417,16 +456,21 @@ async fn main() -> anyhow::Result<()> {
 
 /// 413 塑形（map_response）：提取器拒绝产生的纯文本 413 → 统一 JSON 错误体
 /// + x-request-id（发布审阅 M7）。其余状态原样放行。
-async fn shape_payload_too_large(resp: axum::response::Response) -> axum::response::Response {
+fn shape_payload_too_large(
+    resp: axum::response::Response,
+    max_body_mb: u64,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
     if resp.status() != axum::http::StatusCode::PAYLOAD_TOO_LARGE {
         return resp;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
+    // 上限值来自配置（gateway.max_body_mb），不要写死——文案要跟实际生效值一致
+    let mb = max_body_mb.clamp(1, 1024);
     let mut out = (
         axum::http::StatusCode::PAYLOAD_TOO_LARGE,
         axum::Json(crate::error::error_body(
-            "请求体超过大小限制 100MiB",
+            format!("请求体超过大小限制 {mb} MiB"),
             None,
             &request_id,
         )),

@@ -199,14 +199,30 @@ function cloneVal(v: Val): Val {
   return Array.isArray(v) ? [...v] : v
 }
 
+/**
+ * 数值型字段的值归一：启动类键在库里按字符串存（如 database.max_connections = "16"），
+ * 若元数据标了 number 就转成数字，否则 el-input-number 会显示空白。
+ */
+function normalizeVal(key: string, v: Val): Val {
+  if (
+    SETTING_FIELDS[key]?.type === 'number' &&
+    typeof v === 'string' &&
+    v.trim() !== '' &&
+    Number.isFinite(Number(v))
+  ) {
+    return Number(v)
+  }
+  return cloneVal(v)
+}
+
 function syncFromProps() {
   for (const k of Object.keys(local)) delete local[k]
   for (const k of Object.keys(secretVals)) delete secretVals[k]
   for (const k of Object.keys(tagInput)) delete tagInput[k]
   for (const k of Object.keys(originalVals)) delete originalVals[k]
   for (const it of props.settings) {
-    local[it.key] = cloneVal(it.value)
-    originalVals[it.key] = cloneVal(it.value)
+    local[it.key] = normalizeVal(it.key, it.value)
+    originalVals[it.key] = normalizeVal(it.key, it.value)
     secretVals[it.key] = ''
     tagInput[it.key] = ''
   }

@@ -37,6 +37,9 @@ server:
 database:
   # 数据库连接串。启动类参数，env DATABASE_URL > UI > YAML。
   url: "postgres://nextapi:nextapi@localhost:5432/nextapi"
+  # 连接池上限（1–256，默认 16）。启动类参数：env NEXTAPI_DB_MAX_CONNECTIONS > UI > YAML，
+  # 界面修改后需重启生效。内存吃紧可调低（每条连接都有收发缓冲与语句缓存），高并发可调高。
+  max_connections: 16
 
 # -----------------------------------------------------------------------------
 # hot 类：网关运行参数（改文件即热生效；UI 保存值优先）
@@ -63,15 +66,21 @@ gateway:
   admin_login_expire_minutes: 1440  # 管理端登录 JWT 有效期（分钟，1–43200）。到期需重新登录
                                     # （含 TOTP）。仅对新签发 token 生效，已发 token 到期时间不变。
   anthropic_default_max_tokens: 65536 # 转 Anthropic 缺省 max_tokens（64k）
+  max_body_mb: 100                  # 单请求体上限（MiB，1–1024）。请求体整体读入内存后解析，
+                                    # 调低可压低大 body（多图 base64）请求的内存峰值，代价是
+                                    # 超大请求被拒（413）。⚠️ 仅启动时生效（改动需重启）
+  argon2_memory_kib: 19456          # 管理员密码 argon2 内存成本（KiB，8192–1048576，默认 19 MiB）。
+                                    # 调低可减小登录/改密时的内存峰值；只影响新生成的哈希，
+                                    # 调低后需改一次密码才见效（登录校验按库中哈希自带参数）
   batch_insert_interval_ms: 500     # 批量写库批次间隔
   quota_check_cache_secs: 3         # 用量上限聚合结果缓存秒数
   quota_exceed_action: "block"      # block=429 硬阻断 | warn=仅日志告警
   sticky_routing: false             # Key 粘性路由：同 Key 同模型固定落到最近成功上游
                                     #（便于利用上游缓存；pinned 不可用自动回落加权随机）
-  auto_disable_upstreams: true      # 渠道自动禁用（熔断）：连续失败达 breaker_threshold
-                                    # → 自动禁用 + 冷却 + 半开探活（关闭后渠道永不自动禁用，
-                                    # 失败只记日志并照常重试/故障转移）。单个渠道可用
-                                    # extra.auto_disable=false 单独关闭；手动禁用不受影响
+  auto_disable_upstreams: false     # 渠道自动禁用（熔断）：默认关闭，不会自动禁用任何渠道。
+                                    # 置 true 后，连续失败达 breaker_threshold 的渠道自动禁用 +
+                                    # 冷却 + 半开探活；单个渠道可用 extra.auto_disable=false 排除。
+                                    # 手动禁用不受本开关影响
 
 # -----------------------------------------------------------------------------
 # seed 类：管理员账号（仅首次初始化写入 DB）
