@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.11] - 2026-09-28
 
 ### ⚠️ Breaking
 - **统计报表 Token 口径改为「含缓存全量」**：`/api/stats/summary`、`/api/stats/series`、
