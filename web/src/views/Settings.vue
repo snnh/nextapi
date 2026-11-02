@@ -1,5 +1,9 @@
 <template>
   <div class="page" v-loading="settingsLoading">
+    <div class="page-head">
+      <p class="page-desc">运行参数、代理、更新检查、审计与安全设置；热生效项保存后立即应用，标注「需重启」的项需重启服务。</p>
+    </div>
+
     <div class="page-card tabs-card">
       <!-- 初始加载失败：错误条 + 重试 -->
       <el-alert v-if="loadError" class="load-error" type="error" show-icon :closable="false">

@@ -140,7 +140,7 @@ async function check() {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .summary-grid {
   display: grid;
@@ -152,16 +152,16 @@ async function check() {
   flex-direction: column;
   gap: 4px;
   padding: 8px 12px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 6px;
 }
 .summary-label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .summary-value {
   font-size: 14px;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   word-break: break-all;
 }
 .check-btn {
@@ -169,7 +169,7 @@ async function check() {
 }
 .hint {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .version-row {
   display: flex;
@@ -185,15 +185,15 @@ async function check() {
 }
 .version-sub {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .version-big {
   font-size: 24px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .version-arrow {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 .version-tag {
   font-size: 15px;
@@ -210,7 +210,7 @@ async function check() {
 .notes-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .notes-pre {
   margin: 0;
@@ -219,7 +219,7 @@ async function check() {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.7;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   padding: 12px;
   border-radius: 6px;
   max-height: 360px;

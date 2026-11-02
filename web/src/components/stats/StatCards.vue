@@ -124,7 +124,7 @@ const cards = computed<CardItem[]>(() => {
 
 .stat-label {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   margin-bottom: 8px;
   white-space: nowrap;
   overflow: hidden;
@@ -134,7 +134,7 @@ const cards = computed<CardItem[]>(() => {
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
   white-space: nowrap; /* 大数字单行溢出省略，防破卡 */
   overflow: hidden;
@@ -153,7 +153,7 @@ const cards = computed<CardItem[]>(() => {
 
 .stat-value.delay b {
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 
 .stat-sub {

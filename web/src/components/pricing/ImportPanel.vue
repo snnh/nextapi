@@ -245,7 +245,7 @@ async function confirmImport() {
 .card-head {
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .import-action {
   display: flex;
@@ -256,6 +256,6 @@ async function confirmImport() {
 }
 .import-label {
   font-size: 13px;
-  color: #4b5563;
+  color: var(--el-text-color-regular);
 }
 </style>

@@ -94,15 +94,15 @@ function clear() {
 }
 .mc-unit-hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--el-text-color-secondary);
 }
 .mc-op {
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .mc-result {
   font-size: 15px;
   font-weight: 600;
-  color: #409eff;
+  color: var(--el-color-primary);
   font-variant-numeric: tabular-nums;
 }
 .mc-actions {

@@ -172,12 +172,12 @@ function removeRow(g: GroupKey, i: number) {
   border-radius: 6px;
   padding: 10px;
   margin-bottom: 10px;
-  background: #fafafa;
+  background: var(--el-fill-color-lighter);
 }
 .ov-group-head {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   margin-bottom: 8px;
 }
 .ov-row {
@@ -200,14 +200,14 @@ function removeRow(g: GroupKey, i: number) {
   font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
 }
 .ov-warn {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
   font-size: 12px;
   margin: -4px 0 8px;
 }
 .ov-key-dup :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px #f56c6c inset;
+  box-shadow: 0 0 0 1px var(--el-color-danger) inset;
 }
 .ov-key-empty :deep(.el-input__wrapper) {
-  box-shadow: 0 0 0 1px #e6a23c inset;
+  box-shadow: 0 0 0 1px var(--el-color-warning) inset;
 }
 </style>

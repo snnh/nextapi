@@ -217,7 +217,7 @@ async function load(probe: boolean) {
   flex-wrap: wrap;
 }
 .hint {
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -227,7 +227,7 @@ async function load(probe: boolean) {
 .meta {
   display: flex;
   gap: 16px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-bottom: 8px;
 }

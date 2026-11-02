@@ -137,7 +137,7 @@ function jsonOf(v: unknown): string {
   gap: 24px;
   margin-top: 14px;
   padding: 12px 16px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 8px;
 }
 .total-item {
@@ -147,12 +147,12 @@ function jsonOf(v: unknown): string {
 }
 .total-label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .total-amount {
   font-size: 20px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   font-variant-numeric: tabular-nums;
 }
 .json-pre {

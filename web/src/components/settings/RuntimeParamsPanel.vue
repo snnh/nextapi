@@ -150,9 +150,9 @@
 
             <div class="setting-source">
               <el-tooltip v-if="isEnv(it)" placement="top" content="环境变量覆盖，仅启动时读取">
-                <el-tag :type="sourceType(it.source)" size="small" effect="plain">{{ sourceLabel(it.source) }}</el-tag>
+                <span class="source-text is-env">{{ sourceLabel(it.source) }}</span>
               </el-tooltip>
-              <el-tag v-else :type="sourceType(it.source)" size="small" effect="plain">{{ sourceLabel(it.source) }}</el-tag>
+              <span v-else class="source-text" :class="`is-${it.source}`">{{ sourceLabel(it.source) }}</span>
             </div>
           </div>
         </el-collapse-item>
@@ -342,11 +342,6 @@ function isEnv(it: SettingItem): boolean {
 }
 function sourceLabel(src: SettingItem['source']): string {
   return src
-}
-function sourceType(src: SettingItem['source']): 'primary' | 'success' | 'warning' {
-  if (src === 'file') return 'primary'
-  if (src === 'ui') return 'success'
-  return 'warning'
 }
 
 interface EnumOption {
@@ -611,15 +606,15 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   flex-shrink: 0;
 }
 .toolbar .hint {
-  font-size: 12px;
-  color: #6b7280;
+  font-size: var(--el-font-size-extra-small);
+  color: var(--el-text-color-secondary);
 }
 .toolbar .spacer {
   flex: 1;
 }
 .source-stats {
-  font-size: 12px;
-  color: #6b7280;
+  font-size: var(--el-font-size-extra-small);
+  color: var(--el-text-color-secondary);
 }
 
 .group-collapse {
@@ -627,9 +622,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 }
 .group-collapse :deep(.el-collapse-item__header) {
   height: 44px;
-  font-size: 14px;
+  font-size: var(--el-font-size-base);
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .group-collapse :deep(.el-collapse-item__content) {
   padding: 0 8px 8px;
@@ -639,9 +634,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   align-items: center;
 }
 .group-desc {
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
   font-weight: 400;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-left: 10px;
   white-space: nowrap;
   overflow: hidden;
@@ -649,9 +644,9 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   max-width: 320px;
 }
 .group-count {
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
   font-weight: 400;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   margin-left: 10px;
 }
 
@@ -660,15 +655,15 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   align-items: flex-start;
   gap: 16px;
   padding: 10px 12px;
-  border-bottom: 1px solid #f0f2f5;
-  border-radius: 6px;
-  transition: background-color 0.3s ease;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
+  transition: background-color var(--el-transition-duration) ease;
 }
 .setting-row:last-child {
   border-bottom: none;
 }
 .setting-row.row-flash {
-  background-color: #fff7e6;
+  background-color: var(--el-color-warning-light-9);
 }
 .setting-label {
   flex: 1;
@@ -680,19 +675,19 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 }
 .key-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  color: #6b7280;
-  background: #f5f7fa;
-  border-radius: 4px;
+  font-size: var(--el-font-size-extra-small);
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  border-radius: var(--el-border-radius-small);
   padding: 1px 6px;
   white-space: nowrap;
 }
 .label-text {
-  font-size: 14px;
-  color: #1f2329;
+  font-size: var(--el-font-size-base);
+  color: var(--el-text-color-primary);
 }
 .help-icon {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
   cursor: help;
 }
 .setting-control {
@@ -709,8 +704,8 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   width: 100%;
 }
 .unit-text {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--el-font-size-extra-small);
+  color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
 .restore-btn {
@@ -720,6 +715,17 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   width: 70px;
   flex-shrink: 0;
   text-align: right;
+}
+.source-text {
+  font-size: var(--el-font-size-extra-small);
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.source-text.is-ui {
+  color: var(--el-color-success);
+}
+.source-text.is-env {
+  color: var(--el-color-warning-dark-2);
 }
 .tags-editor {
   display: flex;
@@ -746,19 +752,19 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   gap: 12px;
   padding: 12px 4px;
   margin-top: 16px;
-  background: #fff;
-  border-top: 1px solid #ebeef5;
+  background: var(--el-bg-color);
+  border-top: 1px solid var(--el-border-color-lighter);
   box-shadow: 0 -3px 10px rgba(31, 35, 41, 0.06);
 }
 .savebar .spacer {
   flex: 1;
 }
 .dirty-count {
-  font-size: 13px;
-  color: #909399;
+  font-size: var(--el-font-size-small);
+  color: var(--el-text-color-secondary);
 }
 .dirty-count.is-dirty {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
   font-weight: 600;
 }
 

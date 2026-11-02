@@ -1,11 +1,8 @@
 <template>
   <div class="page" v-loading="pageLoading">
-    <div class="page-intro">
-      <div>
-        <h2>模型</h2>
-        <p>按对外模型名查看可调用情况（上游、价格、别名、健康度），或切换到路由视图编辑转发规则。</p>
-      </div>
-      <div class="intro-summary">
+    <div class="page-head">
+      <p class="page-desc">按对外模型名查看可调用情况（上游、价格、别名、健康度），或切换到路由视图编辑转发规则。</p>
+      <div class="page-head-summary">
         <span><b>{{ uniqueModelCount }}</b> 个模型</span>
         <span><b>{{ drafts.length }}</b> 条路由</span>
         <span><b>{{ enabledCount }}</b> 条启用</span>
@@ -75,7 +72,7 @@
 
     <!-- ===== 模型视图：按对外模型名聚合 ===== -->
     <el-card v-if="!listError && viewMode === 'models'" shadow="never">
-      <el-table :data="filteredOverviewRows" border v-loading="pageLoading">
+      <el-table :data="filteredOverviewRows" v-loading="pageLoading">
         <template #empty>
           <el-empty :description="modelsEmptyText">
             <el-button type="primary" :icon="Plus" @click="openCreate">新增路由</el-button>
@@ -965,50 +962,21 @@ function computeDiff(): { added: number; modified: number; deleted: number } {
 </script>
 
 <style scoped>
-.page-intro {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 16px;
-}
-.page-intro h2 { margin: 0; color: #1f2329; font-size: 20px; }
-.page-intro p { margin: 6px 0 0; color: #6b7280; font-size: 13px; }
-.intro-summary { display: flex; gap: 18px; color: #6b7280; font-size: 13px; white-space: nowrap; }
-.intro-summary b { color: #1f2329; font-size: 16px; margin-right: 3px; }
-@media (max-width: 768px) {
-  .page-intro { flex-direction: column; }
-  .intro-summary { white-space: normal; }
-}
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 /* 窄屏折到主行下方的副信息（上游名等） */
 .sub-line {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
   line-height: 1.5;
   word-break: break-all;
 }
 .text-warn {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
 }
 .text-error {
-  color: #f56c6c;
-}
-.error-state {
-  padding: 30px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-.error-msg {
-  margin: 0;
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
-  word-break: break-all;
+  color: var(--el-color-danger);
 }
 .cell-inline {
   display: inline-flex;

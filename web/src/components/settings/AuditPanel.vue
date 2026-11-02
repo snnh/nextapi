@@ -184,10 +184,10 @@ onMounted(load)
 }
 .hint {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -204,7 +204,7 @@ onMounted(load)
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   padding: 12px;
   border-radius: 6px;
   max-height: 60vh;

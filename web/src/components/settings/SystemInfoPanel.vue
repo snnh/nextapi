@@ -394,14 +394,14 @@ onBeforeUnmount(() => {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .hint {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .pwd-hint {
   margin: 0 0 12px;
@@ -419,7 +419,7 @@ onBeforeUnmount(() => {
 .notes-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .config-pre {
   margin: 0;
@@ -428,7 +428,7 @@ onBeforeUnmount(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   padding: 12px;
   border-radius: 6px;
   max-height: 420px;

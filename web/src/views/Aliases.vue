@@ -1,19 +1,20 @@
 <template>
   <div class="page" v-loading="pageLoading">
+    <div class="page-head">
+      <p class="page-desc">客户端可用别名请求模型，网关按实际模型路由、计费。白名单按实际模型判定；日志保留入口别名与实际模型。</p>
+    </div>
+
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建别名</el-button>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-input
         v-model="keyword"
+        class="search-input"
         placeholder="搜索别名 / 实际模型"
         clearable
         :prefix-icon="Search"
-        style="width: 240px"
       />
       <div class="spacer" />
-      <div class="hint" style="max-width: 620px">
-        客户端可用别名请求模型，网关按实际模型路由、计费。白名单按实际模型判定；日志保留入口别名与实际模型。
-      </div>
     </div>
 
     <el-card shadow="never">
@@ -22,7 +23,7 @@
         <el-button type="primary" :icon="Refresh" @click="load">重新加载</el-button>
       </div>
       <template v-else>
-      <el-table :data="pagedItems" :row-key="(row: ModelAliasRow) => row.id" border>
+      <el-table :data="pagedItems" :row-key="(row: ModelAliasRow) => row.id">
         <template #empty>
           <el-empty :description="emptyText" />
         </template>
@@ -43,6 +44,7 @@
             <el-switch
               v-model="row.enabled"
               :loading="togglingSet.has(row.id)"
+              :aria-label="`启用别名 ${row.alias}`"
               @change="(val: boolean) => toggleEnabled(row, val)"
             />
           </template>
@@ -351,25 +353,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
   display: flex;
   justify-content: flex-end;
 }
+.search-input {
+  width: 240px;
+  max-width: 100%;
+}
 /* 窄屏折到别名下方的实际模型名 */
 .sub-line {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
   line-height: 1.5;
-  word-break: break-all;
-}
-.error-state {
-  padding: 30px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-.error-msg {
-  margin: 0;
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
   word-break: break-all;
 }
 </style>

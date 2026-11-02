@@ -222,21 +222,21 @@ onBeforeUnmount(() => {
   color: #529b2e;
 }
 .status-ok .dot {
-  background: #67c23a;
+  background: var(--el-color-success);
 }
 .status-warn {
   background: #fdf6ec;
   color: #b88230;
 }
 .status-warn .dot {
-  background: #e6a23c;
+  background: var(--el-color-warning);
 }
 .status-error {
   background: #fef0f0;
   color: #c45656;
 }
 .status-error .dot {
-  background: #f56c6c;
+  background: var(--el-color-danger);
 }
 @media (max-width: 768px) {
   .status-badge .label {
@@ -253,7 +253,7 @@ onBeforeUnmount(() => {
 .pop-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .rows {
   display: flex;
@@ -269,12 +269,12 @@ onBeforeUnmount(() => {
 .row .k {
   width: 72px;
   flex-shrink: 0;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .row .v {
   flex: 1;
   min-width: 0;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   word-break: break-all;
 }
 .row.errors .v {
@@ -289,17 +289,17 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 .err-model {
-  color: #4b5563;
+  color: var(--el-text-color-regular);
   flex-shrink: 0;
 }
 .err-msg {
-  color: #9ca3af;
+  color: var(--el-text-color-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .hint {
-  color: #9ca3af;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 .mono {

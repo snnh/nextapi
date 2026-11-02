@@ -512,7 +512,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 .proxy-panel .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -529,7 +529,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
   width: 220px;
 }
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 /* 窄屏折到名称下方的副信息（类型 · 地址） */
 .sub-line {
@@ -561,7 +561,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 }
 .hint {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   margin-top: 6px;
 }
 </style>

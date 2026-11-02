@@ -9,22 +9,68 @@ body,
 body {
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
-  background: #f4f5f7;
-  color: #1f2329;
+  background: var(--el-bg-color-page);
+  color: var(--el-text-color-primary);
+  font-size: var(--el-font-size-base);
   -webkit-font-smoothing: antialiased;
 }
 
-/* 通用页面容器：白底卡片 + 内边距 */
+/* 通用页面容器 */
 .page {
   padding: 20px;
 }
 
+/* 页面说明行：标题由顶栏负责，内容区只放说明与页级摘要/操作 */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.page-desc {
+  margin: 0;
+  max-width: 960px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--el-font-size-small);
+  line-height: 1.6;
+}
+
+.page-head-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--el-text-color-secondary);
+  font-size: var(--el-font-size-small);
+  line-height: 1.6;
+}
+
+.page-head-summary b {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 普通容器卡片（用于 div；el-card 请直接用 section-card，避免双内边距） */
 .page-card {
-  background: #fff;
-  border: 1px solid #e8eaee;
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: var(--el-card-border-radius);
   padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* el-card 的间距工具类：不叠加 padding */
+.section-card {
   margin-bottom: 16px;
 }
 
@@ -35,7 +81,7 @@ body {
 
 .toolbar {
   display: flex;
-  min-height: 32px;
+  min-height: var(--el-component-size);
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
@@ -48,8 +94,8 @@ body {
 
 /* 说明性灰色小字 */
 .hint {
-  color: #6b7280;
-  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--el-font-size-extra-small);
   line-height: 1.6;
 }
 
@@ -64,11 +110,57 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* 表格内 tag 组间距 */
+/* 表格内状态标签组间距 */
 .tag-group {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+/* 同一句里的内联元信息：文本 + 中点分隔，不用胶囊 */
+.meta-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+
+.meta-item {
+  color: var(--el-text-color-regular);
+  font-size: var(--el-font-size-extra-small);
+  white-space: nowrap;
+}
+
+.meta-item + .meta-item::before {
+  content: '·';
+  margin: 0 6px;
+  color: var(--el-text-color-placeholder);
+}
+
+.meta-text {
+  color: var(--el-text-color-regular);
+  font-size: var(--el-font-size-extra-small);
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* 通用错误/空态：各页面只保留布局差异 */
+.error-state {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.error-msg {
+  margin: 0;
+  max-width: 100%;
+  color: var(--el-color-danger);
+  font-size: var(--el-font-size-small);
+  line-height: 1.6;
+  text-align: center;
+  word-break: break-all;
 }
 
 /* 通用弹窗宽度 */
@@ -94,14 +186,43 @@ body {
   overflow-y: auto;
 }
 
+.el-card__header {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
 
-.page > .toolbar:first-child { padding: 2px 0 4px; }
-.el-card__header { font-weight: 600; color: #1f2329; }
+.page > .toolbar:first-child {
+  padding: 2px 0 4px;
+}
+
 @media (max-width: 768px) {
-  .page { padding: 12px; }
-  .page-card { padding: 14px; border-radius: 8px; }
-  .toolbar { align-items: stretch; }
-  .toolbar > .el-button, .toolbar > .el-input, .toolbar > .el-select { max-width: 100%; }
-  .toolbar .spacer { display: none; }
-  .el-table { font-size: 12px; }
+  .page {
+    padding: 12px;
+  }
+  .page-head {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .page-card {
+    padding: 14px;
+    border-radius: var(--el-border-radius-base);
+  }
+  .toolbar {
+    align-items: stretch;
+  }
+  .toolbar > .el-button,
+  .toolbar > .el-input,
+  .toolbar > .el-select {
+    max-width: 100%;
+  }
+  .toolbar .spacer {
+    display: none;
+  }
+  .el-table {
+    font-size: var(--el-font-size-small);
+  }
+  .meta-item,
+  .meta-text {
+    white-space: normal;
+  }
 }

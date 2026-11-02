@@ -248,7 +248,7 @@ defineExpose({ scrollToSeg })
   border: 1px solid #ebeef5;
   border-radius: 8px;
   padding: 12px;
-  background: #fafafa;
+  background: var(--el-fill-color-lighter);
 }
 .seg-card.seg-media {
   background: #fbf8ef;
@@ -281,7 +281,7 @@ defineExpose({ scrollToSeg })
   outline-offset: 1px;
 }
 .seg-caret {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   transition: transform 0.2s;
 }
@@ -291,7 +291,7 @@ defineExpose({ scrollToSeg })
 .seg-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   white-space: nowrap;
 }
 .seg-name {
@@ -318,13 +318,13 @@ defineExpose({ scrollToSeg })
 }
 .seg-label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   width: 76px;
   flex-shrink: 0;
 }
 /* 必填视觉标记（分段单价） */
 .seg-req {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   margin-right: 3px;
 }
 .seg-week {
@@ -354,13 +354,13 @@ defineExpose({ scrollToSeg })
   gap: 6px;
 }
 .seg-window-arrow {
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .seg-token {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #4b5563;
+  color: var(--el-text-color-regular);
 }
 </style>

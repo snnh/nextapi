@@ -136,7 +136,7 @@ function adopt(rule: PriceRuleRow) {
   margin-bottom: 10px;
   font-size: 13px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .suggest-error {
   display: flex;
@@ -168,7 +168,7 @@ function adopt(rule: PriceRuleRow) {
   font-weight: 600;
 }
 .suggest-u-name.is-other {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
 }
 .suggest-rule {
   display: flex;
@@ -189,14 +189,14 @@ function adopt(rule: PriceRuleRow) {
 }
 .suggest-price {
   font-size: 12px;
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 .suggest-segs {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .suggest-no-seg {
   font-size: 12px;
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 </style>

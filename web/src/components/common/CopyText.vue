@@ -4,7 +4,14 @@
       <span class="copy-text-value mono">{{ display }}</span>
     </el-tooltip>
     <el-tooltip content="复制" placement="top">
-      <el-icon class="copy-btn" role="button" aria-label="复制" @click.stop="onCopy"><CopyDocument /></el-icon>
+      <el-button
+        class="copy-btn"
+        link
+        :icon="CopyDocument"
+        aria-label="复制"
+        title="复制"
+        @click.stop="onCopy"
+      />
     </el-tooltip>
   </span>
 </template>
@@ -54,14 +61,20 @@ function onCopy() {
 }
 .copy-btn {
   flex-shrink: 0;
-  cursor: pointer;
-  color: #9ca3af;
-  font-size: 13px;
-  padding: 2px;
-  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--el-text-color-secondary);
+  border-radius: var(--el-border-radius-small);
 }
 .copy-btn:hover {
-  color: #1f2329;
-  background: #f3f4f6;
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-light);
+}
+@media (max-width: 768px) {
+  .copy-btn {
+    width: 32px;
+    height: 32px;
+  }
 }
 </style>

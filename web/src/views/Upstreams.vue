@@ -1,15 +1,12 @@
 <template>
   <div class="page" v-loading="pageLoading">
-    <!-- 页面标题与用途说明 -->
-    <div class="page-intro">
-      <h2>上游供应商</h2>
-      <p>接入并管理实际提供模型的供应商（上游）。接入完成后，到「模型路由」页把这些上游绑定给对外模型。</p>
-    </div>
-
-    <div class="toolbar">
-      <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">接入上游</el-button>
-      <el-button :icon="Plus" @click="openCreate">自定义上游</el-button>
-      <div class="spacer" />
+    <!-- 页面说明与页级操作：标题由顶栏统一负责 -->
+    <div class="page-head">
+      <p class="page-desc">接入并管理实际提供模型的供应商（上游）。接入完成后，到「模型路由」页把这些上游绑定给对外模型。</p>
+      <div class="page-head-actions">
+        <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">接入上游</el-button>
+        <el-button :icon="Plus" @click="openCreate">自定义上游</el-button>
+      </div>
     </div>
 
     <!-- 上游表格 -->
@@ -68,7 +65,7 @@
 
         <el-table-column v-if="!isNarrow" label="类型" width="140">
           <template #default="{ row }">
-            <el-tag size="small" type="info">{{ row.kind }}</el-tag>
+            <span class="meta-text">{{ row.kind }}</span>
           </template>
         </el-table-column>
 
@@ -82,50 +79,25 @@
 
         <el-table-column v-if="!isNarrow" label="协议" min-width="220">
           <template #default="{ row }">
-            <div class="tag-group">
+            <div class="meta-list">
               <template v-for="(proto, i) in row.protocols" :key="proto">
-                <el-tag
-                  v-if="i < 3 || expandedRows.has(row.id)"
-                  size="small"
-                  type="primary"
-                  effect="plain"
-                >
+                <span v-if="i < 3 || expandedRows.has(row.id)" class="meta-item">
                   {{ PROTOCOL_LABEL(proto) }}
-                </el-tag>
+                </span>
               </template>
               <el-tooltip
                 v-if="row.protocols.length > 3 && !expandedRows.has(row.id)"
                 content="展开全部协议"
                 placement="top"
               >
-                <el-tag
-                  size="small"
-                  type="info"
-                  class="clickable"
-                  role="button"
-                  tabindex="0"
-                  @click="toggleExpand(row.id)"
-                  @keyup.enter="toggleExpand(row.id)"
-                >
+                <el-button link size="small" @click="toggleExpand(row.id)">
                   +{{ row.protocols.length - 3 }}
-                </el-tag>
+                </el-button>
               </el-tooltip>
               <el-tooltip v-if="expandedRows.has(row.id)" content="收起" placement="top">
-                <el-tag
-                  size="small"
-                  type="info"
-                  class="clickable"
-                  role="button"
-                  tabindex="0"
-                  @click="toggleExpand(row.id)"
-                  @keyup.enter="toggleExpand(row.id)"
-                >
-                  收起
-                </el-tag>
+                <el-button link size="small" @click="toggleExpand(row.id)">收起</el-button>
               </el-tooltip>
-              <el-tag v-for="t in capsTags(row)" :key="t" size="small" type="warning" effect="plain">
-                {{ t }}
-              </el-tag>
+              <span v-for="t in capsTags(row)" :key="t" class="meta-item meta-cap">{{ t }}</span>
             </div>
           </template>
         </el-table-column>
@@ -173,6 +145,7 @@
             <el-switch
               v-model="row.enabled"
               :loading="togglingSet.has(row.id)"
+              :aria-label="`启用上游 ${row.name}`"
               @change="(val: boolean) => toggleEnabled(row, val)"
             />
           </template>
@@ -675,20 +648,6 @@ function closeRevealSecret() {
 </script>
 
 <style scoped>
-.page-intro {
-  margin-bottom: 16px;
-}
-.page-intro h2 {
-  margin: 0;
-  color: #1f2329;
-  font-size: 20px;
-}
-.page-intro p {
-  margin: 6px 0 0;
-  color: #6b7280;
-  font-size: 13px;
-  line-height: 1.6;
-}
 .empty-guide {
   display: flex;
   justify-content: center;
@@ -696,9 +655,9 @@ function closeRevealSecret() {
   padding: 6px 0 12px;
 }
 .empty-title {
-  font-size: 14px;
+  font-size: var(--el-font-size-base);
   font-weight: 500;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .empty-sub {
   margin-top: 4px;
@@ -718,20 +677,6 @@ function closeRevealSecret() {
 .status-inline {
   margin-top: 4px;
 }
-.error-state {
-  padding: 30px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-.error-msg {
-  margin: 0;
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
-  word-break: break-all;
-}
 .secret-view {
   display: flex;
   flex-direction: column;
@@ -739,15 +684,15 @@ function closeRevealSecret() {
   align-items: flex-start;
 }
 .secret-key {
-  font-size: 15px;
+  font-size: var(--el-font-size-medium);
   line-height: 1.5;
-  background: #f5f7fa;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color);
+  border-radius: var(--el-border-radius-base);
   padding: 12px 16px;
   width: 100%;
   box-sizing: border-box;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   word-break: break-all;
 }
 

@@ -282,25 +282,25 @@ function copyCurl() {
   margin: 18px 0 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .group-action {
   font-weight: 400;
 }
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 .hint {
   margin-top: 6px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   line-height: 1.7;
 }
 .code {
   margin: 8px 0;
   padding: 10px 12px;
-  background: #f7f8fa;
-  border: 1px solid #e8eaee;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-light);
   border-radius: 6px;
   font-size: 12px;
   line-height: 1.6;
@@ -308,10 +308,10 @@ function copyCurl() {
   word-break: break-all;
 }
 .text-error {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 .text-warn {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
 }
 .cell-inline {
   display: inline-flex;

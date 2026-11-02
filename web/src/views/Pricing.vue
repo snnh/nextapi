@@ -1,5 +1,9 @@
 <template>
   <div class="page" v-loading="pageLoading">
+    <div class="page-head">
+      <p class="page-desc">维护每个上游模型的输入、输出、缓存读写单价（按每百万 tokens）；支持分段、分时与图片/视频维度规则。</p>
+    </div>
+
     <div class="page-card tabs-card">
     <el-tabs v-model="activeTab" @tab-change="onTabChange">
       <!-- ===== Tab1 价格规则 ===== -->
@@ -7,19 +11,19 @@
         <div class="toolbar">
           <el-select
             v-model="filterUpstream"
+            class="filter-select"
             filterable
             clearable
             placeholder="按上游筛选"
-            style="width: 240px"
             @change="loadRules"
           >
             <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
           </el-select>
           <el-input
             v-model="filterModel"
+            class="filter-select"
             placeholder="按模型名过滤（本地搜索）"
             clearable
-            style="width: 240px"
           />
           <el-button type="primary" :icon="Search" @click="loadRules">查询</el-button>
           <el-button :icon="Refresh" @click="resetFilter">重置</el-button>
@@ -86,6 +90,7 @@
                           v-model="r.enabled"
                           size="small"
                           :loading="togglingSet.has(r.id)"
+                          :aria-label="`启用规则 ${r.model_id} ${UNIT_LABEL(r.unit)}`"
                           @change="(val: boolean) => toggleEnabled(r, val)"
                         />
                       </template>
@@ -817,25 +822,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 .preview-form-card {
   max-width: 900px;
 }
+.filter-select {
+  width: 240px;
+  max-width: 100%;
+}
 .table-foot {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   padding-top: 12px;
-}
-.error-state {
-  padding: 30px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-.error-msg {
-  margin: 0;
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
-  word-break: break-all;
 }
 .export-row {
   display: flex;
@@ -847,27 +842,27 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--el-font-size-base);
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .seg-tip {
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
   line-height: 1.6;
   white-space: nowrap;
 }
 /* 窄屏折到主行下方的副信息（单价行 / 已停用标记） */
 .sub-line {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
   line-height: 1.6;
 }
 .price-line + .price-line::before {
   content: ' · ';
-  color: #c0c4cc;
+  color: var(--el-text-color-placeholder);
 }
 .rule-expand {
   padding: 4px 16px 8px 48px;
-  background: #fafbfc;
+  background: var(--el-fill-color-lighter);
 }
 </style>

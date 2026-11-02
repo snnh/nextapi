@@ -1,17 +1,23 @@
 <template>
   <div class="page">
+    <div class="page-head">
+      <p class="page-desc">网关请求、成本与系统状态的实时概览；统计随下方时间范围刷新。</p>
+      <div class="page-head-summary">
+        <span v-if="updatedAt">更新于 {{ updatedAt }}</span>
+      </div>
+    </div>
+
     <div class="toolbar">
       <el-radio-group v-model="range">
         <el-radio-button value="today">今天</el-radio-button>
         <el-radio-button value="7d">近 7 天</el-radio-button>
       </el-radio-group>
       <div class="spacer" />
-      <el-radio-group v-model="currency" size="small">
+      <el-radio-group v-model="currency">
         <el-radio-button value="CNY">CNY</el-radio-button>
         <el-radio-button value="USD">USD</el-radio-button>
       </el-radio-group>
       <el-button :icon="Refresh" :loading="loading || statusLoading" @click="refreshAll">刷新</el-button>
-      <span v-if="updatedAt" class="hint updated-at">更新于 {{ updatedAt }}</span>
     </div>
 
     <!-- 加载失败提示：保留上一次数据，不再伪装成「无数据」 -->
@@ -531,9 +537,9 @@ watch([range, currency], () => loadAll())
   flex: 1;
 }
 .status-title {
-  font-size: 14px;
+  font-size: var(--el-font-size-base);
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .status-updated {
   white-space: nowrap;
@@ -563,18 +569,19 @@ watch([range, currency], () => loadAll())
   min-width: 0;
 }
 .kv-label {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--el-font-size-extra-small);
+  color: var(--el-text-color-secondary);
   margin-bottom: 4px;
 }
 .kv-value {
-  font-size: 15px;
+  font-size: var(--el-font-size-medium);
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 .kv-value .hint {
   font-weight: 400;
@@ -586,7 +593,7 @@ watch([range, currency], () => loadAll())
   font-weight: 600;
 }
 .is-warn {
-  color: #d4380d;
+  color: var(--el-color-danger);
 }
 .status-body :deep(.el-divider) {
   margin: 16px 0 12px;
@@ -601,25 +608,25 @@ watch([range, currency], () => loadAll())
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  background: #fafafa;
-  border: 1px solid #f0f2f5;
-  border-radius: 6px;
-  font-size: 13px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--el-border-radius-base);
+  font-size: var(--el-font-size-small);
   line-height: 1.5;
 }
 .todo-item .spacer {
   flex: 1;
 }
 .todo-text {
-  color: #303133;
+  color: var(--el-text-color-regular);
   word-break: break-all;
 }
 .todo-empty {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #6b7280;
-  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--el-font-size-small);
 }
 .todo-dot {
   width: 8px;
@@ -628,13 +635,13 @@ watch([range, currency], () => loadAll())
   flex-shrink: 0;
 }
 .dot-warn {
-  background: #e6a23c;
+  background: var(--el-color-warning);
 }
 .dot-danger {
-  background: #f56c6c;
+  background: var(--el-color-danger);
 }
 .dot-ok {
-  background: #67c23a;
+  background: var(--el-color-success);
 }
 
 .error-body {
@@ -652,8 +659,8 @@ watch([range, currency], () => loadAll())
 }
 
 .stat-label {
-  font-size: 13px;
-  color: #6b7280;
+  font-size: var(--el-font-size-small);
+  color: var(--el-text-color-secondary);
   margin-bottom: 8px;
   white-space: nowrap;
   overflow: hidden;
@@ -663,8 +670,9 @@ watch([range, currency], () => loadAll())
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap; /* 大数字单行溢出省略，防破卡 */
   overflow: hidden;
   text-overflow: ellipsis;
@@ -682,7 +690,7 @@ watch([range, currency], () => loadAll())
 
 .stat-value.delay b {
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 
 .stat-sub {

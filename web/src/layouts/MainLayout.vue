@@ -32,20 +32,25 @@
     <el-container>
       <el-header class="header">
         <div class="header-left">
-          <el-icon class="collapse-btn" :title="isMobile ? '打开菜单' : collapsed ? '展开侧栏' : '收起侧栏'"
-            @click="onMenuBtn">
-            <component :is="menuBtnIcon" />
-          </el-icon>
+          <el-button
+            class="collapse-btn"
+            link
+            :icon="menuBtnIcon"
+            :title="isMobile ? '打开菜单' : collapsed ? '展开侧栏' : '收起侧栏'"
+            :aria-label="isMobile ? '打开菜单' : collapsed ? '展开侧栏' : '收起侧栏'"
+            :aria-expanded="isMobile ? navOpen : !collapsed"
+            @click="onMenuBtn"
+          />
           <div class="page-title">{{ route.meta.title ?? '' }}</div>
         </div>
         <div class="header-right">
           <SystemStatusBadge />
           <el-dropdown @command="onCommand" trigger="click">
-            <span class="user">
+            <el-button class="user" link>
               <el-icon><UserFilled /></el-icon>
               <span class="username">{{ auth.username ?? 'admin' }}</span>
               <el-icon><ArrowDown /></el-icon>
-            </span>
+            </el-button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="password">修改密码</el-dropdown-item>
@@ -122,9 +127,26 @@ const menus = computed<MenuGroup[]>(() => {
 })
 
 const active = computed(() => route.path)
-const collapsed = ref(false)
+const NAV_COLLAPSED_KEY = 'nextapi.nav.collapsed'
+const collapsed = ref(readCollapsed())
 const navOpen = ref(false)
 const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()
+
+// 桌面侧栏收起偏好持久化；移动端抽屉状态不落盘（两种形态互不影响）
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(NAV_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function saveCollapsed(v: boolean) {
+  try {
+    localStorage.setItem(NAV_COLLAPSED_KEY, v ? '1' : '0')
+  } catch {
+    /* 忽略：隐私模式等场景 localStorage 不可用 */
+  }
+}
 
 // 移动端断点：≤768px 时侧栏改为滑出式抽屉（不占据布局宽度）
 const MOBILE_MQ = '(max-width: 768px)'
@@ -157,8 +179,12 @@ const menuBtnIcon = computed(() => {
 })
 
 function onMenuBtn() {
-  if (isMobile.value) navOpen.value = !navOpen.value
-  else collapsed.value = !collapsed.value
+  if (isMobile.value) {
+    navOpen.value = !navOpen.value
+  } else {
+    collapsed.value = !collapsed.value
+    saveCollapsed(collapsed.value)
+  }
 }
 
 function onMenuSelect() {
@@ -232,7 +258,7 @@ async function onCommand(cmd: string) {
   left: 0;
   right: 0;
   text-align: center;
-  color: #5b6874;
+  color: #8b98a3;
   font-size: 11px;
   letter-spacing: .3px;
   user-select: none;
@@ -291,8 +317,8 @@ async function onCommand(cmd: string) {
 
 /* ---------- 顶栏 ---------- */
 .header {
-  background: #fff;
-  border-bottom: 1px solid #e8eaee;
+  background: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color-light);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -311,20 +337,21 @@ async function onCommand(cmd: string) {
   flex-shrink: 0;
 }
 .collapse-btn {
+  width: var(--el-component-size);
+  height: var(--el-component-size);
+  padding: 0;
   font-size: 18px;
-  color: #4b5563;
-  cursor: pointer;
-  padding: 6px;
-  border-radius: 6px;
+  color: var(--el-text-color-regular);
+  border-radius: var(--el-border-radius-base);
 }
 .collapse-btn:hover {
-  background: #f3f4f6;
-  color: #1f2329;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
 }
 .page-title {
-  font-size: 16px;
+  font-size: var(--el-font-size-medium);
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -333,18 +360,24 @@ async function onCommand(cmd: string) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  cursor: pointer;
-  color: #4b5563;
+  height: auto;
+  padding: 0;
+  color: var(--el-text-color-regular);
+}
+.user:hover {
+  color: var(--el-text-color-primary);
+  background: transparent;
 }
 .main {
   padding: 0;
   overflow-y: auto;
-  background: #f4f5f7;
+  background: var(--el-bg-color-page);
 }
 
 @media (max-width: 768px) {
   .header { padding: 0 12px; }
-  .page-title { font-size: 15px; }
+  .page-title { font-size: var(--el-font-size-base); }
+  .collapse-btn { width: 40px; height: 40px; }
 }
 @media (max-width: 400px) {
   .username { display: none; }

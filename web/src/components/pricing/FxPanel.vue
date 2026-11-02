@@ -169,7 +169,7 @@ async function refreshAuto() {
   justify-content: space-between;
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .manual-row {
   display: flex;
@@ -180,7 +180,7 @@ async function refreshAuto() {
 .manual-pair {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
   width: 110px;
 }
 .manual-actions {

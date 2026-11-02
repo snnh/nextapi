@@ -104,26 +104,26 @@ const titleText = computed(() => {
   flex-direction: column;
   align-items: center;
   padding: 10px 18px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 8px;
 }
 .stat-num {
   font-size: 22px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .stat-num.success {
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 .stat-num.skip {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
 }
 .stat-num.danger {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 .stat-label {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   margin-top: 2px;
 }
 </style>

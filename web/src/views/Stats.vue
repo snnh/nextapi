@@ -1,25 +1,26 @@
 <template>
   <div class="page">
-    <!-- 顶部工具栏：说明 + CSV 导出 -->
-    <div class="toolbar">
-      <div class="hint">按时间范围 / 维度 / 币种 / Key / 上游查询统计；粒度由后端自动选择。</div>
-      <div class="spacer" />
-      <el-button
-        type="primary"
-        plain
-        :icon="Download"
-        :loading="exporting"
-        :disabled="!hasData"
-        @click="exportCsv"
-      >
-        导出 CSV
-      </el-button>
+    <!-- 页面说明 + 导出（只读操作独立于筛选控件） -->
+    <div class="page-head">
+      <p class="page-desc">按时间范围 / 维度 / 币种 / Key / 上游查询统计；粒度由后端自动选择。</p>
+      <div class="page-head-actions">
+        <el-button
+          type="primary"
+          plain
+          :icon="Download"
+          :loading="exporting"
+          :disabled="!hasData"
+          @click="exportCsv"
+        >
+          导出 CSV
+        </el-button>
+      </div>
     </div>
 
     <!-- 筛选工具栏 -->
-    <el-card shadow="never" class="page-card">
+    <el-card shadow="never" class="section-card">
       <div class="filter-grid">
-        <div class="f-item">
+        <div class="f-item f-item-wide">
           <span class="f-label">时间范围</span>
           <el-date-picker
             v-model="range"
@@ -29,36 +30,29 @@
             start-placeholder="开始时间"
             end-placeholder="结束时间"
             clearable
-            style="width: 360px"
           />
         </div>
         <div class="f-item">
           <span class="f-label">Key</span>
-          <el-select v-model="keyId" filterable clearable placeholder="全部 Key" style="width: 190px">
+          <el-select v-model="keyId" filterable clearable placeholder="全部 Key">
             <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
           </el-select>
         </div>
         <div class="f-item">
           <span class="f-label">上游</span>
-          <el-select
-            v-model="upstreamId"
-            filterable
-            clearable
-            placeholder="全部上游"
-            style="width: 170px"
-          >
+          <el-select v-model="upstreamId" filterable clearable placeholder="全部上游">
             <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
           </el-select>
         </div>
         <div class="f-item">
           <span class="f-label">维度</span>
-          <el-select v-model="dimension" style="width: 148px">
+          <el-select v-model="dimension">
             <el-option v-for="o in DIMENSION_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
         </div>
         <div class="f-item">
           <span class="f-label">币种</span>
-          <el-select v-model="currency" style="width: 92px">
+          <el-select v-model="currency">
             <el-option v-for="c in CURRENCIES" :key="c" :label="c" :value="c" />
           </el-select>
         </div>
@@ -74,7 +68,7 @@
       <StatCards :summary="summary" :currency="currency" />
 
       <!-- 趋势图 -->
-      <el-card shadow="never" class="page-card">
+      <el-card shadow="never" class="section-card">
         <template #header>{{ chartTitle }}</template>
         <EChart v-if="hasData" :option="chartOption" height="360px" />
         <el-empty v-else :description="emptyText" :image-size="90" />
@@ -92,9 +86,9 @@
       </el-card>
 
       <!-- 维度明细表 -->
-      <el-card v-if="dimension" shadow="never" class="page-card">
+      <el-card v-if="dimension" shadow="never" class="section-card">
         <template #header>维度明细</template>
-        <el-table :data="detailRows" stripe max-height="420">
+        <el-table :data="detailRows" max-height="420">
           <el-table-column label="时间" width="140">
             <template #default="{ row }">{{ row.bucketText }}</template>
           </el-table-column>
@@ -121,7 +115,7 @@
       </el-card>
 
       <!-- 模型排行（P5-a 高级统计）：区间内 Top-N 模型，点击模型名钻取到日志页 -->
-      <el-card shadow="never" class="page-card" v-loading="rankLoading">
+      <el-card shadow="never" class="section-card" v-loading="rankLoading">
         <template #header>
           <div class="rank-header">
             <span>模型排行 · Top {{ rankLimit }}</span>
@@ -150,7 +144,7 @@
             </div>
           </div>
         </template>
-        <el-table v-if="rankRows.length" :data="rankRows" stripe max-height="460">
+        <el-table v-if="rankRows.length" :data="rankRows" max-height="460">
           <el-table-column label="模型" min-width="180" show-overflow-tooltip>
             <template #default="{ row }">
               <el-link type="primary" :underline="false" @click="drillToLogs(row.model)">
@@ -796,26 +790,41 @@ async function exportRankCsv() {
 
 <style scoped>
 .filter-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px 18px;
   align-items: center;
 }
 
 .f-item {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.f-item-wide {
+  grid-column: span 2;
+}
+
+.f-item > .el-date-editor,
+.f-item > .el-select,
+.f-item > .el-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
 }
 
 .f-label {
-  color: #4b5563;
-  font-size: 13px;
+  color: var(--el-text-color-regular);
+  font-size: var(--el-font-size-small);
   white-space: nowrap;
 }
 
 .filter-actions {
-  margin-left: auto;
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-start;
 }
 
 .granularity-hint {
@@ -825,8 +834,27 @@ async function exportRankCsv() {
 .metric-switch {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.metric-switch .hint:last-child {
+  flex: 1 1 100%;
+}
+
+@media (max-width: 768px) {
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+  .f-item-wide {
+    grid-column: auto;
+  }
+  .f-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
 }
 
 .rank-header {

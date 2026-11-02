@@ -76,15 +76,15 @@ const pwdStrength = computed<PwdStrength>(() => {
   const hasLower = /[a-z]/.test(pw)
   const hasSymbol = /[^a-zA-Z0-9]/.test(pw)
   if (hasUpper && hasLower && hasDigit && hasSymbol) {
-    return { pct: 100, color: '#67c23a', text: '强（含大小写字母、数字与符号）' }
+    return { pct: 100, color: 'var(--el-color-success)', text: '强（含大小写字母、数字与符号）' }
   }
   if (hasLetter && hasDigit) {
-    return { pct: 66, color: '#409eff', text: '中（含字母与数字）' }
+    return { pct: 66, color: 'var(--el-color-primary)', text: '中（含字母与数字）' }
   }
   if (pw.length >= 8) {
-    return { pct: 33, color: '#e6a23c', text: '弱（仅长度达标，建议混入字母与数字）' }
+    return { pct: 33, color: 'var(--el-color-warning-dark-2)', text: '弱（仅长度达标，建议混入字母与数字）' }
   }
-  return { pct: 0, color: '#f56c6c', text: '长度不足 8 位' }
+  return { pct: 0, color: 'var(--el-color-danger)', text: '长度不足 8 位' }
 })
 
 function open() {
@@ -136,6 +136,6 @@ defineExpose({ open })
 }
 .pwd-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 </style>

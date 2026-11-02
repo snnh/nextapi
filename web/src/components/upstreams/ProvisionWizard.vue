@@ -690,11 +690,11 @@ function gotoRoutes() {
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .preset-item:hover {
-  border-color: #c0c4cc;
+  border-color: var(--el-border-color);
   background: #fafbfc;
 }
 .preset-item.active {
-  border-color: #409eff;
+  border-color: var(--el-color-primary);
   background: #f2f8ff;
 }
 .preset-head {
@@ -705,14 +705,14 @@ function gotoRoutes() {
 }
 .preset-name {
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .check {
   margin-left: auto;
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 .hint {
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   line-height: 1.7;
 }
@@ -721,17 +721,17 @@ function gotoRoutes() {
   padding: 8px 10px;
   border-radius: 6px;
   background: #f4f8ff;
-  color: #4b5563;
+  color: var(--el-text-color-regular);
 }
 .conflict {
-  color: #e6a23c;
+  color: var(--el-color-warning-dark-2);
   padding-left: 100px;
 }
 .group-title {
   margin: 16px 0 8px;
   font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .sync-actions {
   display: flex;

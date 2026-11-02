@@ -1,6 +1,15 @@
-/* 默认配色参考 OpenWebCode（graphite 灰阶强调色，无蓝紫）：
-   accent #3d444c / 页面底 #f1f4f5 / 文本 #17202a / 状态色 teal·amber·brick */
+/* Element Plus 主题层：优先使用框架自带的 CSS 变量，不另建一套组件 token。
+   配色保持 graphite 灰阶强调色（无蓝紫）：accent #3d444c / 画布 #f4f5f7 / 文本 #1f2329。 */
 :root {
+  /* RGB 变量供 Element Plus 的半透明叠色使用，必须与主色同步 */
+  --el-color-primary-rgb: 61, 68, 76;
+  --el-color-success-rgb: 15, 123, 108;
+  --el-color-warning-rgb: 194, 122, 22;
+  --el-color-danger-rgb: 180, 35, 50;
+  --el-color-error-rgb: 180, 35, 50;
+  --el-color-info-rgb: 107, 114, 128;
+
+  /* ---------- 品牌强调色 ---------- */
   --el-color-primary: #3d444c;
   --el-color-primary-light-3: #777c82;
   --el-color-primary-light-5: #9ea2a5;
@@ -9,6 +18,7 @@
   --el-color-primary-light-9: #e3e6e9;
   --el-color-primary-dark-2: #2e343b;
 
+  /* ---------- 语义状态色 ---------- */
   --el-color-success: #0f7b6c;
   --el-color-success-light-3: #57a398;
   --el-color-success-light-5: #87bdb5;
@@ -23,6 +33,7 @@
   --el-color-warning-light-7: #ecd4ae;
   --el-color-warning-light-8: #f3e0c2;
   --el-color-warning-light-9: #f9f2e8;
+  /* 深一档用于 12–13px 文字：对白底约 5.1:1，满足 AA */
   --el-color-warning-dark-2: #9b6112;
 
   --el-color-error: #b42332;
@@ -40,32 +51,123 @@
   --el-color-danger-light-9: #f7e9ea;
   --el-color-danger-dark-2: #901c28;
 
+  /* ---------- 文本 / 边框 / 表面 ---------- */
+  --el-text-color-primary: #1f2329;
+  --el-text-color-regular: #4b5563;
+  /* 辅助文字统一到 4.5:1 以上，替代散落的 #909399 / #9ca3af */
+  --el-text-color-secondary: #6b7280;
+  --el-text-color-placeholder: #98a2b3;
+  --el-text-color-disabled: #b0b7c3;
+
+  --el-bg-color-page: #f4f5f7;
+  --el-border-color: #e4e7ed;
+  --el-border-color-light: #e8eaee;
+  --el-border-color-lighter: #eef0f3;
+  --el-fill-color-light: #f5f7fa;
+  --el-fill-color-lighter: #fafafa;
+
+  /* ---------- 形状 / 尺寸 / 字号 ---------- */
   --el-border-radius-base: 6px;
   --el-border-radius-small: 4px;
-  --el-bg-color-page: #f1f4f5;
-  --el-border-color: #d9e1e4;
-  --el-border-color-light: #e2e8eb;
-  --el-border-color-lighter: #e9eef0;
-  --el-text-color-primary: #17202a;
-  --el-text-color-regular: #4c5f69;
+  --el-border-radius-round: 999px;
+  --el-card-border-radius: 10px;
+
+  --el-component-size: 32px;
+  --el-component-size-small: 24px;
+  --el-component-size-large: 40px;
+
+  --el-font-size-extra-small: 12px;
+  --el-font-size-small: 13px;
+  --el-font-size-base: 14px;
+  --el-font-size-medium: 16px;
+  --el-font-size-large: 18px;
+  --el-font-size-extra-large: 20px;
+
+  /* ---------- 动效 ---------- */
+  --el-transition-duration: 160ms;
+  --el-transition-duration-fast: 120ms;
 }
 
 .el-button--primary {
-  --el-button-bg-color: #3d444c;
-  --el-button-border-color: #3d444c;
-  --el-button-hover-bg-color: #2e343b;
-  --el-button-hover-border-color: #2e343b;
+  --el-button-bg-color: var(--el-color-primary);
+  --el-button-border-color: var(--el-color-primary);
+  --el-button-hover-bg-color: var(--el-color-primary-dark-2);
+  --el-button-hover-border-color: var(--el-color-primary-dark-2);
   --el-button-active-bg-color: #23282e;
   --el-button-active-border-color: #23282e;
 }
 
+/* 卡片：默认细边框，阴影只保留最轻的一层 */
 .el-card {
-  --el-card-border-color: #d9e1e4;
+  --el-card-border-color: var(--el-border-color-light);
+  --el-card-padding: 20px;
   box-shadow: 0 1px 2px rgba(23, 32, 42, .06);
 }
-.el-table { --el-table-border-color: #e2e8eb; --el-table-header-bg-color: #fafbfc; }
-.el-table th.el-table__cell { font-weight: 600; color: #4c5f69; }
+
+/* 表格：统一表头底色、行分隔线和数字对齐 */
+.el-table {
+  --el-table-border-color: var(--el-border-color-light);
+  --el-table-header-bg-color: var(--el-fill-color-lighter);
+  font-variant-numeric: tabular-nums;
+}
+.el-table th.el-table__cell {
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+}
+
 .el-tabs__item { font-weight: 500; }
-.el-input__wrapper, .el-select__wrapper { box-shadow: 0 0 0 1px #d9e1e4 inset; }
-.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px #3d444c inset; }
-.el-radio-button__inner:hover { color: #2e343b; }
+
+/* 输入框聚焦：沿用 Element Plus 的 wrapper 阴影，但统一为主色 */
+.el-input__wrapper,
+.el-select__wrapper {
+  box-shadow: 0 0 0 1px var(--el-border-color) inset;
+}
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+}
+
+.el-radio-button__inner:hover { color: var(--el-color-primary-dark-2); }
+
+/* 自定义可点击元素（图标按钮、复制按钮等）的键盘焦点 */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+.el-button:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
+/* 移动端：只提升默认控件高度，small/large 尺寸保持原有语义 */
+@media (max-width: 768px) {
+  .page,
+  .el-dialog {
+    --el-component-size: 40px;
+  }
+  .page .el-input__wrapper,
+  .page .el-select__wrapper,
+  .el-dialog .el-input__wrapper,
+  .el-dialog .el-select__wrapper {
+    min-height: 40px;
+  }
+  .page .el-button:not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text),
+  .el-dialog .el-button:not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text) {
+    min-height: 40px;
+  }
+  .page .el-button--small,
+  .el-dialog .el-button--small {
+    min-height: 32px;
+  }
+}
+
+/* 尊重系统的精简动效设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -6,8 +6,8 @@
         <h1 class="title">NextAPI 管理后台</h1>
         <div class="subtitle">自托管 LLM 网关</div>
       </div>
-      <el-form ref="formRef" :model="form" :rules="rules" size="large" @submit.prevent @keyup.enter="handleLogin">
-        <el-form-item prop="username">
+      <el-form ref="formRef" :model="form" :rules="rules" size="large" label-position="top" @submit.prevent @keyup.enter="handleLogin">
+        <el-form-item label="用户名" prop="username">
           <el-input
             v-model="form.username"
             name="username"
@@ -17,7 +17,7 @@
             clearable
           />
         </el-form-item>
-        <el-form-item prop="password">
+        <el-form-item label="密码" prop="password">
           <el-input
             v-model="form.password"
             name="current-password"
@@ -28,10 +28,10 @@
             show-password
           />
         </el-form-item>
-        <el-form-item v-if="needTotp" prop="totpCode">
+        <el-form-item v-if="needTotp" label="二次验证码" prop="totpCode">
           <el-input
             v-model="form.totpCode"
-            placeholder="二次验证码（认证器 6 位数字）"
+            placeholder="认证器 6 位数字"
             :prefix-icon="Key"
             maxlength="6"
             clearable
@@ -123,15 +123,20 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #e9eef0 0%, #f1f4f5 55%, #f1f4f5 100%);
+  background: linear-gradient(
+    160deg,
+    var(--el-fill-color-light) 0%,
+    var(--el-bg-color-page) 55%,
+    var(--el-bg-color-page) 100%
+  );
 }
 
 .login-card {
   width: 380px;
   max-width: 92vw;
-  border-radius: 10px;
-  border: 1px solid #e8eaee;
-  box-shadow: 0 4px 24px rgba(16, 24, 40, .06);
+  border-radius: var(--el-card-border-radius);
+  border: 1px solid var(--el-border-color-light);
+  box-shadow: 0 4px 24px rgba(23, 32, 42, .06);
 }
 
 .login-head {
@@ -144,25 +149,25 @@ async function handleLogin() {
   place-items: center;
   height: 42px;
   padding: 0 16px;
-  border-radius: 11px;
-  background: #3d444c;
-  color: #fff;
-  font-size: 20px;
+  border-radius: 10px;
+  background: var(--el-color-primary);
+  color: var(--el-color-white);
+  font-size: var(--el-font-size-extra-large);
   font-weight: 800;
   letter-spacing: 1px;
-  box-shadow: 0 3px 10px rgba(79, 70, 229, .35);
+  box-shadow: 0 3px 10px rgba(23, 32, 42, .18);
 }
 
 .title {
   margin: 10px 0 4px;
-  font-size: 18px;
+  font-size: var(--el-font-size-large);
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 
 .subtitle {
-  font-size: 13px;
-  color: #9ca3af;
+  font-size: var(--el-font-size-small);
+  color: var(--el-text-color-secondary);
 }
 
 .login-btn {

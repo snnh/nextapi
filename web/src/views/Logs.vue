@@ -1,8 +1,11 @@
 <template>
   <div class="page">
+    <div class="page-head">
+      <p class="page-desc">时间默认「今天 00:00 ~ 现在」，清空即按服务端默认；筛选与 CSV 导出共用并同步地址栏。</p>
+    </div>
+
     <!-- 顶部工具栏：右侧 CSV 导出 & 分区清理 -->
     <div class="toolbar">
-      <div class="hint">时间默认「今天 00:00 ~ 现在」，清空即按服务端默认；筛选与 CSV 导出共用并同步地址栏。</div>
       <div class="spacer" />
       <el-tooltip
         content="按当前筛选导出；上限 10 万行，超出将截断并追加注释行"
@@ -29,9 +32,9 @@
     </div>
 
     <!-- 筛选工具栏：默认保留 时间/模型/request_id，Key/上游/状态码/流式/降级 归入「高级筛选」（默认折叠） -->
-    <el-card shadow="never" class="page-card">
+    <el-card shadow="never" class="section-card">
       <div class="filter-grid">
-        <div class="f-item">
+        <div class="f-item f-item-wide">
           <span class="f-label">时间范围</span>
           <el-date-picker
             v-model="range"
@@ -41,12 +44,11 @@
             start-placeholder="开始时间"
             end-placeholder="结束时间"
             clearable
-            style="width: 360px"
           />
         </div>
         <div class="f-item">
           <span class="f-label">结果</span>
-          <el-select v-model="statusGroup" clearable placeholder="全部结果" style="width: 130px" @change="onQuery">
+          <el-select v-model="statusGroup" clearable placeholder="全部结果" @change="onQuery">
             <el-option label="成功" value="success" />
             <el-option label="客户端错误" value="4xx" />
             <el-option label="服务端错误" value="5xx" />
@@ -56,7 +58,7 @@
         </div>
         <div class="f-item">
           <span class="f-label">模型</span>
-          <el-input v-model="model" placeholder="模型" clearable style="width: 160px" @keyup.enter="onQuery" />
+          <el-input v-model="model" placeholder="模型" clearable @keyup.enter="onQuery" />
         </div>
         <div class="f-item">
           <span class="f-label">request_id</span>
@@ -64,7 +66,6 @@
             v-model="requestId"
             placeholder="request_id"
             clearable
-            style="width: 200px"
             @keyup.enter="onQuery"
           />
         </div>
@@ -75,19 +76,13 @@
         <div v-show="advancedOpen" class="filter-grid advanced-grid">
           <div class="f-item">
             <span class="f-label">Key</span>
-            <el-select v-model="keyId" filterable clearable placeholder="全部 Key" style="width: 200px">
+            <el-select v-model="keyId" filterable clearable placeholder="全部 Key">
               <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
             </el-select>
           </div>
           <div class="f-item">
             <span class="f-label">上游</span>
-            <el-select
-              v-model="upstreamId"
-              filterable
-              clearable
-              placeholder="全部上游"
-              style="width: 180px"
-            >
+            <el-select v-model="upstreamId" filterable clearable placeholder="全部上游">
               <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
             </el-select>
           </div>
@@ -98,13 +93,12 @@
               type="number"
               placeholder="如 429"
               clearable
-              style="width: 110px"
               @keyup.enter="onQuery"
             />
           </div>
           <div class="f-item">
             <span class="f-label">流式</span>
-            <el-select v-model="streamOpt" style="width: 90px">
+            <el-select v-model="streamOpt">
               <el-option label="全部" value="" />
               <el-option label="是" value="true" />
               <el-option label="否" value="false" />
@@ -112,7 +106,7 @@
           </div>
           <div class="f-item">
             <span class="f-label">降级</span>
-            <el-select v-model="degradedOpt" style="width: 90px">
+            <el-select v-model="degradedOpt">
               <el-option label="全部" value="" />
               <el-option label="是" value="true" />
               <el-option label="否" value="false" />
@@ -138,7 +132,7 @@
     </el-card>
 
     <!-- 日志表格 -->
-    <el-card shadow="never" class="page-card">
+    <el-card shadow="never" class="section-card">
       <div class="table-head">
         <span>请求日志</span>
         <div class="spacer" />
@@ -157,7 +151,7 @@
         </div>
       </template>
       <template v-else>
-      <el-table :data="cursorMode ? cursorRows : rows" v-loading="loading" stripe>
+      <el-table :data="cursorMode ? cursorRows : rows" v-loading="loading">
         <template #empty>
           <el-empty description="无匹配日志" :image-size="90" />
         </template>
@@ -970,28 +964,57 @@ async function confirmCleanup() {
 
 <style scoped>
 .filter-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px 18px;
   align-items: center;
 }
 
 .f-item {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.f-item-wide {
+  grid-column: span 2;
+}
+
+.f-item > .el-date-editor,
+.f-item > .el-select,
+.f-item > .el-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
 }
 
 .f-label {
-  color: #4b5563;
-  font-size: 13px;
+  color: var(--el-text-color-regular);
+  font-size: var(--el-font-size-small);
   white-space: nowrap;
 }
 
 .filter-actions {
   margin-top: 14px;
   display: flex;
+  align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+  .f-item-wide {
+    grid-column: auto;
+  }
+  .f-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
 }
 
 .table-head {
@@ -1000,7 +1023,7 @@ async function confirmCleanup() {
   justify-content: space-between;
   margin-bottom: 12px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 
 .proto-cell {
@@ -1018,13 +1041,13 @@ async function confirmCleanup() {
   display: flex;
   gap: 8px;
   font-size: 12px;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 
 .cost-cell {
   font-size: 12px;
   line-height: 1.5;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 
 .pagination {
@@ -1049,7 +1072,7 @@ async function confirmCleanup() {
 }
 .detail-head .rid {
   font-size: 12px;
-  color: #4b5563;
+  color: var(--el-text-color-regular);
   word-break: break-all;
 }
 .status-cell {
@@ -1064,14 +1087,14 @@ async function confirmCleanup() {
   margin: 16px 0 8px;
   font-size: 13px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .tag-gap {
   margin-left: 6px;
 }
 .help-icon {
-  color: #9ca3af;
-  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--el-font-size-small);
   vertical-align: -2px;
   margin-left: 2px;
   cursor: help;
@@ -1084,30 +1107,13 @@ async function confirmCleanup() {
   overflow: auto;
 }
 
-/* 列表 / 详情加载失败的错误块（区别于「无数据」空态） */
-.error-state {
-  padding: 30px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-
-.error-msg {
-  margin: 0;
-  max-width: 100%;
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
-  word-break: break-all;
-}
-
+/* 详情错误块（区别于「无数据」空态；列表错误态用全局样式） */
 .error-block {
   margin-top: 14px;
   padding: 10px 12px;
-  background: #fef0f0;
-  color: #f56c6c;
-  border-radius: 6px;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+  border-radius: var(--el-border-radius-base);
   font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
   word-break: break-all;
 }
@@ -1118,7 +1124,7 @@ async function confirmCleanup() {
 .cleanup-desc {
   margin-bottom: 14px;
   padding: 10px 12px;
-  background: #f4f4f5;
-  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  border-radius: var(--el-border-radius-base);
 }
 </style>

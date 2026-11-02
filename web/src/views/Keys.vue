@@ -1,5 +1,11 @@
 <template>
   <div class="page" v-loading="pageLoading">
+    <div class="page-head">
+      <p class="page-desc">
+        网关 Key 格式为 <span class="mono">sk-nx-...</span>。完整 Key 仅在创建/轮换时展示一次，请立即保存；数据库只存储哈希，之后任何页面均无法再次查看明文。
+      </p>
+    </div>
+
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建密钥</el-button>
       <el-button :icon="Refresh" @click="loadKeys">刷新</el-button>
@@ -9,9 +15,6 @@
         </template>
       </el-input>
       <div class="spacer" />
-      <div class="hint" style="max-width: 560px">
-        网关 Key 格式为 <span class="mono">sk-nx-...</span>。完整 Key 仅在创建/轮换时展示一次，请立即保存；数据库只存储哈希，之后任何页面均无法再次查看明文。
-      </div>
     </div>
 
     <el-card shadow="never">
@@ -20,7 +23,7 @@
         <el-button type="primary" :icon="Refresh" @click="loadKeys">重新加载</el-button>
       </div>
       <template v-else>
-      <el-table :data="pagedKeys" :row-key="(row: ApiKeyRow) => row.id" border>
+      <el-table :data="pagedKeys" :row-key="(row: ApiKeyRow) => row.id">
         <template #empty>
           <el-empty
             :description="
@@ -64,6 +67,7 @@
             <el-switch
               v-model="row.enabled"
               :loading="togglingSet.has(row.id)"
+              :aria-label="`启用密钥 ${row.name || row.prefix}`"
               @change="(val: boolean) => toggleEnabled(row, val)"
             />
           </template>
@@ -71,18 +75,12 @@
 
         <el-table-column v-if="!isNarrow" label="模型白名单" min-width="220">
           <template #default="{ row }">
-            <template v-if="!row.models || row.models.length === 0">
-              <el-tag size="small" type="info">全部模型</el-tag>
-            </template>
+            <span v-if="!row.models || row.models.length === 0" class="meta-text">全部模型</span>
             <template v-else>
-              <div class="tag-group">
-                <el-tag v-for="(m, i) in row.models.slice(0, 3)" :key="'m' + i" size="small" effect="plain">
-                  {{ m }}
-                </el-tag>
-                <el-tooltip v-if="row.models.length > 3" :content="row.models.join('、')" placement="top">
-                  <el-tag size="small" type="info">+{{ row.models.length - 3 }}</el-tag>
-                </el-tooltip>
-              </div>
+              <span class="meta-text">{{ row.models.slice(0, 3).join(' · ') }}</span>
+              <el-tooltip v-if="row.models.length > 3" :content="row.models.join(' · ')" placement="top">
+                <el-button link size="small">+{{ row.models.length - 3 }}</el-button>
+              </el-tooltip>
             </template>
           </template>
         </el-table-column>
@@ -858,34 +856,21 @@ function gotoModels() {
 
 <style scoped>
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-secondary);
 }
 /* 窄屏折到名称下方的副行（前缀 / 已过期标记） */
 .sub-line {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--el-font-size-extra-small);
 }
 .search-input {
   width: 240px;
+  max-width: 100%;
 }
 .pager {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-}
-.error-state {
-  padding: 30px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-.error-msg {
-  margin: 0;
-  color: #f56c6c;
-  font-size: 13px;
-  text-align: center;
-  word-break: break-all;
 }
 .rate-row {
   display: flex;
@@ -894,8 +879,8 @@ function gotoModels() {
 }
 .rate-label {
   width: 44px;
-  color: #4b5563;
-  font-size: 13px;
+  color: var(--el-text-color-regular);
+  font-size: var(--el-font-size-small);
 }
 .quota-select {
   width: 150px;
@@ -919,28 +904,23 @@ function gotoModels() {
   box-sizing: border-box;
   margin: 0;
   padding: 10px 12px;
-  background: #f7f8fa;
-  border: 1px solid #e8eaee;
-  border-radius: 6px;
-  font-size: 12px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: var(--el-border-radius-base);
+  font-size: var(--el-font-size-extra-small);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
 }
-.hint {
-  color: #6b7280;
-  font-size: 12px;
-  line-height: 1.7;
-}
 .secret-key {
-  font-size: 16px;
+  font-size: var(--el-font-size-medium);
   line-height: 1.5;
-  background: #f5f7fa;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color);
+  border-radius: var(--el-border-radius-base);
   padding: 12px 16px;
   width: 100%;
   box-sizing: border-box;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 </style>

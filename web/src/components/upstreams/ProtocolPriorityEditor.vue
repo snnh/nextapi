@@ -123,11 +123,11 @@ function move(idx: number, delta: number) {
 }
 .priority-row.is-unselected {
   opacity: 0.65;
-  background: #fafafa;
+  background: var(--el-fill-color-lighter);
 }
 .priority-state {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .priority-ops {
   margin-left: auto;

@@ -365,14 +365,15 @@
                     <span class="model-name">{{ it.name }}</span>
                   </el-checkbox>
                 </el-tooltip>
-                <el-icon
+                <el-button
                   class="model-copy"
-                  role="button"
+                  link
+                  size="small"
+                  :icon="CopyDocument"
                   aria-label="复制模型名"
+                  title="复制模型名"
                   @click.stop="copyText(it.name, '已复制模型名')"
-                >
-                  <CopyDocument />
-                </el-icon>
+                />
                 <el-tag size="small" :type="MODEL_TAG[it.status]" effect="plain">{{ MODEL_STATUS[it.status] }}</el-tag>
               </div>
             </el-checkbox-group>
@@ -1476,7 +1477,7 @@ defineExpose({ open })
 }
 .kind-hint {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--el-text-color-secondary);
 }
 .oauth-state {
   display: flex;
@@ -1494,7 +1495,7 @@ defineExpose({ open })
 }
 .caps-label {
   font-size: 13px;
-  color: #6b7280;
+  color: var(--el-text-color-secondary);
 }
 .models-block {
   width: 100%;
@@ -1529,7 +1530,7 @@ defineExpose({ open })
 }
 .pbu-label {
   font-size: 13px;
-  color: #4b5563;
+  color: var(--el-text-color-regular);
   text-align: right;
 }
 .models-toolbar {
@@ -1554,17 +1555,17 @@ defineExpose({ open })
 }
 .model-copy {
   flex-shrink: 0;
-  cursor: pointer;
-  color: #9ca3af;
-  font-size: 13px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--el-text-color-secondary);
   margin-left: auto;
   margin-right: 6px;
-  padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--el-border-radius-small);
 }
 .model-copy:hover {
-  color: #1f2329;
-  background: #f3f4f6;
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-light);
 }
 .manual-add {
   margin-top: 14px;
@@ -1581,7 +1582,7 @@ defineExpose({ open })
 .manual-add-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2329;
+  color: var(--el-text-color-primary);
 }
 .manual-add-row {
   display: flex;

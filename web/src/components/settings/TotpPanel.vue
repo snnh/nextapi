@@ -257,7 +257,7 @@ onMounted(load)
   font-size: 13px;
 }
 .setup-box {
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--el-border-color);
   border-radius: 8px;
   padding: 16px;
 }
@@ -270,7 +270,7 @@ onMounted(load)
 .qr {
   width: 180px;
   height: 180px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--el-border-color);
   border-radius: 4px;
 }
 .secret-col {
