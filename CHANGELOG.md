@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.13] - 2026-11-03
 
 ### Changed
 - **管理后台 UI 统一（仅样式层，继续使用 Element Plus）**：
