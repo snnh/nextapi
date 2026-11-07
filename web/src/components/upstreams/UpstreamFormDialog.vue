@@ -18,6 +18,23 @@
       @submit.prevent
       @keyup.enter="onFormEnter"
     >
+      <el-alert
+        v-if="lastTest"
+        class="test-alert"
+        :type="lastTest.ok ? 'success' : 'error'"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          <template v-if="lastTest.ok">
+            已保存 · 连通正常 HTTP {{ lastTest.status ?? '-' }} · {{ lastTest.latency_ms }}ms
+          </template>
+          <template v-else>
+            已保存 · 连通测试失败{{ lastTest.error ? `：${lastTest.error}` : '' }}
+          </template>
+        </template>
+      </el-alert>
+
       <el-divider content-position="left">基础</el-divider>
 
       <el-form-item label="名称" prop="name">
@@ -186,9 +203,23 @@
               :placeholder="form.hasApiKey ? '留空保持不变' : '输入新的 Key'"
               clearable
             />
-            <el-tooltip content="勾选后保存将移除已存储的 Key" placement="top">
-              <el-checkbox v-model="form.clearKey">清除</el-checkbox>
-            </el-tooltip>
+            <el-button
+              v-if="form.hasApiKey && !form.clearKey"
+              link
+              type="danger"
+              size="small"
+              @click="form.clearKey = true"
+            >
+              清除 Key
+            </el-button>
+            <el-button
+              v-else-if="form.clearKey"
+              link
+              size="small"
+              @click="form.clearKey = false"
+            >
+              撤销清除
+            </el-button>
           </div>
         </div>
         <el-input
@@ -575,18 +606,20 @@
 
     <template #footer>
       <el-button @click="onCancel">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
+      <el-button :loading="saving" @click="submit(false)">保存</el-button>
+      <el-button type="primary" :loading="saving" @click="submit(true)">保存并测试</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { fmtTime } from '@/utils/format'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { CopyDocument, Search } from '@element-plus/icons-vue'
 import { copyText } from '@/utils/clipboard'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import {
   DEFAULT_PRIORITY,
   PROTOCOL_LABELS,
@@ -600,6 +633,7 @@ import { upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type {
   ModelSyncReport,
+  TestResp,
   Overrides,
   Preset,
   ProtocolName,
@@ -629,6 +663,7 @@ const CODEX_DEFAULT_USER_AGENT =
 const visible = ref(false)
 const saving = ref(false)
 const isEdit = ref(false)
+const lastTest = ref<TestResp | null>(null)
 const editingId = ref('')
 const advancedOpen = ref<string[]>([])
 const formRef = ref<FormInstance>()
@@ -813,16 +848,7 @@ const authJsonInvalid = computed(() => {
 })
 
 // ---- 移动端：label 顶部对齐，弹窗可读性更好 ----
-const MOBILE_MQ = '(max-width: 768px)'
-const isMobile = ref(false)
-let mq: MediaQueryList | null = null
-const onMq = (e: MediaQueryListEvent) => (isMobile.value = e.matches)
-onMounted(() => {
-  mq = window.matchMedia(MOBILE_MQ)
-  isMobile.value = mq.matches
-  mq.addEventListener('change', onMq)
-})
-onBeforeUnmount(() => mq?.removeEventListener('change', onMq))
+const { isMobile } = useBreakpoint()
 const labelPosition = computed<'right' | 'top'>(() => (isMobile.value ? 'top' : 'right'))
 
 // ---- 模型与路由（编辑态） ----
@@ -1059,6 +1085,7 @@ function onCancel() {
 
 /** 关闭后兜底清理敏感字段（取消路径不经 submit 清理） */
 function onClosed() {
+  lastTest.value = null
   form.api_key = ''
   form.auth_json = ''
 }
@@ -1306,6 +1333,7 @@ function open(upstream?: UpstreamOut) {
   modelStatusFilter.value = 'all'
   manualInput.value = ''
   manualPending.value = []
+  lastTest.value = null
   codexTipShown.value = false
   // 百炼专属域名助手：复位输入，地域默认取模板首个
   wsId.value = ''
@@ -1415,7 +1443,7 @@ function buildBody(): UpstreamIn {
   return body
 }
 
-async function submit() {
+async function submit(afterTest = false) {
   if (!formRef.value || saving.value) return
   try {
     await formRef.value.validate()
@@ -1423,20 +1451,36 @@ async function submit() {
     return
   }
   saving.value = true
+  lastTest.value = null
   try {
     const body = buildBody()
+    let savedId = editingId.value
     if (isEdit.value) {
       await upstreamApi.update(editingId.value, body)
-      ElMessage.success('上游已更新')
+      if (!afterTest) ElMessage.success('上游已更新')
     } else {
-      await upstreamApi.create(body)
-      ElMessage.success('上游已创建')
+      const created = await upstreamApi.create(body)
+      savedId = created.id
+      // 创建后转为编辑态：保存并测试可继续在同一弹窗内操作，二次保存走更新
+      isEdit.value = true
+      editingId.value = created.id
+      form.hasApiKey = !!body.api_key || form.hasApiKey
+      if (!afterTest) ElMessage.success('上游已创建')
     }
     dirty.disarm()
-    visible.value = false
     form.api_key = '' // 敏感字段用完即清（发布审阅前端 M3）
     form.auth_json = ''
     emit('saved')
+
+    if (!afterTest) {
+      visible.value = false
+      return
+    }
+    try {
+      lastTest.value = await upstreamApi.test(savedId)
+    } catch (e) {
+      lastTest.value = { ok: false, latency_ms: 0, error: errMsg(e) }
+    }
   } catch (e) {
     ElMessage.error(errMsg(e))
     form.api_key = '' // 失败也清：避免已输入的新密钥长期驻留
@@ -1450,6 +1494,9 @@ defineExpose({ open })
 </script>
 
 <style scoped>
+.test-alert {
+  margin-bottom: 16px;
+}
 .api-key-block {
   width: 100%;
 }
@@ -1476,7 +1523,7 @@ defineExpose({ open })
   gap: 12px;
 }
 .kind-hint {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .oauth-state {
@@ -1494,7 +1541,7 @@ defineExpose({ open })
   width: 100%;
 }
 .caps-label {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   color: var(--el-text-color-secondary);
 }
 .models-block {
@@ -1529,7 +1576,7 @@ defineExpose({ open })
   margin-bottom: 8px;
 }
 .pbu-label {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   color: var(--el-text-color-regular);
   text-align: right;
 }
@@ -1561,7 +1608,7 @@ defineExpose({ open })
   color: var(--el-text-color-secondary);
   margin-left: auto;
   margin-right: 6px;
-  border-radius: var(--el-border-radius-small);
+  border-radius: var(--nx-radius-sm);
 }
 .model-copy:hover {
   color: var(--el-text-color-primary);
@@ -1569,7 +1616,7 @@ defineExpose({ open })
 }
 .manual-add {
   margin-top: 14px;
-  border-top: 1px dashed #e5e7eb;
+  border-top: 1px dashed var(--nx-border);
   padding-top: 10px;
 }
 .manual-add-head {
@@ -1580,7 +1627,7 @@ defineExpose({ open })
   margin-bottom: 8px;
 }
 .manual-add-title {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -1611,19 +1658,19 @@ defineExpose({ open })
 }
 .model-name {
   font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   word-break: break-all;
 }
 .models-block .el-checkbox-group {
   max-height: 260px;
   overflow-y: auto;
-  border: 1px solid #eceef1;
-  border-radius: 6px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 6px 10px;
 }
 .cache-list {
-  border: 1px dashed #e5e7eb;
-  border-radius: 6px;
+  border: 1px dashed var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 8px 10px;
 }
 .models-actions {

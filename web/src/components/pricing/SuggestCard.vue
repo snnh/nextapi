@@ -124,17 +124,17 @@ function adopt(rule: PriceRuleRow) {
 
 <style scoped>
 .suggest-card {
-  border: 1px dashed #d9ecff;
-  border-radius: 8px;
+  border: 1px dashed var(--nx-accent-200);
+  border-radius: var(--nx-radius);
   padding: 12px;
-  background: #f0f9ff;
+  background: var(--nx-accent-soft);
 }
 .suggest-head {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -152,10 +152,10 @@ function adopt(rule: PriceRuleRow) {
   gap: 8px;
 }
 .suggest-group {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 8px 10px;
-  background: #fff;
+  background: var(--nx-surface);
 }
 .suggest-upstream {
   display: flex;
@@ -164,7 +164,7 @@ function adopt(rule: PriceRuleRow) {
   margin-bottom: 6px;
 }
 .suggest-u-name {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
 }
 .suggest-u-name.is-other {
@@ -176,7 +176,7 @@ function adopt(rule: PriceRuleRow) {
   justify-content: space-between;
   gap: 10px;
   padding: 6px 0;
-  border-top: 1px dashed #f0f0f0;
+  border-top: 1px dashed var(--nx-border-subtle);
 }
 .suggest-rule-info {
   display: flex;
@@ -185,18 +185,18 @@ function adopt(rule: PriceRuleRow) {
   flex-wrap: wrap;
 }
 .suggest-unit {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
 }
 .suggest-price {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-color-primary);
 }
 .suggest-segs {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .suggest-no-seg {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 </style>

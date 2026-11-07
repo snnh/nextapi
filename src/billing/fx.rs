@@ -210,7 +210,7 @@ fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<FxRa
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if e.local_name().as_ref() == b"Cube" {
+                if e.local_name().as_ref() == "Cube" {
                     let mut currency: Option<String> = None;
                     let mut rate: Option<Decimal> = None;
                     for attr in e.attributes() {
@@ -218,9 +218,9 @@ fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<FxRa
                             ApiError::internal(format!("ECB XML 属性解析失败: {err}"))
                         })?;
                         match attr.key.as_ref() {
-                            b"currency" => {
+                            "currency" => {
                                 currency = Some(
-                                    attr.unescape_value()
+                                    attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)
                                         .map_err(|err| {
                                             ApiError::internal(format!(
                                                 "ECB XML 币种解码失败: {err}"
@@ -229,9 +229,9 @@ fn parse_ecb(xml: &[u8], symbols: &[String]) -> ApiResult<(Vec<String>, Vec<FxRa
                                         .to_string(),
                                 );
                             }
-                            b"rate" => {
+                            "rate" => {
                                 rate = Some(
-                                    attr.unescape_value()
+                                    attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)
                                         .map_err(|err| {
                                             ApiError::internal(format!(
                                                 "ECB XML 汇率解码失败: {err}"

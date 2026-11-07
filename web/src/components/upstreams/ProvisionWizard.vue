@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     title="接入上游向导"
-    width="660px"
+    class="dlg"
     :close-on-click-modal="false"
     destroy-on-close
     @closed="reset"
@@ -683,19 +683,19 @@ function gotoRoutes() {
   gap: 10px;
 }
 .preset-item {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 10px 12px;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 .preset-item:hover {
   border-color: var(--el-border-color);
-  background: #fafbfc;
+  background: var(--nx-subtle);
 }
 .preset-item.active {
   border-color: var(--el-color-primary);
-  background: #f2f8ff;
+  background: var(--nx-accent-soft);
 }
 .preset-head {
   display: flex;
@@ -711,16 +711,11 @@ function gotoRoutes() {
   margin-left: auto;
   color: var(--el-color-primary);
 }
-.hint {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-}
 .domain-hint {
   margin: -6px 0 10px;
   padding: 8px 10px;
-  border-radius: 6px;
-  background: #f4f8ff;
+  border-radius: var(--nx-radius);
+  background: var(--nx-accent-soft);
   color: var(--el-text-color-regular);
 }
 .conflict {
@@ -729,7 +724,7 @@ function gotoRoutes() {
 }
 .group-title {
   margin: 16px 0 8px;
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }

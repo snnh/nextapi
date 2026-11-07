@@ -1,10 +1,16 @@
 <template>
   <el-popover placement="bottom-end" :width="360" trigger="click" popper-class="status-pop">
     <template #reference>
-      <span class="status-badge" :class="`status-${level}`" :title="statusTitle">
-        <span class="dot" />
+      <button
+        type="button"
+        class="status-badge"
+        :class="`status-${level}`"
+        :title="statusTitle"
+        :aria-label="`系统状态：${statusLabel}。${statusTitle}`"
+      >
+        <span class="dot" aria-hidden="true" />
         <span class="label">{{ statusLabel }}</span>
-      </span>
+      </button>
     </template>
 
     <div class="pop">
@@ -19,17 +25,13 @@
         <div class="row">
           <span class="k">后端</span>
           <span class="v">
-            <el-tag :type="healthz ? 'success' : 'danger'" size="small" effect="plain">
-              {{ healthz ? '可用' : '不可用' }}
-            </el-tag>
+            <StatusTag :label="healthz ? '可用' : '不可用'" :tone="healthz ? 'success' : 'danger'" />
           </span>
         </div>
         <div class="row">
           <span class="k">数据库</span>
           <span class="v">
-            <el-tag :type="readyz ? 'success' : 'danger'" size="small" effect="plain">
-              {{ readyz ? '就绪' : '不可用' }}
-            </el-tag>
+            <StatusTag :label="readyz ? '就绪' : '不可用'" :tone="readyz ? 'success' : 'danger'" />
             <span v-if="status" class="hint">{{ status.database.latency_ms }}ms</span>
           </span>
         </div>
@@ -67,16 +69,13 @@
           <span class="k">异常上游</span>
           <span class="v">
             <template v-if="status?.breakers.length">
-              <el-tag
+              <StatusTag
                 v-for="b in status.breakers"
                 :key="b.name"
-                size="small"
-                type="warning"
-                effect="plain"
+                :label="b.name"
+                tone="warning"
                 class="tag-gap"
-              >
-                {{ b.name }}
-              </el-tag>
+              />
             </template>
             <span v-else class="hint">无</span>
           </span>
@@ -110,7 +109,8 @@ import { useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { systemApi } from '@/api'
 import { appBase } from '@/utils/base'
-import { fmtBytes } from '@/utils/format'
+import { fmtBytes, fmtUptime } from '@/utils/format'
+import StatusTag from '@/components/common/StatusTag.vue'
 import type { SystemStatusResp } from '@/api/types'
 
 const router = useRouter()
@@ -168,11 +168,6 @@ async function refresh() {
 }
 
 /** 秒级运行时长人性化 */
-function fmtUptime(secs: number): string {
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
-  return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
-}
 
 function gotoLogs() {
   router.push({ name: 'logs' })
@@ -201,47 +196,40 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--nx-radius-round);
+  font: inherit;
+  font-size: var(--nx-font-caption);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+  background: none;
 }
 .status-badge:hover {
-  filter: brightness(0.97);
+  border-color: var(--nx-border-strong);
 }
 .status-badge .dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
+  background: currentColor;
 }
 .status-ok {
-  background: #f0f9eb;
-  color: #529b2e;
-}
-.status-ok .dot {
-  background: var(--el-color-success);
+  color: var(--nx-success);
+  background: var(--nx-success-soft);
+  border-color: var(--nx-success-border);
 }
 .status-warn {
-  background: #fdf6ec;
-  color: #b88230;
-}
-.status-warn .dot {
-  background: var(--el-color-warning);
+  color: var(--nx-warning);
+  background: var(--nx-warning-soft);
+  border-color: var(--nx-warning-border);
 }
 .status-error {
-  background: #fef0f0;
-  color: #c45656;
-}
-.status-error .dot {
-  background: var(--el-color-danger);
-}
-@media (max-width: 768px) {
-  .status-badge .label {
-    display: none;
-  }
+  color: var(--nx-danger);
+  background: var(--nx-danger-soft);
+  border-color: var(--nx-danger-border);
 }
 
 .pop-head {
@@ -251,9 +239,9 @@ onBeforeUnmount(() => {
   margin-bottom: 8px;
 }
 .pop-title {
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
 }
 .rows {
   display: flex;
@@ -264,17 +252,17 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
 }
 .row .k {
   width: 72px;
   flex-shrink: 0;
-  color: var(--el-text-color-secondary);
+  color: var(--nx-text-3);
 }
 .row .v {
   flex: 1;
   min-width: 0;
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
   word-break: break-all;
 }
 .row.errors .v {
@@ -285,25 +273,18 @@ onBeforeUnmount(() => {
 .err {
   display: flex;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   line-height: 1.5;
 }
 .err-model {
-  color: var(--el-text-color-regular);
+  color: var(--nx-text-2);
   flex-shrink: 0;
 }
 .err-msg {
-  color: var(--el-text-color-secondary);
+  color: var(--nx-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.hint {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .tag-gap {
   margin-right: 4px;
@@ -314,10 +295,21 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   margin-top: 10px;
   padding-top: 8px;
-  border-top: 1px solid #f0f2f5;
+  border-top: 1px solid var(--nx-border-subtle);
 }
 .foot-actions {
   display: flex;
   gap: 4px;
+}
+@media (max-width: 800px) {
+  .status-badge {
+    padding: 3px 8px;
+  }
+}
+</style>
+
+<style>
+.status-pop {
+  max-width: calc(100vw - 24px);
 }
 </style>

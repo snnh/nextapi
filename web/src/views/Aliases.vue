@@ -2,11 +2,13 @@
   <div class="page" v-loading="pageLoading">
     <div class="page-head">
       <p class="page-desc">客户端可用别名请求模型，网关按实际模型路由、计费。白名单按实际模型判定；日志保留入口别名与实际模型。</p>
+      <div class="page-head-actions">
+        <el-button type="primary" :icon="Plus" @click="openCreate">新建别名</el-button>
+        <el-button :icon="Refresh" @click="load">刷新</el-button>
+      </div>
     </div>
 
     <div class="toolbar">
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建别名</el-button>
-      <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-input
         v-model="keyword"
         class="search-input"
@@ -17,24 +19,25 @@
       <div class="spacer" />
     </div>
 
-    <el-card shadow="never">
-      <div v-if="listError" class="error-state">
-        <p class="error-msg">别名列表加载失败：{{ listError }}</p>
-        <el-button type="primary" :icon="Refresh" @click="load">重新加载</el-button>
-      </div>
+    <el-card shadow="never" class="section-card">
+      <ErrorState v-if="listError" title="别名列表加载失败" :message="listError" @retry="load" />
       <template v-else>
       <el-table :data="pagedItems" :row-key="(row: ModelAliasRow) => row.id">
         <template #empty>
-          <el-empty :description="emptyText" />
+          <EmptyState title="暂无别名" :description="emptyText">
+            <template #actions>
+              <el-button type="primary" :icon="Plus" @click="openCreate">新建别名</el-button>
+            </template>
+          </EmptyState>
         </template>
 
         <el-table-column label="别名" :min-width="isNarrow ? 120 : 220">
           <template #default="{ row }">
             <CopyText :text="row.alias" :truncate="isNarrow ? 18 : 24" />
-            <div v-if="isNarrow" class="sub-line muted">→ {{ row.model }}</div>
+            <div v-if="isNarrow || isTablet" class="sub-line muted">→ {{ row.model }}</div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="实际模型" min-width="220">
+        <el-table-column v-if="!isNarrow && !isTablet" label="实际模型" min-width="220">
           <template #default="{ row }">
             <CopyText :text="row.model" :truncate="24" />
           </template>
@@ -49,17 +52,17 @@
             />
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="创建时间" width="170">
+        <el-table-column v-if="!isNarrow && !isTablet" label="创建时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
         </el-table-column>
         <el-table-column
           label="操作"
-          :width="isNarrow ? 88 : 150"
-          :fixed="isNarrow ? false : 'right'"
+          :width="isNarrow || isTablet ? 88 : 150"
+          :fixed="isNarrow || isTablet ? false : 'right'"
         >
           <template #default="{ row }">
             <el-dropdown
-              v-if="isNarrow"
+              v-if="isNarrow || isTablet"
               trigger="click"
               @command="(c: string) => onRowAction(c, row)"
             >
@@ -88,15 +91,12 @@
           </template>
         </el-table-column>
       </el-table>
-      <div class="pagination">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :total="filteredItems.length"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next"
-        />
-      </div>
+      <TablePager
+        v-model:page="currentPage"
+        v-model:size="pageSize"
+        :total="filteredItems.length"
+        :page-sizes="[10, 20, 50]"
+      />
       </template>
     </el-card>
 
@@ -138,7 +138,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
@@ -146,9 +146,13 @@ import { aliasApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { confirmDanger } from '@/utils/confirm'
 import CopyText from '@/components/common/CopyText.vue'
+import TablePager from '@/components/common/TablePager.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
 import type { AliasIn, ModelAliasRow } from '@/api/types'
 import { fmtTime } from '@/utils/format'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 const items = ref<ModelAliasRow[]>([])
 const pageLoading = ref(false)
@@ -159,11 +163,8 @@ const saving = ref(false)
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
 
-/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
-const isNarrow = ref(window.innerWidth <= 768)
-function onViewportResize() {
-  isNarrow.value = window.innerWidth <= 768
-}
+/** 窄屏/平板：隐藏次要列 + 操作列收成下拉菜单 */
+const { isMobile: isNarrow, isTablet } = useBreakpoint()
 
 /** 窄屏操作列下拉菜单分发（桌面端仍是行内链接按钮） */
 function onRowAction(command: string, row: ModelAliasRow) {
@@ -343,25 +344,8 @@ onMounted(() => {
   load()
 })
 
-onMounted(() => window.addEventListener('resize', onViewportResize))
-onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 </script>
 
 <style scoped>
-.pagination {
-  margin-top: 14px;
-  display: flex;
-  justify-content: flex-end;
-}
-.search-input {
-  width: 240px;
-  max-width: 100%;
-}
 /* 窄屏折到别名下方的实际模型名 */
-.sub-line {
-  margin-top: 4px;
-  font-size: var(--el-font-size-extra-small);
-  line-height: 1.5;
-  word-break: break-all;
-}
 </style>

@@ -212,7 +212,9 @@ pub async fn ensure_partitions(
             from.timestamp(),
             to.timestamp()
         );
-        sqlx::query(&sql).execute(&mut *tx).await?;
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut *tx)
+            .await?;
         created.push(name);
     }
     tx.commit().await?;
@@ -288,7 +290,7 @@ pub async fn drop_covered(
         if let Some(idx) = name_to_index(&info.name) {
             let safe_name = partition_name(idx);
             let sql = format!("DROP TABLE IF EXISTS {safe_name}");
-            sqlx::query(&sql).execute(pool).await?;
+            sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await?;
         }
     }
     Ok(candidates)

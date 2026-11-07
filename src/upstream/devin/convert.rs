@@ -8,7 +8,7 @@
 //! f2 = 未缓存输入、f5 = 缓存命中、f3 = 输出（f6=6 常量忽略）。
 
 use bytes::{Bytes, BytesMut};
-use rand::RngCore;
+use rand::Rng;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 

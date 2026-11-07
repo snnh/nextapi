@@ -4,186 +4,155 @@
       <p class="page-desc">
         网关 Key 格式为 <span class="mono">sk-nx-...</span>。完整 Key 仅在创建/轮换时展示一次，请立即保存；数据库只存储哈希，之后任何页面均无法再次查看明文。
       </p>
+      <div class="page-head-actions">
+        <el-button type="primary" :icon="Plus" @click="openCreate">新建密钥</el-button>
+        <el-button :icon="Refresh" :loading="pageLoading" @click="loadKeys">刷新</el-button>
+      </div>
     </div>
 
     <div class="toolbar">
-      <el-button type="primary" :icon="Plus" @click="openCreate">新建密钥</el-button>
-      <el-button :icon="Refresh" @click="loadKeys">刷新</el-button>
-      <el-input v-model="searchText" class="search-input" clearable placeholder="按名称 / 前缀搜索">
-        <template #prefix>
-          <el-icon><Search /></el-icon>
-        </template>
-      </el-input>
-      <div class="spacer" />
+      <el-input
+        v-model="searchText"
+        class="search-input"
+        clearable
+        :prefix-icon="Search"
+        placeholder="按名称 / 前缀搜索"
+      />
+      <el-select v-model="statusFilter" class="status-filter" aria-label="状态筛选">
+        <el-option label="全部状态" value="all" />
+        <el-option label="启用中" value="enabled" />
+        <el-option label="已停用" value="disabled" />
+        <el-option label="已过期" value="expired" />
+      </el-select>
     </div>
 
-    <el-card shadow="never">
-      <div v-if="listError" class="error-state">
-        <p class="error-msg">密钥列表加载失败：{{ listError }}</p>
-        <el-button type="primary" :icon="Refresh" @click="loadKeys">重新加载</el-button>
-      </div>
+    <el-card shadow="never" class="section-card">
+      <ErrorState v-if="listError" :message="`密钥列表加载失败：${listError}`" @retry="loadKeys" />
       <template v-else>
-      <el-table :data="pagedKeys" :row-key="(row: ApiKeyRow) => row.id">
-        <template #empty>
-          <el-empty
-            :description="
-              searchText.trim()
-                ? '未找到与搜索条件匹配的密钥'
-                : '暂无密钥，点击右上角「新建密钥」创建'
-            "
-          />
-        </template>
-
-        <!-- 名称列：窄屏（≤768px）时把前缀与过期标记折到名称下方，省下列宽 -->
-        <el-table-column label="名称" :min-width="isNarrow ? 130 : 140">
-          <template #default="{ row }">
-            <span v-if="row.name && row.name.trim()">{{ row.name }}</span>
-            <span v-else class="muted">(未命名)</span>
-            <template v-if="isNarrow">
-              <br />
-              <span class="mono sub-line">{{ row.prefix }}</span>
-              <el-tag
-                v-if="row.expires_at && isExpired(row.expires_at)"
-                size="small"
-                type="danger"
-                class="sub-line"
-              >
-                已过期
-              </el-tag>
-            </template>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="前缀" width="190">
-          <template #default="{ row }">
-            <el-tooltip content="sk-nx- 前缀，仅识别用" placement="top">
-              <span class="mono">{{ row.prefix }}</span>
-            </el-tooltip>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
-          <template #default="{ row }">
-            <el-switch
-              v-model="row.enabled"
-              :loading="togglingSet.has(row.id)"
-              :aria-label="`启用密钥 ${row.name || row.prefix}`"
-              @change="(val: boolean) => toggleEnabled(row, val)"
-            />
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="模型白名单" min-width="220">
-          <template #default="{ row }">
-            <span v-if="!row.models || row.models.length === 0" class="meta-text">全部模型</span>
-            <template v-else>
-              <span class="meta-text">{{ row.models.slice(0, 3).join(' · ') }}</span>
-              <el-tooltip v-if="row.models.length > 3" :content="row.models.join(' · ')" placement="top">
-                <el-button link size="small">+{{ row.models.length - 3 }}</el-button>
-              </el-tooltip>
-            </template>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="限流" min-width="130">
-          <template #default="{ row }">
-            <span>{{ rateText(row) }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="配额" min-width="170">
-          <template #default="{ row }">
-            <span v-if="row.quota_limit != null">{{ quotaText(row) }}</span>
-            <span v-else>—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="到期时间" width="190">
-          <template #default="{ row }">
-            <template v-if="row.expires_at">
-              <span>{{ fmtTime(row.expires_at) }}</span>
-              <el-tag v-if="isExpired(row.expires_at)" size="small" type="danger" style="margin-left: 6px">已过期</el-tag>
-            </template>
-            <span v-else>—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="调试" width="130">
-          <template #default="{ row }">
-            <template v-if="row.debug_enabled">
-              <el-tooltip v-if="row.debug_expires_at" :content="`调试记录到期：${fmtTime(row.debug_expires_at)}`" placement="top">
-                <el-tag size="small" type="success">开启</el-tag>
-              </el-tooltip>
-              <el-tag v-else size="small" type="success">开启</el-tag>
-            </template>
-            <span v-else>—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="最近使用" width="180">
-          <template #default="{ row }">
-            <span>{{ fmtTime(row.last_used_at) }}</span>
-          </template>
-        </el-table-column>
-
-        <!-- 操作列：窄屏不再 fixed（260px 固定列会挤掉名称），按钮收进下拉菜单 -->
-        <el-table-column
-          label="操作"
-          :width="isNarrow ? 88 : 260"
-          :fixed="isNarrow ? false : 'right'"
-        >
-          <template #default="{ row }">
-            <el-dropdown
-              v-if="isNarrow"
-              trigger="click"
-              @command="(c: string) => onRowAction(c, row)"
+        <el-table :data="pagedKeys" :row-key="(row: ApiKeyRow) => row.id">
+          <template #empty>
+            <EmptyState
+              v-if="hasFilter"
+              title="没有匹配的密钥"
+              description="试试清空搜索或切换状态筛选。"
+              :icon="Search"
             >
-              <el-button size="small">
-                操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-              </el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
-                  <el-dropdown-item command="rotate">轮换</el-dropdown-item>
-                  <el-dropdown-item command="copy">复制前缀</el-dropdown-item>
-                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-                </el-dropdown-menu>
+              <template #actions>
+                <el-button @click="clearFilters">清空筛选</el-button>
               </template>
-            </el-dropdown>
-            <template v-else>
-              <el-button size="small" @click="openEdit(row)">编辑</el-button>
-              <el-button size="small" :loading="rotatingId === row.id" @click="rotateKey(row)">
-                轮换
-              </el-button>
-              <el-tooltip
-                content="完整 Key 仅创建/轮换时展示一次，此处仅复制前缀用于识别"
-                placement="top"
-              >
-                <el-button size="small" @click="copyPrefix(row)">复制前缀</el-button>
-              </el-tooltip>
-              <el-button
-                size="small"
-                type="danger"
-                :loading="deletingSet.has(row.id)"
-                :disabled="deletingSet.has(row.id)"
-                @click="removeKey(row)"
-              >
-                删除
-              </el-button>
-            </template>
+            </EmptyState>
+            <EmptyState
+              v-else
+              title="还没有创建密钥"
+              description="创建后即可用 sk-nx-... 调用网关；完整 Key 只展示一次，请及时保存。"
+              :icon="Key"
+            >
+              <template #actions>
+                <el-button type="primary" :icon="Plus" @click="openCreate">新建密钥</el-button>
+              </template>
+            </EmptyState>
           </template>
-        </el-table-column>
-      </el-table>
-      <div class="pager">
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
+
+          <!-- 名称：前缀/白名单/限额/到期/调试折到副行，减少桌面列数 -->
+          <el-table-column label="名称" :min-width="isNarrow ? 60 : isTablet ? 190 : 240">
+            <template #default="{ row }">
+              <div class="key-name">
+                <span v-if="row.name && row.name.trim()">{{ row.name }}</span>
+                <span v-else class="muted">(未命名)</span>
+                <el-tag v-if="rotatingId === row.id" size="small" type="info" effect="plain">轮换中</el-tag>
+              </div>
+              <div class="meta-list key-meta">
+                <span class="meta-item mono">{{ row.prefix }}</span>
+                <span class="meta-item">{{ modelsSummary(row) }}</span>
+                <span v-if="(isNarrow || isTablet) && row.quota_limit != null" class="meta-item">
+                  {{ quotaText(row) }}
+                </span>
+                <span v-if="row.debug_enabled" class="meta-item">调试开启</span>
+                <span v-if="row.expires_at" class="meta-item" :class="{ 'is-expired': isExpired(row.expires_at) }">
+                  到期 {{ fmtTime(row.expires_at) }}<template v-if="isExpired(row.expires_at)">（已过期）</template>
+                </span>
+              </div>
+              <div v-if="isNarrow" class="key-rate">{{ rateText(row) }}</div>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="启用" :width="isNarrow ? 70 : isTablet ? 56 : 80" align="center">
+            <template #default="{ row }">
+              <el-switch
+                v-model="row.enabled"
+                :loading="togglingSet.has(row.id)"
+                :aria-label="`启用密钥 ${row.name || row.prefix}`"
+                @change="(val: boolean) => toggleEnabled(row, val)"
+              />
+            </template>
+          </el-table-column>
+
+          <el-table-column v-if="!isNarrow" label="限流" :width="isTablet ? 130 : 150">
+            <template #default="{ row }">
+              <span>{{ rateText(row) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-if="!isNarrow && !isTablet" label="配额" min-width="170">
+            <template #default="{ row }">
+              <span v-if="row.quota_limit != null">{{ quotaText(row) }}</span>
+              <span v-else>—</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column v-if="!isNarrow && !isTablet" label="最近使用" width="180">
+            <template #default="{ row }">{{ fmtTime(row.last_used_at) }}</template>
+          </el-table-column>
+
+          <!-- 操作：桌面编辑 + 更多；平板/手机收进下拉 -->
+          <el-table-column
+            label="操作"
+            :width="isNarrow || isTablet ? 88 : 150"
+            :fixed="isNarrow ? false : 'right'"
+          >
+            <template #default="{ row }">
+              <el-dropdown
+                v-if="isNarrow || isTablet"
+                trigger="click"
+                @command="(c: string) => onRowAction(c, row)"
+              >
+                <el-button size="small">
+                  操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                    <el-dropdown-item command="rotate">轮换</el-dropdown-item>
+                    <el-dropdown-item command="copy">复制前缀</el-dropdown-item>
+                    <el-dropdown-item command="delete" divided style="color: var(--nx-danger)">删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <RowActions v-else label="密钥操作">
+                <el-button size="small" @click="openEdit(row)">编辑</el-button>
+                <el-dropdown trigger="click" @command="(c: string) => onRowAction(c, row)">
+                  <el-button size="small">
+                    更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="rotate">轮换</el-dropdown-item>
+                      <el-dropdown-item command="copy">复制前缀</el-dropdown-item>
+                      <el-dropdown-item command="delete" divided style="color: var(--nx-danger)">删除</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </RowActions>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <TablePager
+          v-model:page="currentPage"
+          v-model:size="pageSize"
           :total="filteredKeys.length"
           :page-sizes="[10, 20, 50]"
-          :layout="pagerLayout"
-          background
         />
-      </div>
       </template>
     </el-card>
 
@@ -356,10 +325,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { CopyDocument, ArrowDown, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowDown, CopyDocument, Key, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { keyApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -370,6 +339,11 @@ import { QUOTA_UNIT_LABELS, QUOTA_WINDOW_LABELS } from '@/utils/consts'
 import { gatewayBase } from '@/utils/base'
 import { fmtInt, fmtTime } from '@/utils/format'
 import CopyText from '@/components/common/CopyText.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import RowActions from '@/components/common/RowActions.vue'
+import TablePager from '@/components/common/TablePager.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { ApiKeyRow, KeyCreateReq, QuotaUnit, QuotaWindow } from '@/api/types'
 
 /** 更新写体：KeyCreateReq 冻结类型未含 enabled，但契约 §4.3 要求行内/编辑启用开关走 PUT enabled */
@@ -386,22 +360,12 @@ const rotatingId = ref('')
 
 // —— 搜索 + 客户端分页 ——
 const searchText = ref('')
+type StatusFilter = 'all' | 'enabled' | 'disabled' | 'expired'
+const statusFilter = ref<StatusFilter>('all')
 const currentPage = ref(1)
 const pageSize = ref(10)
-/** 窄屏（移动端）分页简化：不带每页条数选择 */
-const narrowViewport = ref(window.innerWidth < 768)
-function onViewportResize() {
-  narrowViewport.value = window.innerWidth < 768
-}
-onMounted(() => window.addEventListener('resize', onViewportResize))
-onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
-
-const pagerLayout = computed(() =>
-  narrowViewport.value ? 'total, prev, pager, next' : 'total, sizes, prev, pager, next',
-)
-
-/** 窄屏列布局开关（复用上面同一断点判定） */
-const isNarrow = computed(() => narrowViewport.value)
+/** 断点：桌面完整列 / 平板隐藏配额与最近使用 / 窄屏卡片式三列 */
+const { isMobile: isNarrow, isTablet } = useBreakpoint()
 
 /** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
 function onRowAction(command: string, row: ApiKeyRow) {
@@ -413,20 +377,38 @@ function onRowAction(command: string, row: ApiKeyRow) {
 
 const filteredKeys = computed<ApiKeyRow[]>(() => {
   const q = searchText.value.trim().toLowerCase()
-  if (!q) return keys.value
   return keys.value.filter((r) => {
-    const name = (r.name || '').toLowerCase()
-    const prefix = (r.prefix || '').toLowerCase()
-    return name.includes(q) || prefix.includes(q)
+    if (q) {
+      const name = (r.name || '').toLowerCase()
+      const prefix = (r.prefix || '').toLowerCase()
+      if (!name.includes(q) && !prefix.includes(q)) return false
+    }
+    if (statusFilter.value === 'enabled') return r.enabled
+    if (statusFilter.value === 'disabled') return !r.enabled
+    if (statusFilter.value === 'expired') return !!r.expires_at && isExpired(r.expires_at)
+    return true
   })
 })
+
+const hasFilter = computed(() => searchText.value.trim() !== '' || statusFilter.value !== 'all')
+
+function clearFilters() {
+  searchText.value = ''
+  statusFilter.value = 'all'
+}
+
+function modelsSummary(row: ApiKeyRow): string {
+  const models = row.models ?? []
+  if (!models.length) return '全部模型'
+  return models.length > 2 ? `${models.slice(0, 2).join(' · ')} +${models.length - 2}` : models.join(' · ')
+}
 
 const pagedKeys = computed<ApiKeyRow[]>(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filteredKeys.value.slice(start, start + pageSize.value)
 })
 
-watch(searchText, () => {
+watch([searchText, statusFilter], () => {
   currentPage.value = 1
 })
 watch(pageSize, () => {
@@ -855,22 +837,38 @@ function gotoModels() {
 </script>
 
 <style scoped>
-.muted {
-  color: var(--el-text-color-secondary);
+.key-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--nx-text);
+  font-weight: 500;
+  line-height: 1.5;
 }
-/* 窄屏折到名称下方的副行（前缀 / 已过期标记） */
-.sub-line {
-  margin-top: 4px;
-  font-size: var(--el-font-size-extra-small);
+.key-meta {
+  margin-top: 2px;
 }
-.search-input {
-  width: 240px;
+.key-rate {
+  margin-top: 2px;
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+}
+.key-meta .is-expired {
+  color: var(--nx-danger);
+}
+.status-filter {
+  width: 140px;
   max-width: 100%;
 }
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
+/* 窄屏折到名称下方的副行（前缀 / 已过期标记） */
+@media (max-width: 800px) {
+  .status-filter {
+    width: 100%;
+  }
+  .key-meta .meta-item {
+    white-space: normal;
+  }
 }
 .rate-row {
   display: flex;
@@ -880,16 +878,10 @@ function gotoModels() {
 .rate-label {
   width: 44px;
   color: var(--el-text-color-regular);
-  font-size: var(--el-font-size-small);
+  font-size: var(--nx-font-small);
 }
 .quota-select {
   width: 150px;
-}
-.secret-view {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  align-items: flex-start;
 }
 .secret-actions {
   display: flex;
@@ -906,21 +898,10 @@ function gotoModels() {
   padding: 10px 12px;
   background: var(--el-fill-color-light);
   border: 1px solid var(--el-border-color-light);
-  border-radius: var(--el-border-radius-base);
-  font-size: var(--el-font-size-extra-small);
+  border-radius: var(--nx-radius);
+  font-size: var(--nx-font-caption);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-}
-.secret-key {
-  font-size: var(--el-font-size-medium);
-  line-height: 1.5;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  padding: 12px 16px;
-  width: 100%;
-  box-sizing: border-box;
-  color: var(--el-text-color-primary);
 }
 </style>

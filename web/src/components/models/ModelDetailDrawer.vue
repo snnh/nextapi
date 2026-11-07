@@ -179,6 +179,7 @@ import { copyText } from '@/utils/clipboard'
 import { fmtTime } from '@/utils/format'
 import type { RouteOut, UpstreamOut } from '@/api/types'
 import { effectiveModelId, upstreamHealth, type ModelOverviewRow } from '@/composables/useModelOverview'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import { gatewayBase } from '@/utils/base'
 
 const props = defineProps<{
@@ -195,9 +196,8 @@ const emit = defineEmits<{
   'goto-aliases': [string]
 }>()
 
-const drawerSize = computed(() =>
-  window.matchMedia('(max-width: 768px)').matches ? '100%' : '680px',
-)
+const { isMobile } = useBreakpoint()
+const drawerSize = computed(() => (isMobile.value ? '100%' : '680px'))
 
 const upstreamMap = computed(() => new Map(props.upstreams.map((u) => [u.id, u])))
 
@@ -280,20 +280,17 @@ function copyCurl() {
   align-items: center;
   gap: 8px;
   margin: 18px 0 8px;
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
 .group-action {
   font-weight: 400;
 }
-.muted {
-  color: var(--el-text-color-secondary);
-}
 .hint {
   margin-top: 6px;
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   line-height: 1.7;
 }
 .code {
@@ -301,8 +298,8 @@ function copyCurl() {
   padding: 10px 12px;
   background: var(--el-fill-color-light);
   border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--nx-radius);
+  font-size: var(--nx-font-caption);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;

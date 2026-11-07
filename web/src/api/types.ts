@@ -40,6 +40,7 @@ export interface LoginResp {
   username: string
 }
 
+/** GET /api/auth/me：当前登录用户名（登录响应已带 username，此契约供会话自检/后续调用） */
 export interface MeResp {
   username: string
 }
@@ -568,20 +569,6 @@ export type ConfigPutReq = ConfigFileView | { config: ConfigFileView }
 // logs（/api/logs）
 // ---------------------------------------------------------------------------
 
-export interface LogQuery {
-  from_ts?: string
-  to_ts?: string
-  key_id?: string
-  upstream_id?: string
-  model?: string
-  stream?: boolean
-  /** HTTP 状态码精确过滤 */
-  status?: number
-  request_id?: string
-  degraded?: boolean
-  page?: number
-  page_size?: number
-}
 
 export interface UsageLogRow {
   id: number
@@ -910,6 +897,7 @@ export interface UnpricedItem {
   model_id: string
 }
 
+/** GET /api/pricing/unpriced 响应 */
 export interface UnpricedResp {
   items: UnpricedItem[]
 }
@@ -941,12 +929,14 @@ export interface FxRow {
   stale: boolean
 }
 
+/** PUT /api/fx 单条（from/to 为币种对，rate 为手工汇率） */
 export interface PutFxItem {
   from: string
   to: string
   rate: number
 }
 
+/** PUT /api/fx 响应 */
 export interface FxPutResp {
   ok: boolean
   updated: number

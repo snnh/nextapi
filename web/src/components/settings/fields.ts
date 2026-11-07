@@ -137,7 +137,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: 'WAL 目录',
     type: 'string',
     default: '/data/wal',
-    help: 'WAL 落盘目录。默认 /data/wal',
+    help: 'WAL 落盘目录。仅启动时生效，改动需重启。默认 /data/wal',
   },
   'gateway.log_wal_file_max_mb': {
     label: 'WAL 单文件上限',
@@ -145,7 +145,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: 'MB',
     default: 128,
-    help: 'WAL 单文件大小上限（MB）。默认 128',
+    help: 'WAL 单文件大小上限（MB）。仅启动时生效，改动需重启。默认 128',
   },
   'gateway.log_wal_archive_tail_mb': {
     label: 'WAL 归档尾部',
@@ -161,7 +161,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '天',
     default: 30,
-    help: 'usage_logs 每分区覆盖天数。首次建分区时固化到 app_meta，此后以固化值为准；改此项仅对尚未建过分区的空库生效。默认 30',
+    help: 'usage_logs 每分区覆盖天数。首次建分区时固化到 app_meta，定时任务启动时读取；改此项仅对尚未建过分区的空库生效。默认 30',
   },
   'gateway.log_detail_retention_days': {
     label: '明细保留天数',
@@ -437,6 +437,22 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     help: '代理连通性测试固定探测地址（白名单，防 SSRF）。默认 https://api.github.com',
   },
 
+  // —— model_sync 渠道模型同步 ——
+  'model_sync.enabled': {
+    label: '启用模型同步',
+    type: 'boolean',
+    default: true,
+    help: 'model_sync=auto 的渠道定时拉取上游模型列表，并对账托管路由（只增删 managed_by=auto 的路由，不覆盖手动路由）。默认 true',
+  },
+  'model_sync.interval_minutes': {
+    label: '同步间隔',
+    type: 'number',
+    min: 0,
+    unit: '分钟',
+    default: 30,
+    help: '定时同步间隔（分钟）；0 = 关闭定时，仅保留手动同步。默认 30',
+  },
+
   // —— update_check 更新检查 ——
   'update_check.enabled': {
     label: '启用更新检查',
@@ -472,6 +488,21 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
   },
 }
 
+/**
+ * 后端 `restart_required` 只覆盖部分启动类键；以下键在 main.rs 启动阶段读取/固化，
+ * 运行中修改不会立即生效，UI 需要额外标注「下次启动」，避免误导。
+ * （database.max_connections / server.listen / database.url / admin_jwt_secret
+ *   已由 API 的 restart_required 返回。）
+ */
+export const STARTUP_ONLY_KEYS = new Set([
+  'gateway.max_body_mb',
+  'gateway.log_async',
+  'gateway.log_queue_capacity',
+  'gateway.log_wal_dir',
+  'gateway.log_wal_file_max_mb',
+  'gateway.log_partition_days',
+])
+
 /** 分组（前缀 → 中文组名，渲染顺序） */
 export const SETTING_GROUPS: { prefix: string; title: string }[] = [
   { prefix: 'gateway', title: '网关运行参数' },
@@ -480,6 +511,7 @@ export const SETTING_GROUPS: { prefix: string; title: string }[] = [
   { prefix: 'media_download', title: '媒体下载' },
   { prefix: 'media_poller', title: '媒体轮询' },
   { prefix: 'proxy', title: '代理（全局）' },
+  { prefix: 'model_sync', title: '渠道模型同步' },
   { prefix: 'update_check', title: '更新检查' },
   { prefix: 'server', title: '服务（启动类）' },
   { prefix: 'database', title: '数据库（启动类）' },
@@ -488,7 +520,7 @@ export const SETTING_GROUPS: { prefix: string; title: string }[] = [
 /**
  * 网关运行参数的「场景分组」（M13 §4.8）：把 gateway.* 的日常运行参数按使用场景归纳
  * 为 5 张场景卡，避免网关全部参数一次性平铺。渲染顺序即数组顺序；已收录的
- * gateway.* 键必须全部落入其中（见下方 SETTING_FIELDS 统计：22 个全量覆盖）。
+ * gateway.* 键必须全部落入其中（当前 SETTING_FIELDS 内全部 gateway.* 均覆盖）。
  *
  * - id   折叠展开的内部标识（不会与任何配置前缀冲突）；
  * - desc 分组标题旁一句话说明（仅展示辅助，不参与保存/校验）。
@@ -507,11 +539,12 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
   },
   {
     id: 'scn-traffic',
-    title: '流量控制',
-    desc: '限流、配额与超限策略',
+    title: '流量与安全',
+    desc: '限流、配额、登录与密码成本',
     keys: [
       'gateway.default_rate_limit_rpm',
       'gateway.admin_login_rate_limit_per_min',
+      'gateway.admin_login_expire_minutes',
       'gateway.argon2_memory_kib',
       'gateway.quota_check_cache_secs',
       'gateway.quota_exceed_action',
@@ -519,8 +552,8 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
   },
   {
     id: 'scn-logging',
-    title: '日志与审计',
-    desc: '落库、队列、WAL、连接池与保留',
+    title: '数据库与日志',
+    desc: '连接池、落库、队列、WAL 与保留',
     keys: [
       'database.max_connections',
       'gateway.log_async',
@@ -537,9 +570,14 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
   },
   {
     id: 'scn-routing',
-    title: '路由策略',
-    desc: '上游选择、粘性与自动禁用',
-    keys: ['gateway.sticky_routing', 'gateway.auto_disable_upstreams'],
+    title: '路由与同步',
+    desc: '上游选择、粘性、自动禁用与模型同步',
+    keys: [
+      'gateway.sticky_routing',
+      'gateway.auto_disable_upstreams',
+      'model_sync.enabled',
+      'model_sync.interval_minutes',
+    ],
   },
   {
     id: 'scn-pricing',

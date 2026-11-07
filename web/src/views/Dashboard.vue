@@ -33,17 +33,25 @@
 
     <!-- 系统状态 / 待处理事项：仅复用现有 systemApi.status 数据（M13 §4.3 低风险改造，
          不新增后端接口；拉取失败时仅提示文案，不伪造任何状态） -->
-    <el-card class="status-card" shadow="never">
+    <el-card class="status-card section-card" :class="{ 'is-collapsed': !statusOpen }" shadow="never">
       <template #header>
         <div class="status-head">
-          <span class="status-title">系统状态 · 待处理事项</span>
+          <span class="status-title">系统状态</span>
+          <span v-if="systemStatus" class="status-summary">
+            数据库 {{ systemStatus.database.latency_ms }}ms
+            · 熔断 {{ systemStatus.breakers.length }}
+            · 队列 {{ systemStatus.logging.queue_used ?? 0 }}/{{ systemStatus.logging.queue_capacity ?? '同步' }}
+          </span>
+          <span v-if="pendingItems.length" class="status-pending">{{ pendingItems.length }} 项待处理</span>
           <div class="spacer" />
-          <el-tag v-if="systemStatus" :type="healthTag" size="small" effect="light">{{ healthText }}</el-tag>
-          <span v-if="statusUpdatedAt" class="hint status-updated">更新于 {{ statusUpdatedAt }}</span>
+          <el-tag v-if="systemStatus" class="status-health" :type="healthTag" size="small" effect="light">{{ healthText }}</el-tag>
+          <el-button class="status-detail" link :icon="statusOpen ? ArrowUp : ArrowDown" @click="statusOpen = !statusOpen">
+            {{ statusOpen ? '收起' : '详情' }}
+          </el-button>
         </div>
       </template>
 
-      <div v-loading="statusLoading" class="status-body">
+      <div v-if="statusOpen" v-loading="statusLoading" class="status-body">
         <!-- 拉取失败：保留上次成功结果（若有）并明确提示，不猜测当前状态 -->
         <el-alert
           v-if="statusError"
@@ -167,7 +175,7 @@
         </el-card>
       </div>
 
-      <el-card class="chart-card" shadow="never">
+      <el-card class="chart-card section-card" shadow="never">
         <template #header>请求数 &amp; 成本趋势（{{ rangeLabel }}）</template>
         <EChart
           v-if="totalSeries.length"
@@ -181,17 +189,17 @@
 
       <el-row :gutter="16" class="top-row">
         <el-col :xs="24" :md="12">
-          <el-card class="top-card" shadow="never">
+          <el-card class="top-card section-card" shadow="never">
             <template #header>模型 Top 5</template>
             <el-table v-if="modelTop.length" :data="modelTop" size="small">
               <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
               <el-table-column label="请求数" width="90" align="right">
                 <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
               </el-table-column>
-              <el-table-column label="Token 数" width="110" align="right">
+              <el-table-column v-if="!isMobile" label="Token 数" width="110" align="right">
                 <template #default="{ row }">{{ fmtInt(row.tokens) }}</template>
               </el-table-column>
-              <el-table-column label="成本" width="110" align="right">
+              <el-table-column v-if="!isTablet" label="成本" width="110" align="right">
                 <template #default="{ row }">{{ fmtMoney(row.cost) }}</template>
               </el-table-column>
             </el-table>
@@ -199,17 +207,17 @@
           </el-card>
         </el-col>
         <el-col :xs="24" :md="12">
-          <el-card class="top-card" shadow="never">
+          <el-card class="top-card section-card" shadow="never">
             <template #header>上游 Top 5</template>
             <el-table v-if="upstreamTop.length" :data="upstreamTop" size="small">
               <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
               <el-table-column label="请求数" width="90" align="right">
                 <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
               </el-table-column>
-              <el-table-column label="Token 数" width="110" align="right">
+              <el-table-column v-if="!isMobile" label="Token 数" width="110" align="right">
                 <template #default="{ row }">{{ fmtInt(row.tokens) }}</template>
               </el-table-column>
-              <el-table-column label="成本" width="110" align="right">
+              <el-table-column v-if="!isTablet" label="成本" width="110" align="right">
                 <template #default="{ row }">{{ fmtMoney(row.cost) }}</template>
               </el-table-column>
             </el-table>
@@ -225,7 +233,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { useRouter } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
+import { ArrowDown, ArrowUp, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import EChart from '@/components/EChart.vue'
 import type { EChartsOption } from 'echarts'
@@ -240,21 +249,16 @@ import type {
   StatsSummary,
   SystemStatusResp,
 } from '@/api/types'
-import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
+import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtPct, fmtUptime } from '@/utils/format'
+import { STAT_LABEL_TIPS } from '@/utils/consts'
 
 type Range = 'today' | '7d'
-
-// 指标卡释义文案（与 stats/StatCards.vue 同口径）
-const LABEL_TIPS = {
-  requests: '统计区间内的网关请求总数',
-  success: '成功率 = 状态码 < 400 的请求占比',
-  tokens: '总 Token 数 = 输入（未缓存）+ 输出 + 缓存命中（读）+ 缓存写入，与配额口径一致',
-  cost: '按所选币种折算的合计成本；未计价（无定价规则）条数不计入',
-} as const
 
 const range = ref<Range>('today')
 const currency = ref<StatsCurrency>('CNY')
 const loading = ref(false)
+/** 系统状态默认收起为一条状态摘要，避免压住首屏指标卡 */
+const statusOpen = ref(false)
 
 const summary = ref<StatsSummary | null>(null)
 const totalSeries = ref<SeriesPoint[]>([])
@@ -268,11 +272,11 @@ const updatedAt = ref<string | null>(null)
 
 // —— 系统状态 / 待处理事项（复用 systemApi.status，独立于统计加载，失败不影响主内容）——
 const router = useRouter()
+const { isMobile, isTablet } = useBreakpoint()
 const systemStatus = ref<SystemStatusResp | null>(null)
 const statusLoading = ref(false)
 // 状态拉取失败文案（成功后清空；已成功过则保留上次数据并提示快照）
 const statusError = ref<string | null>(null)
-const statusUpdatedAt = ref<string | null>(null)
 
 type Health = 'ok' | 'warn' | 'danger'
 const health = computed<Health>(() => {
@@ -347,12 +351,6 @@ const pendingItems = computed<PendingItem[]>(() => {
 })
 
 /** 秒级运行时长人性化（与 SystemInfoPanel 同口径，@/utils/format 无等价函数） */
-function fmtUptime(secs: number): string {
-  if (secs < 60) return `${Math.floor(secs)} 秒`
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
-  return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
-}
 
 async function loadSystemStatus() {
   if (statusLoading.value) return // 防连点
@@ -360,7 +358,6 @@ async function loadSystemStatus() {
   statusError.value = null
   try {
     systemStatus.value = await systemApi.status()
-    statusUpdatedAt.value = dayjs().format('HH:mm:ss')
   } catch (e) {
     // 保留上次成功结果（若有）；失败仅展示提示文案，不伪造当前状态
     statusError.value = errMsg(e)
@@ -389,14 +386,14 @@ interface MetricCard {
 const metricCards = computed<MetricCard[]>(() => {
   const s = summary.value
   return [
-    { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: LABEL_TIPS.requests },
-    { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: LABEL_TIPS.success },
-    { label: '总 Token 数（含缓存）', value: fmtInt(s?.total_tokens), sub: '', tip: LABEL_TIPS.tokens },
+    { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: STAT_LABEL_TIPS.requests },
+    { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: STAT_LABEL_TIPS.success },
+    { label: '总 Token 数（含缓存）', value: fmtInt(s?.total_tokens), sub: '', tip: STAT_LABEL_TIPS.tokens },
     {
       label: `成本（${currency.value}）`,
       value: fmtMoney(s?.cost_display),
       sub: s && s.cost_na_count > 0 ? `${s.cost_na_count} 条未计价` : '',
-      tip: LABEL_TIPS.cost,
+      tip: STAT_LABEL_TIPS.cost,
     },
   ]
 })
@@ -524,8 +521,8 @@ watch([range, currency], () => loadAll())
 }
 
 /* —— 系统状态 / 待处理事项（M13 §4.3 低风险区块） —— */
-.status-card {
-  margin-bottom: 16px;
+.status-card.is-collapsed :deep(.el-card__body) {
+  display: none;
 }
 .status-head {
   display: flex;
@@ -536,14 +533,24 @@ watch([range, currency], () => loadAll())
 .status-head .spacer {
   flex: 1;
 }
+.status-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-text-color-secondary);
+  font-size: var(--nx-font-small);
+  font-variant-numeric: tabular-nums;
+}
+.status-pending {
+  color: var(--el-color-warning);
+  font-size: var(--nx-font-small);
+  white-space: nowrap;
+}
 .status-title {
-  font-size: var(--el-font-size-base);
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
-}
-.status-updated {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 .status-body {
   min-height: 60px;
@@ -553,7 +560,7 @@ watch([range, currency], () => loadAll())
 }
 .status-err-sub {
   margin-top: 4px;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   line-height: 1.7;
   display: flex;
   align-items: center;
@@ -569,12 +576,12 @@ watch([range, currency], () => loadAll())
   min-width: 0;
 }
 .kv-label {
-  font-size: var(--el-font-size-extra-small);
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
   margin-bottom: 4px;
 }
 .kv-value {
-  font-size: var(--el-font-size-medium);
+  font-size: var(--nx-font-title);
   font-weight: 600;
   color: var(--el-text-color-primary);
   line-height: 1.4;
@@ -610,8 +617,8 @@ watch([range, currency], () => loadAll())
   padding: 8px 12px;
   background: var(--el-fill-color-lighter);
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--el-border-radius-base);
-  font-size: var(--el-font-size-small);
+  border-radius: var(--nx-radius);
+  font-size: var(--nx-font-small);
   line-height: 1.5;
 }
 .todo-item .spacer {
@@ -626,7 +633,7 @@ watch([range, currency], () => loadAll())
   align-items: center;
   gap: 8px;
   color: var(--el-text-color-secondary);
-  font-size: var(--el-font-size-small);
+  font-size: var(--nx-font-small);
 }
 .todo-dot {
   width: 8px;
@@ -649,17 +656,13 @@ watch([range, currency], () => loadAll())
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   line-height: 1.6;
 }
 
-.updated-at {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
 
 .stat-label {
-  font-size: var(--el-font-size-small);
+  font-size: var(--nx-font-small);
   color: var(--el-text-color-secondary);
   margin-bottom: 8px;
   white-space: nowrap;
@@ -668,7 +671,7 @@ watch([range, currency], () => loadAll())
 }
 
 .stat-value {
-  font-size: 24px;
+  font-size: var(--nx-font-stat);
   font-weight: 600;
   color: var(--el-text-color-primary);
   line-height: 1.2;
@@ -682,7 +685,7 @@ watch([range, currency], () => loadAll())
   display: flex;
   flex-wrap: wrap;
   gap: 6px 16px;
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 400;
   white-space: normal;
   overflow: visible;
@@ -697,15 +700,29 @@ watch([range, currency], () => loadAll())
   margin-top: 6px;
 }
 
-.chart-card {
-  margin-bottom: 16px;
-}
 
 .top-row {
   margin-top: 0;
 }
 
-.top-card {
-  margin-bottom: 16px;
+
+/* 移动端：状态条只保留标题 + 健康标记 + 详情；摘要隐藏，避免标题被挤成竖排 */
+@media (max-width: 800px) {
+  .status-summary,
+  .status-pending {
+    display: none;
+  }
+  .status-head {
+    gap: 8px;
+  }
+  .status-title {
+    font-size: var(--nx-font-small);
+  }
+  .stat-grid .stat-card:last-child {
+    grid-column: 1 / -1;
+  }
+  .stat-grid {
+    gap: 12px;
+  }
 }
 </style>

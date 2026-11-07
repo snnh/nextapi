@@ -112,21 +112,21 @@ function move(idx: number, delta: number) {
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   margin-bottom: 6px;
-  background: #fff;
+  background: var(--nx-surface);
   transition: background 0.15s ease;
 }
 .priority-row:hover {
-  background: #f8fafc;
+  background: var(--nx-subtle);
 }
 .priority-row.is-unselected {
   opacity: 0.65;
   background: var(--el-fill-color-lighter);
 }
 .priority-state {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .priority-ops {

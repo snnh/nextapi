@@ -1,22 +1,31 @@
 <template>
   <div class="runtime-panel">
-    <!-- 顶部工具栏：保存 + 关键词搜索 + 统计 -->
-    <div class="toolbar">
-      <el-button type="primary" :loading="saving" :disabled="!dirtyCount" :icon="Check" @click="save">
-        保存修改
-      </el-button>
+    <!-- 顶部工具栏：搜索 + 来源/改动筛选 + 展开收起；保存统一在吸底栏 -->
+    <div class="toolbar settings-toolbar">
       <el-input
         v-model="keyword"
         class="search-input"
         clearable
         :prefix-icon="Search"
-        placeholder="搜索参数名称 / 键名"
+        placeholder="搜索名称、键名或说明"
       />
-      <span class="hint">仅提交有变化的键，热生效；「需重启」项参见标注。</span>
+      <el-select v-model="sourceFilter" class="source-filter" aria-label="来源筛选">
+        <el-option label="全部来源" value="all" />
+        <el-option label="配置文件" value="file" />
+        <el-option label="界面" value="ui" />
+        <el-option label="环境变量" value="env" />
+      </el-select>
+      <el-checkbox v-model="onlyDirty" class="dirty-filter" :disabled="!dirtyCount">
+        仅看已修改
+      </el-checkbox>
+      <el-button @click="toggleAll">{{ allOpen ? '全部收起' : '全部展开' }}</el-button>
       <div class="spacer" />
-      <span class="source-stats">
-        file {{ sourceStats.file }} / ui {{ sourceStats.ui }} / env {{ sourceStats.env }}
-      </span>
+      <div class="source-stats" aria-label="设置项来源统计">
+        <span class="stat-chip"><b>{{ settings.length }}</b> 项</span>
+        <span class="stat-chip"><i class="dot file" />配置文件 {{ sourceStats.file }}</span>
+        <span class="stat-chip"><i class="dot ui" />界面 {{ sourceStats.ui }}</span>
+        <span class="stat-chip"><i class="dot env" />环境 {{ sourceStats.env }}</span>
+      </div>
     </div>
 
     <el-empty v-if="!groups.length" description="暂无运行参数" />
@@ -26,7 +35,7 @@
       <el-empty
         v-if="searching && !filteredItems.length"
         :image-size="80"
-        description="未找到匹配的参数"
+        :description="emptySearchDesc"
       />
 
       <!-- 分组展示：普通模式折叠分组，搜索模式平铺命中项 -->
@@ -37,9 +46,30 @@
       >
         <el-collapse-item v-for="g in displayGroups" :key="g.prefix" :name="g.prefix">
           <template #title>
-            <span class="group-title">{{ g.title }}</span>
-            <span v-if="g.desc" class="group-desc">{{ g.desc }}</span>
-            <span class="group-count">{{ g.items.length }} 项</span>
+            <div class="group-head">
+              <span class="group-title">{{ g.title }}</span>
+              <span v-if="g.desc" class="group-desc">{{ g.desc }}</span>
+              <span class="group-count">{{ g.items.length }} 项</span>
+              <el-tag
+                v-if="dirtyCountOfGroup(g)"
+                size="small"
+                type="warning"
+                effect="light"
+                class="group-dirty"
+              >
+                未保存 {{ dirtyCountOfGroup(g) }}
+              </el-tag>
+              <el-button
+                v-if="dirtyCountOfGroup(g)"
+                link
+                type="primary"
+                size="small"
+                class="group-reset"
+                @click.stop="resetGroup(g)"
+              >
+                撤销本组
+              </el-button>
+            </div>
           </template>
 
           <div
@@ -47,44 +77,62 @@
             :key="it.key"
             :ref="(el) => setRowEl(it.key, el)"
             class="setting-row"
-            :class="{ 'row-flash': flashKey === it.key }"
+            :class="{
+              'row-flash': flashKey === it.key,
+              'is-dirty': dirtyKeys.has(it.key),
+              'is-locked': isLocked(it),
+            }"
           >
-            <div class="setting-label">
-              <span class="key-mono">{{ shortKey(it.key) }}</span>
-              <span class="label-text">{{ labelOf(it) }}</span>
-              <el-tooltip v-if="helpOf(it)" placement="top">
-                <template #content>
-                  <div style="max-width: 380px; line-height: 1.6">{{ helpOf(it) }}</div>
-                </template>
-                <el-icon class="help-icon" :size="14"><QuestionFilled /></el-icon>
-              </el-tooltip>
-              <el-tag v-if="it.restart_required" type="danger" size="small" effect="light">需重启</el-tag>
-              <el-tag v-if="it.secret" type="warning" size="small" effect="light">敏感</el-tag>
+            <div class="setting-main">
+              <div class="setting-title">
+                <span class="label-text">{{ labelOf(it) }}</span>
+                <el-tag v-if="dirtyKeys.has(it.key)" size="small" type="warning" effect="light">未保存</el-tag>
+                <el-tag v-if="needsRestart(it)" size="small" type="danger" effect="plain">下次启动</el-tag>
+                <el-tag v-if="it.secret" size="small" type="warning" effect="plain">敏感</el-tag>
+                <el-tooltip v-if="helpOf(it)" placement="top">
+                  <template #content>
+                    <div style="max-width: 380px; line-height: 1.6">{{ helpOf(it) }}</div>
+                  </template>
+                  <el-icon class="help-icon" :size="14"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </div>
+              <div class="setting-meta">
+                <span class="key-mono">{{ it.key }}</span>
+                <span class="meta-sep" aria-hidden="true">·</span>
+                <span class="effective-text">{{ effectiveOf(it) }}</span>
+                <span class="meta-sep" aria-hidden="true">·</span>
+                <span class="source-text" :class="`is-${it.source}`">{{ sourceLabel(it.source) }}</span>
+                <span v-if="isReadonly(it)" class="readonly-text">只读</span>
+                <el-tooltip v-if="isEnv(it)" placement="top" content="环境变量覆盖，界面不可修改">
+                  <el-icon class="lock-icon" :size="12"><Lock /></el-icon>
+                </el-tooltip>
+              </div>
+              <p v-if="helpOf(it)" class="help-line">{{ helpOf(it) }}</p>
             </div>
 
             <div class="setting-control">
-              <span class="control-wrap">
+              <div class="control-wrap">
                 <el-switch
                   v-if="kindOf(it) === 'switch'"
                   :model-value="boolVal(it)"
-                  :disabled="isEnv(it)"
+                  :disabled="isLocked(it)"
                   @update:model-value="(v: string | number | boolean) => setBool(it, v)"
                 />
                 <el-input-number
                   v-else-if="kindOf(it) === 'number'"
                   :model-value="numVal(it)"
-                  :disabled="isEnv(it)"
+                  :disabled="isLocked(it)"
                   :min="numMin(it)"
                   :max="numMax(it)"
                   :controls-position="'right'"
-                  style="width: 200px"
+                  class="number-input"
                   @update:model-value="(v: number | undefined) => setNum(it, v)"
                 />
                 <el-select
                   v-else-if="kindOf(it) === 'select'"
                   :model-value="strVal(it)"
-                  :disabled="isEnv(it)"
-                  style="width: 220px"
+                  :disabled="isLocked(it)"
+                  class="select-input"
                   @update:model-value="(v: unknown) => setSelect(it, v)"
                 >
                   <el-option v-for="o in enumOptions(it) || []" :key="o.value" :value="o.value" :label="o.label" />
@@ -95,7 +143,7 @@
                   type="password"
                   show-password
                   autocomplete="new-password"
-                  :disabled="isEnv(it)"
+                  :disabled="isLocked(it)"
                   :placeholder="secretPlaceholder(it)"
                   class="secret-input"
                   @update:model-value="(v: string) => setSecret(it, v)"
@@ -106,14 +154,14 @@
                     :key="i"
                     closable
                     size="small"
-                    :disabled="isEnv(it)"
+                    :disabled="isLocked(it)"
                     @close="removeTag(it.key, i)"
                   >
                     {{ t }}
                   </el-tag>
                   <el-input
                     v-model="tagInput[it.key]"
-                    :disabled="isEnv(it)"
+                    :disabled="isLocked(it)"
                     placeholder="回车添加"
                     size="small"
                     class="tag-input"
@@ -124,7 +172,8 @@
                   v-else
                   :model-value="strVal(it)"
                   :disabled="isEnv(it)"
-                  clearable
+                  :readonly="isReadonly(it)"
+                  :clearable="!isReadonly(it)"
                   class="text-input"
                   @update:model-value="(v: string) => setStr(it, v)"
                 />
@@ -139,20 +188,13 @@
                     size="small"
                     text
                     type="primary"
-                    :disabled="isEnv(it)"
+                    :disabled="isLocked(it)"
                     @click="restoreDefault(it)"
                   >
                     恢复默认
                   </el-button>
                 </el-tooltip>
-              </span>
-            </div>
-
-            <div class="setting-source">
-              <el-tooltip v-if="isEnv(it)" placement="top" content="环境变量覆盖，仅启动时读取">
-                <span class="source-text is-env">{{ sourceLabel(it.source) }}</span>
-              </el-tooltip>
-              <span v-else class="source-text" :class="`is-${it.source}`">{{ sourceLabel(it.source) }}</span>
+              </div>
             </div>
           </div>
         </el-collapse-item>
@@ -161,10 +203,11 @@
 
     <!-- 吸底保存栏 -->
     <div v-if="groups.length" class="savebar">
-      <span class="dirty-count" :class="{ 'is-dirty': dirtyCount > 0 }">
+      <span class="dirty-count" :class="{ 'is-dirty': dirtyCount > 0 }" aria-live="polite">
         <template v-if="dirtyCount">变更 {{ dirtyCount }} 项</template>
         <template v-else>无变更</template>
       </span>
+      <span v-if="dirtyCount" class="save-shortcut"><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>S</kbd> 保存</span>
       <div class="spacer" />
       <el-button :disabled="!dirtyCount" @click="resetAll">重置改动</el-button>
       <el-button type="primary" :loading="saving" :disabled="!dirtyCount" @click="save">保存修改</el-button>
@@ -174,20 +217,24 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Check, QuestionFilled, Search } from '@element-plus/icons-vue'
-import { settingsApi } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Lock, QuestionFilled, Search } from '@element-plus/icons-vue'
+import { proxyApi, settingsApi } from '@/api'
 import { errMsg } from '@/api/http'
-import type { SettingItem } from '@/api/types'
-import { FALLBACK_GROUP_TITLE, SETTING_GROUPS, SETTING_FIELDS, SETTING_SCENARIOS, shortKey } from './fields'
+import type { ProxyOut, SettingItem } from '@/api/types'
+import { FALLBACK_GROUP_TITLE, SETTING_GROUPS, SETTING_FIELDS, SETTING_SCENARIOS, STARTUP_ONLY_KEYS } from './fields'
 import type { SettingField } from './fields'
 
 const props = defineProps<{ settings: SettingItem[] }>()
-const emit = defineEmits<{ (e: 'saved'): void }>()
+const emit = defineEmits<{ (e: 'saved'): void; (e: 'dirty-change', count: number): void }>()
 
 const saving = ref(false)
 const keyword = ref('')
+const sourceFilter = ref<'all' | SettingItem['source']>('all')
 const flashKey = ref<string | null>(null)
+const onlyDirty = ref(false)
+const proxies = ref<ProxyOut[]>([])
+const proxyLoadFailed = ref(false)
 
 type Val = SettingItem['value']
 const local = reactive<Record<string, Val>>({})
@@ -245,19 +292,23 @@ interface GroupView {
  * 2) 其余参数仍按配置前缀分组（fx_auto_fetch / price_import / media_* / proxy /
  *    update_check / server / database / 未来新增前缀），保留原折叠入口。
  */
+const sourceSettings = computed(() =>
+  props.settings.filter((it) => sourceFilter.value === 'all' || it.source === sourceFilter.value),
+)
+
 const groups = computed<GroupView[]>(() => {
   const result: GroupView[] = []
   const consumed = new Set<string>()
 
   for (const s of SETTING_SCENARIOS) {
-    const items = props.settings.filter((it) => s.keys.includes(it.key))
+    const items = sourceSettings.value.filter((it) => s.keys.includes(it.key))
     if (!items.length) continue
     for (const it of items) consumed.add(it.key)
     result.push({ prefix: s.id, title: s.title, desc: s.desc, items })
   }
 
   const restBuckets = new Map<string, SettingItem[]>()
-  for (const it of props.settings) {
+  for (const it of sourceSettings.value) {
     if (consumed.has(it.key)) continue
     const prefix = it.key.split('.')[0]
     if (!restBuckets.has(prefix)) restBuckets.set(prefix, [])
@@ -275,23 +326,36 @@ const groups = computed<GroupView[]>(() => {
   return result
 })
 
-// —— 关键词搜索 ——
-const searching = computed(() => keyword.value.trim() !== '')
+
+/** 当前有未保存改动的键集合（行标记 / 分组计数 / 仅看改动共用）。 */
+const dirtyKeys = computed(() => {
+  return new Set(props.settings.filter((it) => isItemDirty(it)).map((it) => it.key))
+})
+
+// —— 搜索与筛选 ——
+// 关键词命中名称 / 键名 / 说明；「仅看已修改」可与来源筛选叠加。
+const searching = computed(
+  () => keyword.value.trim() !== '' || sourceFilter.value !== 'all' || onlyDirty.value,
+)
 const filteredItems = computed<SettingItem[]>(() => {
   const q = keyword.value.trim().toLowerCase()
-  if (!q) return props.settings
-  return props.settings.filter((it) => {
-    const hay = [labelOf(it), shortKey(it.key), it.key]
+  return sourceSettings.value.filter((it) => {
+    if (onlyDirty.value && !dirtyKeys.value.has(it.key)) return false
+    if (!q) return true
+    const hay = [labelOf(it), it.key, helpOf(it)]
     return hay.some((s) => s.toLowerCase().includes(q))
   })
 })
+const emptySearchDesc = computed(() =>
+  onlyDirty.value && !dirtyCount.value ? '没有未保存的修改' : '未找到匹配的参数',
+)
 
 /** 搜索模式下的伪分组（占位前缀，不会与真实分组冲突） */
 const SEARCH_PREFIX = '__search__'
 
 const displayGroups = computed<GroupView[]>(() => {
   if (searching.value) {
-    return [{ prefix: SEARCH_PREFIX, title: '搜索结果', items: filteredItems.value }]
+    return [{ prefix: SEARCH_PREFIX, title: '筛选结果', items: filteredItems.value }]
   }
   return groups.value
 })
@@ -316,6 +380,15 @@ watch(
   { immediate: true },
 )
 
+const allOpen = computed(() => {
+  const gs = displayGroups.value
+  return gs.length > 0 && gs.every((g) => collapseOpen.value.includes(g.prefix))
+})
+
+function toggleAll() {
+  collapseOpen.value = allOpen.value ? [] : displayGroups.value.map((g) => g.prefix)
+}
+
 // —— 来源统计 ——
 const sourceStats = computed(() => {
   const s = { file: 0, ui: 0, env: 0 }
@@ -335,13 +408,37 @@ function labelOf(it: SettingItem): string {
   return fieldOf(it)?.label ?? it.key
 }
 function helpOf(it: SettingItem): string {
-  return fieldOf(it)?.help ?? ''
+  const base = fieldOf(it)?.help ?? ''
+  if (it.key.endsWith('.proxy_id') && !it.key.startsWith('proxy.')) {
+    const useKey = it.key.replace(/\.proxy_id$/, '.use_proxy')
+    if (local[useKey] === false) {
+      return `${base} 当前「使用代理」关闭，此项不生效。`
+    }
+  }
+  return base
 }
 function isEnv(it: SettingItem): boolean {
   return it.source === 'env'
 }
+/** database.url 只由环境变量/配置文件决定，界面永不可写 */
+function isReadonly(it: SettingItem): boolean {
+  return it.key === 'database.url'
+}
+function isLocked(it: SettingItem): boolean {
+  return isEnv(it) || isReadonly(it)
+}
+function needsRestart(it: SettingItem): boolean {
+  return it.restart_required || STARTUP_ONLY_KEYS.has(it.key)
+}
+function effectiveOf(it: SettingItem): string {
+  if (needsRestart(it)) return '下次启动'
+  if (it.key === 'gateway.argon2_memory_kib') return '改密后生效'
+  return '立即生效'
+}
 function sourceLabel(src: SettingItem['source']): string {
-  return src
+  if (src === 'env') return '环境变量'
+  if (src === 'ui') return '界面'
+  return '配置文件'
 }
 
 interface EnumOption {
@@ -349,11 +446,33 @@ interface EnumOption {
   label: string
 }
 function enumOptions(it: SettingItem): EnumOption[] | null {
-  const k = shortKey(it.key)
+  const k = it.key.slice(it.key.lastIndexOf('.') + 1)
   if (k === 'display_currency') return [{ value: 'CNY', label: 'CNY' }, { value: 'USD', label: 'USD' }]
   if (k === 'provider') return ['frankfurter', 'ecb', 'custom'].map((v) => ({ value: v, label: v }))
   if (k === 'quota_exceed_action') return ['block', 'warn'].map((v) => ({ value: v, label: v }))
   return null
+}
+
+/**
+ * 代理 UUID 字段改为可读下拉：空值语义按场景区分；加载失败时回退文本框，
+ * 避免把已有 UUID 变成不可编辑/误清空。
+ */
+function proxyOptions(it: SettingItem): EnumOption[] | null {
+  if (!it.key.endsWith('.proxy_id') || proxyLoadFailed.value) return null
+  const cur = strVal(it)
+  const out: EnumOption[] = [
+    {
+      value: '',
+      label: it.key === 'proxy.default_proxy_id' ? '直连（不设置默认代理）' : '跟随默认代理',
+    },
+  ]
+  for (const p of proxies.value) {
+    out.push({ value: p.id, label: `${p.name}${p.enabled ? '' : '（已停用）'} · ${p.kind}` })
+  }
+  if (cur && !out.some((o) => o.value === cur)) {
+    out.push({ value: cur, label: `未知代理 ${cur.slice(0, 8)}…` })
+  }
+  return out
 }
 
 /**
@@ -368,7 +487,7 @@ function kindOf(it: SettingItem): 'switch' | 'number' | 'select' | 'input' | 'pa
   if (f?.type === 'boolean' || typeof v === 'boolean') return 'switch'
   if (Array.isArray(v)) return 'tags'
   if (f?.type === 'number' || typeof v === 'number') return 'number'
-  if (typeof v === 'string' && enumOptions(it)) return 'select'
+  if (typeof v === 'string' && (enumOptions(it) || proxyOptions(it))) return 'select'
   return 'input'
 }
 
@@ -394,8 +513,24 @@ function unitOf(it: SettingItem): string {
   const u = fieldOf(it)?.unit
   return u ?? ''
 }
-function setBool(it: SettingItem, v: string | number | boolean) {
-  local[it.key] = Boolean(v)
+async function setBool(it: SettingItem, v: string | number | boolean) {
+  const next = Boolean(v)
+  if (it.key === 'gateway.auto_disable_upstreams' && !next) {
+    try {
+      await ElMessageBox.confirm(
+        '关闭后，系统会立即解除全部历史「自动禁用」渠道并让它们回到候选池；失败请求仍会照常记录日志与重试。',
+        '关闭渠道自动禁用？',
+        {
+          type: 'warning',
+          confirmButtonText: '关闭并解除',
+          cancelButtonText: '保持开启',
+        },
+      )
+    } catch {
+      return
+    }
+  }
+  local[it.key] = next
 }
 function setNum(it: SettingItem, v: number | undefined | null) {
   local[it.key] = v ?? null
@@ -445,7 +580,7 @@ function fmtDefault(v: string | number | boolean | string[] | null | undefined):
   return String(v)
 }
 function canRestore(it: SettingItem): boolean {
-  if (it.secret || isEnv(it)) return false
+  if (it.secret || isLocked(it)) return false
   const f = fieldOf(it)
   return !!f && f.default !== undefined
 }
@@ -474,7 +609,17 @@ function isItemDirty(it: SettingItem): boolean {
   }
   return !sameValue(local[it.key], originalVals[it.key])
 }
-const dirtyCount = computed(() => props.settings.reduce((n, it) => n + (isItemDirty(it) ? 1 : 0), 0))
+const dirtyCount = computed(() => dirtyKeys.value.size)
+
+/** 分组内未保存数量（折叠状态下也能看到改动分布）。 */
+function dirtyCountOfGroup(g: GroupView): number {
+  return g.items.reduce((n, it) => n + (dirtyKeys.value.has(it.key) ? 1 : 0), 0)
+}
+
+watch(dirtyCount, (n) => {
+  emit('dirty-change', n)
+  if (n === 0) onlyDirty.value = false
+})
 
 /** 暴露给父组件的脏状态（Settings.vue 切换 Tab / 离开页面前确认用） */
 const isDirty = computed(() => dirtyCount.value > 0)
@@ -487,6 +632,16 @@ function resetAll() {
     tagInput[it.key] = ''
   }
   ElMessage.info('已重置全部改动')
+}
+
+/** 撤销一个分组内的未保存改动（只回到已保存值，不修改服务端）。 */
+function resetGroup(g: GroupView) {
+  for (const it of g.items) {
+    local[it.key] = cloneVal(originalVals[it.key])
+    secretVals[it.key] = ''
+    tagInput[it.key] = ''
+  }
+  ElMessage.info(`已撤销「${g.title}」的改动`)
 }
 
 // —— 行定位（校验失败滚动到对应行并高亮）——
@@ -518,7 +673,7 @@ function invalidOf(key: string, value: Val): { key: string; reason: string } | n
   if (!it || it.secret) return null
   const f = fieldOf(it)
   if (!f || f.type !== 'number') return null
-  if (typeof value !== 'number') return null
+  if (typeof value !== 'number') return { key, reason: '不能为空' }
   if (f.min !== undefined && value < f.min) return { key, reason: `不能小于 ${f.min}` }
   if (f.max !== undefined && value > f.max) return { key, reason: `不能大于 ${f.max}` }
   return null
@@ -557,7 +712,8 @@ async function save() {
   for (const c of changes) {
     const bad = invalidOf(c.key, c.value)
     if (bad) {
-      ElMessage.error(`「${bad.key}」数值未通过校验：${bad.reason}`)
+      const it = props.settings.find((s) => s.key === bad.key)
+      ElMessage.error(`「${it ? labelOf(it) : bad.key}」数值未通过校验：${bad.reason}`)
       focusKey(bad.key)
       return
     }
@@ -567,13 +723,23 @@ async function save() {
     const payload: Record<string, string | number | boolean | string[] | null> = {}
     for (const c of changes) payload[c.key] = c.value
     await settingsApi.put(payload)
-    const hasRestart = changes.some((c) => {
+    const restartCount = changes.filter((c) => {
       const it = props.settings.find((s) => s.key === c.key)
-      return !!it?.restart_required
-    })
+      return !!it && needsRestart(it)
+    }).length
+    const passwordCount = changes.filter(
+      (c) => c.key === 'gateway.argon2_memory_kib',
+    ).length
     const names = changes.map((c) => c.key)
     const shown = names.length > 5 ? `${names.slice(0, 5).join('、')} 等 ${names.length} 项` : names.join('、')
-    ElMessage.success(hasRestart ? `已保存：${shown}（部分项需重启后生效）` : `已保存：${shown}（热生效）`)
+    const effects = [
+      restartCount ? `${restartCount} 项下次启动生效` : '',
+      passwordCount ? `${passwordCount} 项改密后生效` : '',
+    ].filter(Boolean)
+    ElMessage.success(
+      effects.length ? `已保存：${shown}（${effects.join('，')}）` : `已保存：${shown}（立即生效）`,
+    )
+    onlyDirty.value = false
     emit('saved')
   } catch (e) {
     ElMessage.error(errMsg(e))
@@ -582,119 +748,271 @@ async function save() {
   }
 }
 
-// —— 未保存离开提醒 ——
+// —— 未保存离开提醒 + Ctrl/⌘+S 保存 ——
 function onBeforeUnload(e: BeforeUnloadEvent) {
   if (isDirty.value) {
     e.preventDefault()
     e.returnValue = ''
   }
 }
-onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
-onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
+function onKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && dirtyCount.value) {
+    e.preventDefault()
+    void save()
+  }
+}
+async function loadProxies() {
+  try {
+    proxies.value = await proxyApi.list()
+  } catch {
+    // 只影响 proxy_id 字段的控件形态：回退为文本框，避免阻断设置页
+    proxyLoadFailed.value = true
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', onBeforeUnload)
+  window.addEventListener('keydown', onKeydown)
+  void loadProxies()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  window.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
+/* ---------------------------------------------------------------------------
+   工具栏：搜索 / 来源 / 改动筛选与统计
+   --------------------------------------------------------------------------- */
+.settings-toolbar {
+  gap: 10px;
+  margin-bottom: 10px;
 }
-.toolbar .search-input {
-  width: 260px;
+.settings-toolbar .search-input {
+  width: 300px;
+}
+.settings-toolbar .source-filter {
+  width: 132px;
   flex-shrink: 0;
 }
-.toolbar .hint {
-  font-size: var(--el-font-size-extra-small);
-  color: var(--el-text-color-secondary);
-}
-.toolbar .spacer {
-  flex: 1;
+.dirty-filter {
+  margin-left: 2px;
+  white-space: nowrap;
 }
 .source-stats {
-  font-size: var(--el-font-size-extra-small);
-  color: var(--el-text-color-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--nx-font-caption);
+  color: var(--nx-text-3);
+}
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--nx-radius-round);
+  background: var(--nx-subtle);
+  line-height: 1.6;
+}
+.stat-chip b {
+  color: var(--nx-text);
+  font-weight: 600;
+}
+.dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--nx-text-placeholder);
+}
+.dot.file {
+  background: var(--nx-text-3);
+}
+.dot.ui {
+  background: var(--nx-accent-solid);
+}
+.dot.env {
+  background: var(--nx-warning);
 }
 
+/* ---------------------------------------------------------------------------
+   分组：标题、说明、数量、未保存标记
+   --------------------------------------------------------------------------- */
 .group-collapse {
   border: none;
 }
 .group-collapse :deep(.el-collapse-item__header) {
-  height: 44px;
-  font-size: var(--el-font-size-base);
+  height: 48px;
+  padding: 0 4px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
 .group-collapse :deep(.el-collapse-item__content) {
-  padding: 0 8px 8px;
+  padding: 0 0 6px;
+}
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 .group-title {
-  display: inline-flex;
-  align-items: center;
+  flex-shrink: 0;
+  font-weight: 600;
 }
 .group-desc {
-  font-size: var(--el-font-size-extra-small);
-  font-weight: 400;
-  color: var(--el-text-color-secondary);
-  margin-left: 10px;
-  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
+  color: var(--el-text-color-secondary);
+  font-size: var(--nx-font-caption);
+  font-weight: 400;
   text-overflow: ellipsis;
-  max-width: 320px;
+  white-space: nowrap;
 }
 .group-count {
-  font-size: var(--el-font-size-extra-small);
-  font-weight: 400;
+  flex-shrink: 0;
   color: var(--el-text-color-secondary);
-  margin-left: 10px;
+  font-size: var(--nx-font-caption);
+  font-weight: 400;
+}
+.group-dirty {
+  flex-shrink: 0;
+}
+.group-reset {
+  flex-shrink: 0;
+  margin-left: 2px;
 }
 
+/* ---------------------------------------------------------------------------
+   设置行：左侧说明 + 右侧控件；来源/生效方式收敛到元信息行
+   --------------------------------------------------------------------------- */
 .setting-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--el-border-radius-base);
-  transition: background-color var(--el-transition-duration) ease;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+  align-items: start;
+  gap: 24px;
+  padding: 13px 12px;
+  border-bottom: 1px solid var(--nx-border-subtle);
+  border-radius: var(--nx-radius);
+  transition:
+    background-color var(--nx-dur-base) var(--nx-ease),
+    box-shadow var(--nx-dur-base) var(--nx-ease);
 }
 .setting-row:last-child {
   border-bottom: none;
 }
-.setting-row.row-flash {
-  background-color: var(--el-color-warning-light-9);
+.setting-row:hover {
+  background: var(--nx-subtle);
 }
-.setting-label {
-  flex: 1;
+.setting-row.row-flash {
+  background: var(--nx-warning-soft);
+}
+.setting-row.is-dirty {
+  box-shadow: inset 3px 0 0 var(--nx-warning);
+}
+.setting-row.is-locked .setting-control {
+  opacity: 0.78;
+}
+.setting-main {
   min-width: 0;
+}
+.setting-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
-}
-.key-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--el-font-size-extra-small);
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-light);
-  border-radius: var(--el-border-radius-small);
-  padding: 1px 6px;
-  white-space: nowrap;
+  min-width: 0;
 }
 .label-text {
-  font-size: var(--el-font-size-base);
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
+  font-size: var(--nx-font-body);
+  font-weight: 500;
+  line-height: 1.4;
 }
 .help-icon {
-  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+  color: var(--nx-text-3);
   cursor: help;
 }
-.setting-control {
-  width: 380px;
-  flex-shrink: 0;
+.setting-meta {
   display: flex;
   align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+  line-height: 1.5;
+}
+.key-mono {
+  color: var(--nx-text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--nx-font-caption);
+  overflow-wrap: anywhere;
+}
+.meta-sep {
+  color: var(--nx-text-placeholder);
+}
+.effective-text,
+.readonly-text,
+.source-text {
+  white-space: nowrap;
+}
+.readonly-text {
+  color: var(--nx-warning);
+}
+.source-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.source-text::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--nx-text-placeholder);
+}
+.source-text.is-ui {
+  color: var(--nx-text-2);
+}
+.source-text.is-ui::before {
+  background: var(--nx-accent-solid);
+}
+.source-text.is-env {
+  color: var(--nx-warning);
+}
+.source-text.is-env::before {
+  background: var(--nx-warning);
+}
+.lock-icon {
+  color: var(--nx-warning);
+}
+.help-line {
+  display: -webkit-box;
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* ---------------------------------------------------------------------------
+   控件列：统一宽度与对齐，避免长短控件左右跳动
+   --------------------------------------------------------------------------- */
+.setting-control {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-width: 0;
 }
 .control-wrap {
   display: flex;
@@ -702,47 +1020,41 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   flex-wrap: wrap;
   gap: 8px;
   width: 100%;
+  min-width: 0;
 }
-.unit-text {
-  font-size: var(--el-font-size-extra-small);
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
+.number-input {
+  width: 180px;
 }
-.restore-btn {
-  margin-left: auto;
+.select-input {
+  width: 220px;
 }
-.setting-source {
-  width: 70px;
-  flex-shrink: 0;
-  text-align: right;
-}
-.source-text {
-  font-size: var(--el-font-size-extra-small);
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
-}
-.source-text.is-ui {
-  color: var(--el-color-success);
-}
-.source-text.is-env {
-  color: var(--el-color-warning-dark-2);
+.text-input,
+.secret-input {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 .tags-editor {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   width: 100%;
 }
 .tag-input {
-  width: 120px;
+  width: 128px;
 }
-.secret-input,
-.text-input {
-  width: 100%;
+.unit-text {
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+  white-space: nowrap;
+}
+.restore-btn {
+  margin-left: 0;
 }
 
-/* 吸底保存栏 */
+/* ---------------------------------------------------------------------------
+   吸底保存栏
+   --------------------------------------------------------------------------- */
 .savebar {
   position: sticky;
   bottom: 0;
@@ -750,35 +1062,95 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 12px 4px;
-  margin-top: 16px;
-  background: var(--el-bg-color);
-  border-top: 1px solid var(--el-border-color-lighter);
-  box-shadow: 0 -3px 10px rgba(31, 35, 41, 0.06);
+  margin-top: 12px;
+  background: var(--nx-surface);
+  border-top: 1px solid var(--nx-border-subtle);
+  box-shadow: var(--nx-shadow-bar);
 }
 .savebar .spacer {
   flex: 1;
 }
 .dirty-count {
-  font-size: var(--el-font-size-small);
-  color: var(--el-text-color-secondary);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
 }
 .dirty-count.is-dirty {
-  color: var(--el-color-warning-dark-2);
+  color: var(--nx-warning);
   font-weight: 600;
 }
+.save-shortcut {
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+}
+.save-shortcut kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--nx-border);
+  border-bottom-width: 2px;
+  border-radius: var(--nx-radius-sm);
+  background: var(--nx-subtle);
+  color: var(--nx-text-2);
+  font-family: inherit;
+  font-size: 11px;
+}
 
-@media (max-width: 1100px) {
+/* ---------------------------------------------------------------------------
+   响应式：≤1400 单列；≤1000 收紧分组说明；≤800 工具栏与控件全宽
+   --------------------------------------------------------------------------- */
+@media (max-width: 1400px) {
   .setting-row {
-    flex-direction: column;
-    gap: 8px;
+    grid-template-columns: 1fr;
+    gap: 9px;
   }
   .setting-control {
     width: 100%;
   }
-  .setting-source {
-    width: auto;
-    text-align: left;
+  .control-wrap {
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 1000px) {
+  .group-desc {
+    display: none;
+  }
+}
+@media (max-width: 800px) {
+  .settings-toolbar .search-input,
+  .settings-toolbar .source-filter {
+    width: 100%;
+  }
+  .dirty-filter {
+    margin-left: 0;
+  }
+  .source-stats {
+    width: 100%;
+  }
+  .source-stats .stat-chip:first-child {
+    display: none;
+  }
+  .help-line {
+    display: block;
+    -webkit-line-clamp: unset;
+  }
+  .number-input,
+  .select-input,
+  .text-input,
+  .secret-input {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .savebar {
+    align-items: stretch;
+  }
+  .savebar .spacer {
+    display: none;
+  }
+  .savebar .el-button {
+    flex: 1;
+  }
+  .save-shortcut {
+    display: none;
   }
 }
 </style>

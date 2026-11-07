@@ -1,12 +1,21 @@
 <template>
   <div class="page login-page">
+    <div class="login-theme"><ThemeToggle /></div>
     <el-card class="login-card" shadow="never">
       <div class="login-head">
         <div class="logo">next</div>
         <h1 class="title">NextAPI 管理后台</h1>
         <div class="subtitle">自托管 LLM 网关</div>
       </div>
-      <el-form ref="formRef" :model="form" :rules="rules" size="large" label-position="top" @submit.prevent @keyup.enter="handleLogin">
+      <p v-if="errorMsg" class="login-error" role="alert" aria-live="polite">{{ errorMsg }}</p>
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        size="large"
+        label-position="top"
+        @submit.prevent="handleLogin"
+      >
         <el-form-item label="用户名" prop="username">
           <el-input
             v-model="form.username"
@@ -30,7 +39,11 @@
         </el-form-item>
         <el-form-item v-if="needTotp" label="二次验证码" prop="totpCode">
           <el-input
+            ref="totpInput"
             v-model="form.totpCode"
+            name="one-time-code"
+            autocomplete="one-time-code"
+            inputmode="numeric"
             placeholder="认证器 6 位数字"
             :prefix-icon="Key"
             maxlength="6"
@@ -38,7 +51,7 @@
           />
         </el-form-item>
         <el-form-item>
-          <el-button class="login-btn" type="primary" :loading="loading" @click="handleLogin">登录</el-button>
+          <el-button class="login-btn" type="primary" native-type="submit" :loading="loading">登录</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -46,13 +59,14 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { nextTick, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios, { AxiosError } from 'axios'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
 import { Key, Lock, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { errMsg } from '@/api/http'
+import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import type { ApiErrorBody } from '@/api/types'
 
 const router = useRouter()
@@ -60,9 +74,11 @@ const route = useRoute()
 const auth = useAuthStore()
 
 const formRef = ref<FormInstance>()
+const totpInput = ref<{ focus: () => void } | null>(null)
 const loading = ref(false)
 /** 后端返回 totp_required 后展示验证码输入框 */
 const needTotp = ref(false)
+const errorMsg = ref('')
 const form = reactive({
   username: '',
   password: '',
@@ -89,6 +105,7 @@ async function handleLogin() {
   } catch {
     return
   }
+  errorMsg.value = ''
   loading.value = true
   try {
     await auth.login(form.username, form.password, form.totpCode || undefined)
@@ -99,16 +116,20 @@ async function handleLogin() {
     if (code === 'totp_required') {
       // 密码已通过，进入二次验证步骤
       needTotp.value = true
-      ElMessage.warning('该账号已启用二次验证，请输入认证器验证码')
+      errorMsg.value = '该账号已启用二次验证，请输入认证器验证码'
+      await nextTick()
+      totpInput.value?.focus()
     } else if (code === 'totp_invalid') {
       needTotp.value = true
       form.totpCode = ''
-      ElMessage.error('验证码错误或已过期，请重新输入')
+      errorMsg.value = '验证码错误或已过期，请重新输入'
+      await nextTick()
+      totpInput.value?.focus()
     } else {
       // 普通失败（多为密码错误）：重置二次验证展示，避免残留误导
       needTotp.value = false
       form.totpCode = ''
-      ElMessage.error(errMsg(e))
+      errorMsg.value = errMsg(e)
     }
   } finally {
     loading.value = false
@@ -118,25 +139,29 @@ async function handleLogin() {
 
 <style scoped>
 .login-page {
+  position: relative;
+  max-width: none;
   min-height: 100vh;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(
-    160deg,
-    var(--el-fill-color-light) 0%,
-    var(--el-bg-color-page) 55%,
-    var(--el-bg-color-page) 100%
-  );
+  background: radial-gradient(ellipse at 50% 0%, var(--nx-accent-soft), var(--nx-canvas) 62%);
+}
+
+.login-theme {
+  position: absolute;
+  top: 16px;
+  right: 16px;
 }
 
 .login-card {
   width: 380px;
   max-width: 92vw;
-  border-radius: var(--el-card-border-radius);
-  border: 1px solid var(--el-border-color-light);
-  box-shadow: 0 4px 24px rgba(23, 32, 42, .06);
+  border-radius: var(--nx-radius-lg);
+  border: 1px solid var(--nx-border);
+  background: var(--nx-surface);
+  box-shadow: none;
 }
 
 .login-head {
@@ -149,28 +174,45 @@ async function handleLogin() {
   place-items: center;
   height: 42px;
   padding: 0 16px;
-  border-radius: 10px;
-  background: var(--el-color-primary);
-  color: var(--el-color-white);
-  font-size: var(--el-font-size-extra-large);
+  border-radius: var(--nx-radius);
+  background: var(--nx-accent-solid);
+  color: var(--nx-on-accent);
+  font-size: var(--nx-font-lg);
   font-weight: 800;
   letter-spacing: 1px;
-  box-shadow: 0 3px 10px rgba(23, 32, 42, .18);
 }
 
 .title {
   margin: 10px 0 4px;
-  font-size: var(--el-font-size-large);
+  font-size: var(--nx-font-lg);
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
 }
 
 .subtitle {
-  font-size: var(--el-font-size-small);
-  color: var(--el-text-color-secondary);
+  font-size: var(--nx-font-small);
+  color: var(--nx-text-3);
+}
+
+.login-error {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--nx-danger-border);
+  border-radius: var(--nx-radius);
+  background: var(--nx-danger-soft);
+  color: var(--nx-danger);
+  font-size: var(--nx-font-small);
+  line-height: 1.6;
 }
 
 .login-btn {
   width: 100%;
+}
+
+@media (max-width: 800px) {
+  .login-theme {
+    top: 8px;
+    right: 8px;
+  }
 }
 </style>

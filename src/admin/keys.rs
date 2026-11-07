@@ -15,7 +15,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use rand::Rng;
+use rand::RngExt;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

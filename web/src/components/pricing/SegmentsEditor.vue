@@ -245,13 +245,13 @@ defineExpose({ scrollToSeg })
   gap: 10px;
 }
 .seg-card {
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 12px;
   background: var(--el-fill-color-lighter);
 }
 .seg-card.seg-media {
-  background: #fbf8ef;
+  background: var(--nx-warning-soft);
 }
 .seg-card.collapsed .seg-head {
   margin-bottom: 0;
@@ -271,25 +271,25 @@ defineExpose({ scrollToSeg })
   user-select: none;
   flex-shrink: 0;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--nx-radius-sm);
 }
 .seg-toggle:hover {
-  background: #eef1f6;
+  background: var(--nx-hover);
 }
 .seg-toggle:focus-visible {
-  outline: 2px solid var(--el-color-primary, #409eff);
+  outline: 2px solid var(--nx-focus-ring);
   outline-offset: 1px;
 }
 .seg-caret {
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   transition: transform 0.2s;
 }
 .seg-caret.is-collapsed {
   transform: rotate(-90deg);
 }
 .seg-title {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
   white-space: nowrap;
@@ -317,7 +317,7 @@ defineExpose({ scrollToSeg })
   align-items: flex-start;
 }
 .seg-label {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
   width: 76px;
   flex-shrink: 0;
@@ -360,7 +360,7 @@ defineExpose({ scrollToSeg })
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-regular);
 }
 </style>

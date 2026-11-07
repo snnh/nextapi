@@ -50,7 +50,7 @@
       </div>
     </el-card>
 
-    <el-card shadow="never" style="margin-top: 16px">
+    <el-card shadow="never" class="section-card">
       <template #header>
         <div class="card-head"><span>汇率列表</span></div>
       </template>
@@ -167,7 +167,7 @@ async function refreshAuto() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -178,7 +178,7 @@ async function refreshAuto() {
   margin-bottom: 12px;
 }
 .manual-pair {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
   width: 110px;

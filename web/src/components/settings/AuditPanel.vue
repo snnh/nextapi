@@ -16,7 +16,7 @@
       <span class="hint">管理端操作审计（登录 / 增删改 / 清理等）。</span>
     </div>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="section-card">
       <el-table :data="rows" v-loading="loading">
         <template #empty>
           <el-empty description="暂无审计日志" :image-size="60" />
@@ -67,7 +67,8 @@
           v-model:page-size="pageSize"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next, jumper"
+          :small="isMobile"
+          :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
           background
           @current-change="load"
           @size-change="onSizeChange"
@@ -94,12 +95,14 @@ import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
 import { copyText } from '@/utils/clipboard'
 import CopyText from '@/components/common/CopyText.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { AuditRow } from '@/api/types'
 
 const rows = ref<AuditRow[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(50)
+const { isMobile } = useBreakpoint()
 const action = ref('')
 const objectType = ref('')
 const loading = ref(false)
@@ -169,28 +172,8 @@ onMounted(load)
 </script>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
 .filter-input {
   width: 200px;
-}
-.toolbar .spacer {
-  flex: 1;
-}
-.hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.muted {
-  color: var(--el-text-color-secondary);
-}
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .pager {
   display: flex;
@@ -202,11 +185,11 @@ onMounted(load)
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   line-height: 1.6;
   background: var(--el-fill-color-light);
   padding: 12px;
-  border-radius: 6px;
+  border-radius: var(--nx-radius);
   max-height: 60vh;
   overflow: auto;
 }

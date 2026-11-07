@@ -13,8 +13,11 @@
         :closable="false"
         show-icon
         title="预览模式：此次未落库，确认无误后请点击「确认导入」"
-        style="margin-bottom: 12px"
+        style="margin-bottom: 8px"
       />
+      <div v-if="report.dry_run" class="hint upsert-note">
+        导入按（上游 + 模型 + 计价单位 + 币种 + 维度）幂等键 upsert：同键已有规则会被覆盖，其他条目不受影响。
+      </div>
       <el-alert
         v-else
         :type="report.failed.length ? 'warning' : 'success'"
@@ -64,6 +67,7 @@
         v-if="report && report.dry_run"
         type="primary"
         :loading="confirmLoading"
+        :disabled="report.succeeded === 0"
         @click="emit('confirm')"
       >
         确认导入
@@ -94,6 +98,11 @@ const titleText = computed(() => {
 </script>
 
 <style scoped>
+.upsert-note {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+
 .report-stats {
   display: flex;
   gap: 16px;
@@ -105,7 +114,7 @@ const titleText = computed(() => {
   align-items: center;
   padding: 10px 18px;
   background: var(--el-fill-color-light);
-  border-radius: 8px;
+  border-radius: var(--nx-radius);
 }
 .stat-num {
   font-size: 22px;
@@ -122,7 +131,7 @@ const titleText = computed(() => {
   color: var(--el-color-danger);
 }
 .stat-label {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
   margin-top: 2px;
 }

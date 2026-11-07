@@ -167,7 +167,7 @@ pub async fn check_quota(
             "SELECT count(*) FROM usage_logs \
              WHERE key_id = $1 AND ts >= $2 AND pricing_source IS NOT NULL AND {cost_col} IS NULL"
         );
-        match sqlx::query_scalar::<_, i64>(&na_sql)
+        match sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(na_sql))
             .bind(key.id)
             .bind(period_start)
             .fetch_one(pool)

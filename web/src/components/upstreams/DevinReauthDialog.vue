@@ -2,7 +2,7 @@
   <el-dialog
     :model-value="modelValue"
     :title="`重新授权 · ${row?.name ?? ''}`"
-    width="600px"
+    class="dlg"
     :close-on-click-modal="false"
     destroy-on-close
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
@@ -158,7 +158,7 @@ function reset() {
   margin: 16px 0 0;
   padding-left: 18px;
   line-height: 1.9;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   color: var(--el-text-color-regular);
 }
 
@@ -168,11 +168,11 @@ function reset() {
 
 .url {
   word-break: break-all;
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
   background: var(--el-fill-color-light);
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--nx-radius-sm);
 }
 
 .code-input {

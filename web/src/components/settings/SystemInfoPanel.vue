@@ -185,16 +185,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
 import { Download, Refresh, Upload } from '@element-plus/icons-vue'
 import yaml from 'js-yaml'
 import { configApi, systemApi } from '@/api'
 import { errMsg } from '@/api/http'
-import { fmtBytes, fmtTime } from '@/utils/format'
+import { fmtBytes, fmtTime, fmtUptime } from '@/utils/format'
 import { downloadText } from '@/utils/download'
 import { confirmDanger } from '@/utils/confirm'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import type { ConfigFileView, DiagnosticsResp, SystemStatusResp, VersionResp } from '@/api/types'
 
 const version = ref<VersionResp | null>(null)
@@ -214,13 +215,9 @@ const importText = ref('')
 // 修改密码弹窗（expose 了 open()，仅在按钮点击时唤起）
 const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()
 
-// el-descriptions 列数响应式：桌面 2 列，≤768px 降为 1 列（matchMedia 监听）
-const MOBILE_MQ = '(max-width: 768px)'
-const descColumns = ref(2)
-let mq: MediaQueryList | null = null
-const onMqChange = (e: MediaQueryListEvent) => {
-  descColumns.value = e.matches ? 1 : 2
-}
+// el-descriptions 列数响应式：桌面 2 列，移动端 1 列
+const { isMobile } = useBreakpoint()
+const descColumns = computed(() => (isMobile.value ? 1 : 2))
 
 const configText = computed(() =>
   config.value ? JSON.stringify(config.value, null, 2) : '',
@@ -238,11 +235,6 @@ const settingsSourceText = computed(() => {
 /**
  * 秒级运行时长人性化。@/utils/format 无等价函数（fmtDur 按毫秒、fmtInt 仅千分位），故保留本地实现。
  */
-function fmtUptime(secs: number): string {
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
-  return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
-}
 
 async function loadStatus() {
   if (statusLoading.value) return // 防连点
@@ -368,19 +360,10 @@ async function doImport() {
 }
 
 onMounted(() => {
-  // 描述列数响应式初始化与监听
-  mq = window.matchMedia(MOBILE_MQ)
-  descColumns.value = mq.matches ? 1 : 2
-  mq.addEventListener('change', onMqChange)
-
   pageLoading.value = true
   Promise.all([loadVersion(), loadConfig(), loadStatus(), loadDiag()]).finally(() => {
     pageLoading.value = false
   })
-})
-
-onBeforeUnmount(() => {
-  mq?.removeEventListener('change', onMqChange)
 })
 </script>
 
@@ -392,16 +375,12 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-.hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 .pwd-hint {
   margin: 0 0 12px;
@@ -417,7 +396,7 @@ onBeforeUnmount(() => {
   margin-top: 12px;
 }
 .notes-title {
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -426,16 +405,16 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   line-height: 1.6;
   background: var(--el-fill-color-light);
   padding: 12px;
-  border-radius: 6px;
+  border-radius: var(--nx-radius);
   max-height: 420px;
   overflow: auto;
 }
 .fwd-heads {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   line-height: 1.8;
   word-break: break-all;
 }

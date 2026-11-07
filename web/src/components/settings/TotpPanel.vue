@@ -120,6 +120,7 @@ import { useRouter } from 'vue-router'
 import QRCode from 'qrcode'
 import { authApi } from '@/api'
 import { errMsg } from '@/api/http'
+import { copyText } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import type { TotpSetupResp, TotpStatusResp } from '@/api/types'
 
@@ -218,14 +219,9 @@ function cancelSetup() {
   enableCode.value = ''
 }
 
-async function copySecret() {
+function copySecret() {
   if (!setup.value) return
-  try {
-    await navigator.clipboard.writeText(setup.value.secret)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择复制')
-  }
+  void copyText(setup.value.secret, '已复制密钥')
 }
 
 onMounted(load)
@@ -239,9 +235,9 @@ onMounted(load)
   margin-bottom: 16px;
 }
 .tip code {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--nx-inset);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--nx-radius-sm);
 }
 .loading-box {
   height: 120px;
@@ -253,12 +249,12 @@ onMounted(load)
   margin-bottom: 16px;
 }
 .status-text {
-  color: #606266;
-  font-size: 13px;
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-small);
 }
 .setup-box {
   border: 1px solid var(--el-border-color);
-  border-radius: 8px;
+  border-radius: var(--nx-radius);
   padding: 16px;
 }
 .qr-row {
@@ -271,15 +267,15 @@ onMounted(load)
   width: 180px;
   height: 180px;
   border: 1px solid var(--el-border-color);
-  border-radius: 4px;
+  border-radius: var(--nx-radius-sm);
 }
 .secret-col {
   flex: 1;
   min-width: 240px;
 }
 .secret-label {
-  font-size: 13px;
-  color: #606266;
+  font-size: var(--nx-font-small);
+  color: var(--nx-text-2);
   margin-bottom: 6px;
 }
 .secret-input {

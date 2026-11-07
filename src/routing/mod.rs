@@ -133,7 +133,7 @@ pub fn weighted_pick(routes: &[ModelRouteRow]) -> Option<ModelRouteRow> {
     if routes.is_empty() {
         return None;
     }
-    use rand::Rng;
+    use rand::RngExt;
     let weight_of = |r: &ModelRouteRow| if r.weight <= 0 { 1u64 } else { r.weight as u64 };
     let total: u64 = routes.iter().map(weight_of).sum();
     let mut rng = rand::rng();

@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     :title="`额度 · ${row?.name ?? ''}`"
-    width="560px"
+    class="dlg"
     :close-on-click-modal="false"
     destroy-on-close
     @open="load(false)"
@@ -209,18 +209,6 @@ async function load(probe: boolean) {
 </script>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-.hint {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.6;
-}
 .alert {
   margin-bottom: 12px;
 }
@@ -228,7 +216,7 @@ async function load(probe: boolean) {
   display: flex;
   gap: 16px;
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   margin-bottom: 8px;
 }
 .footnote {

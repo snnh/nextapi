@@ -14,8 +14,6 @@ export interface ConfirmDangerOptions {
   message: string
   /** 确认按钮文案，默认取 title */
   confirmText?: string
-  /** 非破坏性但需二次确认的场景可设为 'warning'（按钮不高亮为红色） */
-  level?: 'danger' | 'warning'
 }
 
 /** 危险操作统一确认；用户取消或关闭时返回 false */
@@ -24,7 +22,7 @@ export async function confirmDanger(opts: ConfirmDangerOptions): Promise<boolean
     await ElMessageBox.confirm(opts.message, opts.title, {
       type: 'warning',
       confirmButtonText: opts.confirmText ?? opts.title,
-      confirmButtonClass: opts.level === 'warning' ? undefined : 'el-button--danger',
+      confirmButtonClass: 'el-button--danger',
       cancelButtonText: '取消',
       closeOnClickModal: false,
     })

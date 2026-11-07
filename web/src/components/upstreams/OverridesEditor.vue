@@ -168,14 +168,14 @@ function removeRow(g: GroupKey, i: number) {
 
 <style scoped>
 .ov-group {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 10px;
   margin-bottom: 10px;
   background: var(--el-fill-color-lighter);
 }
 .ov-group-head {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
   margin-bottom: 8px;
@@ -201,7 +201,7 @@ function removeRow(g: GroupKey, i: number) {
 }
 .ov-warn {
   color: var(--el-color-warning-dark-2);
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   margin: -4px 0 8px;
 }
 .ov-key-dup :deep(.el-input__wrapper) {

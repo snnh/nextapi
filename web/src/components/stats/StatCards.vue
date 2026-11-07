@@ -3,7 +3,7 @@
   <!-- 加载中（summary 为 null）由格式化函数统一输出 '-'，避免把加载态误当「无数据」；
        父级 Stats.vue 通过 v-loading 展示整体加载遮罩，故此处不做骨架屏。 -->
   <div class="stat-grid">
-    <el-card v-for="m in cards" :key="m.label" class="stat-card" shadow="hover">
+    <el-card v-for="m in cards" :key="m.label" class="stat-card" shadow="never">
       <div class="stat-label">
         <el-tooltip :content="m.tip" placement="top">
           <span>{{ m.label }}</span>
@@ -13,7 +13,7 @@
       <div v-if="m.sub" class="stat-sub hint">{{ m.sub }}</div>
     </el-card>
 
-    <el-card class="stat-card" shadow="hover">
+    <el-card class="stat-card" shadow="never">
       <div class="stat-label">
         <el-tooltip content="响应耗时的分位延迟（P50/P95/P99）" placement="top">
           <span>延迟</span>
@@ -39,21 +39,13 @@
 import { computed } from 'vue'
 import type { StatsCurrency, StatsSummary } from '@/api/types'
 import { fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
+import { STAT_LABEL_TIPS } from '@/utils/consts'
 
 const props = defineProps<{
   summary: StatsSummary | null
   currency: StatsCurrency
 }>()
 
-// 指标释义（与 Dashboard.vue 同口径；Token 全量口径见 0017 迁移与 src/stats.rs）
-const LABEL_TIPS = {
-  requests: '统计区间内的网关请求总数',
-  success: '成功率 = 状态码 < 400 的请求占比',
-  tokens: '总 Token 数 = 输入（未缓存）+ 输出 + 缓存命中（读）+ 缓存写入，与配额口径一致',
-  cacheRead: '缓存命中（读）Token：各协议已归一（OpenAI/Gemini 上游含缓存的输入已拆分）',
-  cacheHitRate: '缓存命中率 = 缓存命中 ÷（输入未缓存 + 缓存命中 + 缓存写入），仅统计输入侧',
-  cost: '按所选币种折算的合计成本；未计价（无定价规则）条数不计入',
-} as const
 
 interface CardItem {
   label: string
@@ -77,44 +69,65 @@ function tokenSub(s: StatsSummary | null): string {
 const cards = computed<CardItem[]>(() => {
   const s = props.summary
   return [
-    { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: LABEL_TIPS.requests },
-    { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: LABEL_TIPS.success },
+    { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: STAT_LABEL_TIPS.requests },
+    { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: STAT_LABEL_TIPS.success },
     {
       label: '总 Tokens（含缓存）',
       value: fmtInt(s?.total_tokens),
       sub: tokenSub(s),
-      tip: LABEL_TIPS.tokens,
+      tip: STAT_LABEL_TIPS.tokens,
     },
     {
       label: '缓存命中 Tokens',
       value: fmtInt(s?.cache_read_tokens),
       sub: '',
-      tip: LABEL_TIPS.cacheRead,
+      tip: STAT_LABEL_TIPS.cacheRead,
     },
     {
       label: '缓存命中率',
       // 分母为 0（无输入 token）→ 后端 null → 展示 '-'，不误报 0%
       value: s?.cache_hit_rate != null ? fmtPct(s.cache_hit_rate) : '-',
       sub: '',
-      tip: LABEL_TIPS.cacheHitRate,
+      tip: STAT_LABEL_TIPS.cacheHitRate,
     },
     {
       label: `成本（${props.currency}）`,
       value: fmtMoney(s?.cost_display),
       sub: s && s.cost_na_count > 0 ? `${s.cost_na_count} 条未计价` : '',
-      tip: LABEL_TIPS.cost,
+      tip: STAT_LABEL_TIPS.cost,
     },
   ]
 })
 </script>
 
 <style scoped>
-/* 与仪表盘同款：自适应列数网格，避免 el-col 固定 4 格在宽屏留白 */
+/* 固定 4 列：7 张卡（6 指标 + 延迟）排成两行；延迟卡整行，避免孤立一张卡 */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 16px;
+}
+
+.stat-card:last-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1400px) {
+  .stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  /* 移动端 Token 构成较长，独占一行 */
+  .stat-card:nth-child(3) {
+    grid-column: 1 / -1;
+  }
 }
 
 .stat-card {
@@ -123,7 +136,7 @@ const cards = computed<CardItem[]>(() => {
 }
 
 .stat-label {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   color: var(--el-text-color-secondary);
   margin-bottom: 8px;
   white-space: nowrap;
@@ -132,7 +145,7 @@ const cards = computed<CardItem[]>(() => {
 }
 
 .stat-value {
-  font-size: 24px;
+  font-size: var(--nx-font-stat);
   font-weight: 600;
   color: var(--el-text-color-primary);
   line-height: 1.2;
@@ -144,8 +157,8 @@ const cards = computed<CardItem[]>(() => {
 .stat-value.delay {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
-  font-size: 14px;
+  gap: 6px 24px;
+  font-size: var(--nx-font-body);
   font-weight: 400;
   white-space: normal;
   overflow: visible;

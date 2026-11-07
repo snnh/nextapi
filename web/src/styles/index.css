@@ -1,3 +1,9 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body,
 #app {
@@ -9,15 +15,45 @@ body,
 body {
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
-  background: var(--el-bg-color-page);
-  color: var(--el-text-color-primary);
-  font-size: var(--el-font-size-base);
+  background: var(--nx-canvas);
+  color: var(--nx-text);
+  font-size: var(--nx-font-body);
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* 通用页面容器 */
+::selection {
+  background: var(--nx-accent-soft);
+  color: var(--nx-text);
+}
+
+/* 跳到主内容：仅键盘聚焦时可见 */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 3000;
+  padding: 8px 12px;
+  border-radius: var(--nx-radius);
+  background: var(--nx-accent-solid);
+  color: var(--nx-on-accent);
+  font-size: var(--nx-font-small);
+  transform: translateY(-200%);
+  transition: transform var(--nx-dur-fast) var(--nx-ease);
+}
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid var(--nx-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 通用页面容器：桌面 24 / 平板 20 / 手机 12，最大 1440 */
 .page {
-  padding: 20px;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--nx-space-6);
 }
 
 /* 页面说明行：标题由顶栏负责，内容区只放说明与页级摘要/操作 */
@@ -25,53 +61,53 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--nx-space-4);
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: var(--nx-space-4);
 }
 
 .page-desc {
   margin: 0;
   max-width: 960px;
-  color: var(--el-text-color-secondary);
-  font-size: var(--el-font-size-small);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
   line-height: 1.6;
 }
 
 .page-head-summary {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--nx-space-4);
   flex-wrap: wrap;
-  color: var(--el-text-color-secondary);
-  font-size: var(--el-font-size-small);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
   line-height: 1.6;
 }
 
 .page-head-summary b {
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
   font-weight: 600;
 }
 
 .page-head-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--nx-space-2);
   flex-wrap: wrap;
 }
 
 /* 普通容器卡片（用于 div；el-card 请直接用 section-card，避免双内边距） */
 .page-card {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: var(--el-card-border-radius);
-  padding: 20px;
-  margin-bottom: 16px;
+  background: var(--nx-surface);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius-lg);
+  padding: var(--nx-space-5);
+  margin-bottom: var(--nx-space-4);
 }
 
 /* el-card 的间距工具类：不叠加 padding */
 .section-card {
-  margin-bottom: 16px;
+  margin-bottom: var(--nx-space-4);
 }
 
 /* 标签页卡片（设置/价格等整页 tabs） */
@@ -83,31 +119,114 @@ body {
   display: flex;
   min-height: var(--el-component-size);
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--nx-space-2);
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: var(--nx-space-4);
 }
 
-.toolbar .spacer {
+/* 通用弹性占位：工具栏、表头、卡片行都可用 */
+.spacer {
   flex: 1;
 }
 
 /* 说明性灰色小字 */
 .hint {
-  color: var(--el-text-color-secondary);
-  font-size: var(--el-font-size-extra-small);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
   line-height: 1.6;
 }
 
-.mono {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+/* 弱化文字 / 主行下方的副信息（全站统一，勿在页面重复定义） */
+.muted {
+  color: var(--nx-text-3);
+}
+
+.sub-line {
+  margin-top: var(--nx-space-1);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+  line-height: 1.5;
   word-break: break-all;
 }
 
-/* 金额/数字右对齐列 */
-.num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+/* 工具栏搜索框统一宽度，页面只按需加修饰类覆盖 */
+.search-input {
+  width: 240px;
+  max-width: 100%;
+}
+
+/* 表格下方说明（收起列/高级参数入口） */
+.table-note {
+  margin-top: var(--nx-space-2);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+  line-height: 1.6;
+}
+
+/* 筛选网格：日志/统计等页面共用，避免各写一套 */
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--nx-space-3) var(--nx-space-4);
+  align-items: center;
+}
+
+.f-item {
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-2);
+  min-width: 0;
+}
+
+.f-item-wide {
+  grid-column: span 2;
+}
+
+.f-item > .el-date-editor,
+.f-item > .el-select,
+.f-item > .el-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+.f-label {
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-small);
+  white-space: nowrap;
+}
+
+.filter-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-2);
+  flex-wrap: wrap;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  word-break: break-all;
+}
+
+/* 一次性展示的密钥块（创建/轮换后） */
+.secret-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nx-space-4);
+  align-items: flex-start;
+}
+.secret-key {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--nx-space-3) var(--nx-space-4);
+  background: var(--nx-subtle);
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
+  color: var(--nx-text);
+  font-size: var(--nx-font-title);
+  line-height: 1.5;
+  word-break: break-all;
 }
 
 /* 表格内状态标签组间距 */
@@ -126,41 +245,15 @@ body {
 }
 
 .meta-item {
-  color: var(--el-text-color-regular);
-  font-size: var(--el-font-size-extra-small);
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-caption);
   white-space: nowrap;
 }
 
 .meta-item + .meta-item::before {
   content: '·';
   margin: 0 6px;
-  color: var(--el-text-color-placeholder);
-}
-
-.meta-text {
-  color: var(--el-text-color-regular);
-  font-size: var(--el-font-size-extra-small);
-  line-height: 1.5;
-  word-break: break-all;
-}
-
-/* 通用错误/空态：各页面只保留布局差异 */
-.error-state {
-  padding: 24px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.error-msg {
-  margin: 0;
-  max-width: 100%;
-  color: var(--el-color-danger);
-  font-size: var(--el-font-size-small);
-  line-height: 1.6;
-  text-align: center;
-  word-break: break-all;
+  color: var(--nx-text-placeholder);
 }
 
 /* 通用弹窗宽度 */
@@ -174,9 +267,14 @@ body {
   max-width: 96vw;
 }
 
+.dlg-sm {
+  width: 440px;
+  max-width: 94vw;
+}
+
 /* 弹窗响应式兜底：任何遗漏固定 px 宽度的弹窗在小屏不溢出；
    长表单弹窗限制体高并内部滚动（配合 body 类 long-form） */
-@media (max-width: 768px) {
+@media (max-width: 800px) {
   .el-dialog {
     --el-dialog-width: 94vw;
   }
@@ -188,24 +286,40 @@ body {
 
 .el-card__header {
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
 }
 
-.page > .toolbar:first-child {
-  padding: 2px 0 4px;
-}
-
-@media (max-width: 768px) {
+@media (max-width: 1400px) {
   .page {
-    padding: 12px;
+    padding: var(--nx-space-5);
+  }
+}
+
+@media (max-width: 800px) {
+  .page {
+    padding: var(--nx-space-3);
   }
   .page-head {
     flex-direction: column;
     gap: 8px;
   }
   .page-card {
-    padding: 14px;
-    border-radius: var(--el-border-radius-base);
+    padding: var(--nx-space-3);
+    border-radius: var(--nx-radius-md);
+  }
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+  .f-item-wide {
+    grid-column: auto;
+  }
+  .f-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--nx-space-1);
+  }
+  .search-input {
+    width: 100%;
   }
   .toolbar {
     align-items: stretch;
@@ -219,10 +333,9 @@ body {
     display: none;
   }
   .el-table {
-    font-size: var(--el-font-size-small);
+    font-size: var(--nx-font-small);
   }
-  .meta-item,
-  .meta-text {
+  .meta-item {
     white-space: normal;
   }
 }

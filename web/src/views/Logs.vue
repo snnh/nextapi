@@ -2,33 +2,30 @@
   <div class="page">
     <div class="page-head">
       <p class="page-desc">时间默认「今天 00:00 ~ 现在」，清空即按服务端默认；筛选与 CSV 导出共用并同步地址栏。</p>
-    </div>
-
-    <!-- 顶部工具栏：右侧 CSV 导出 & 分区清理 -->
-    <div class="toolbar">
-      <div class="spacer" />
-      <el-tooltip
-        content="按当前筛选导出；上限 10 万行，超出将截断并追加注释行"
-        placement="top"
-      >
-        <el-button type="primary" plain :icon="Download" :loading="exporting" @click="exportCsv">
-          CSV 导出
-        </el-button>
-      </el-tooltip>
-      <el-button type="warning" plain :icon="Delete" @click="openCleanup">分区清理</el-button>
-      <el-tooltip
-        content="按 (时间, id) 顺序翻页，深页不退化（不统计总数）；适合连续排查，筛选变化时自动回到最新一页"
-        placement="top"
-      >
-        <el-button
-          :type="cursorMode ? 'primary' : 'default'"
-          plain
-          :icon="Sort"
-          @click="toggleCursorMode"
+      <div class="page-head-actions">
+        <el-tooltip
+          content="按当前筛选导出；上限 10 万行，超出将截断并追加注释行"
+          placement="top"
         >
-          {{ cursorMode ? '游标浏览中' : '游标浏览' }}
-        </el-button>
-      </el-tooltip>
+          <el-button type="primary" plain :icon="Download" :loading="exporting" @click="exportCsv">
+            CSV 导出
+          </el-button>
+        </el-tooltip>
+        <el-button type="warning" plain :icon="Delete" @click="openCleanup">分区清理</el-button>
+        <el-tooltip
+          content="按 (时间, id) 顺序翻页，深页不退化（不统计总数）；适合连续排查，筛选变化时自动回到最新一页"
+          placement="top"
+        >
+          <el-button
+            :type="cursorMode ? 'primary' : 'default'"
+            plain
+            :icon="Sort"
+            @click="toggleCursorMode"
+          >
+            {{ cursorMode ? '游标浏览中' : '游标浏览' }}
+          </el-button>
+        </el-tooltip>
+      </div>
     </div>
 
     <!-- 筛选工具栏：默认保留 时间/模型/request_id，Key/上游/状态码/流式/降级 归入「高级筛选」（默认折叠） -->
@@ -40,6 +37,7 @@
             v-model="range"
             type="datetimerange"
             :shortcuts="timeShortcuts"
+            :format="isMobile ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm:ss'"
             range-separator="至"
             start-placeholder="开始时间"
             end-placeholder="结束时间"
@@ -145,52 +143,56 @@
         </el-tooltip>
       </div>
       <template v-if="listError">
-        <div v-loading="loading" class="error-state">
-          <p class="error-msg">请求日志加载失败：{{ listError }}</p>
-          <el-button type="primary" :icon="Refresh" @click="loadLogs">重新加载</el-button>
+        <div v-loading="loading">
+          <ErrorState title="请求日志加载失败" :message="listError" @retry="loadLogs" />
         </div>
       </template>
       <template v-else>
-      <el-table :data="cursorMode ? cursorRows : rows" v-loading="loading">
+      <el-table v-if="!isMobile && !isCompact" :data="cursorMode ? cursorRows : rows" v-loading="loading">
         <template #empty>
-          <el-empty description="无匹配日志" :image-size="90" />
+          <EmptyState title="无匹配日志" description="调整时间范围或筛选条件后重试" />
         </template>
-        <el-table-column prop="ts" label="时间" width="170">
-          <template #default="{ row }">{{ fmtTime(row.ts) }}</template>
-        </el-table-column>
-        <el-table-column v-if="!isNarrow" label="request_id" width="200">
+        <el-table-column label="时间" width="125">
           <template #default="{ row }">
-            <CopyText :text="row.request_id" :truncate="16" />
-          </template>
-        </el-table-column>
-        <el-table-column label="模型" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.model }}
-            <span v-if="row.upstream_model" class="hint"> → {{ row.upstream_model }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="!isNarrow" label="Key" min-width="170" show-overflow-tooltip>
-          <template #default="{ row }">{{ keyText(row) }}</template>
-        </el-table-column>
-        <el-table-column label="上游" min-width="130">
-          <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
-        </el-table-column>
-        <el-table-column v-if="!isNarrow" label="协议链" min-width="190">
-          <template #default="{ row }">
-            <div class="proto-cell">
-              <span>{{ protoLabel(row.protocol_in) }} → {{ protoLabel(row.protocol_out) }}</span>
-              <el-tooltip
-                v-if="row.convert_mode !== 'passthrough'"
-                :content="`转换方式：${row.convert_mode}`"
-                placement="top"
-              >
-                <el-tag size="small" type="warning" effect="plain" class="convert-tag">转换</el-tag>
-              </el-tooltip>
+            <div class="time-cell">
+              <span class="time-main" :title="fmtTime(row.ts)">{{ fmtLogTime(row.ts) }}</span>
+              <span v-if="row.request_id" class="time-rid mono" :title="row.request_id">
+                #{{ row.request_id.slice(-8) }}
+              </span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="流式" width="70" align="center">
-          <template #default="{ row }">{{ row.stream ? '是' : '否' }}</template>
+        <el-table-column label="模型" min-width="160">
+          <template #default="{ row }">
+            <div class="model-cell">
+              <span class="model-main">{{ row.model || '-' }}</span>
+              <span v-if="row.upstream_model && row.upstream_model !== row.model" class="hint">
+                上游 {{ row.upstream_model }}
+              </span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!isTablet" label="Key" width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ keyText(row) }}</template>
+        </el-table-column>
+        <el-table-column label="上游 / 协议" min-width="110">
+          <template #default="{ row }">
+            <div class="model-cell">
+              <span class="model-main">{{ row.upstream_name || '-' }}</span>
+              <span class="hint proto-line">
+                {{ protoLabel(row.protocol_in) }} → {{ protoLabel(row.protocol_out) }}
+                <el-tag
+                  v-if="row.convert_mode !== 'passthrough'"
+                  size="small"
+                  type="warning"
+                  effect="plain"
+                  class="convert-tag"
+                >
+                  转换
+                </el-tag>
+              </span>
+            </div>
+          </template>
         </el-table-column>
         <el-table-column label="状态" width="118" align="center">
           <template #default="{ row }">
@@ -208,15 +210,20 @@
                 <el-tag size="small" type="warning" effect="plain">降级</el-tag>
               </el-tooltip>
             </div>
+            <div class="status-sub hint">
+              {{ row.stream ? '流式' : '非流式' }}
+              <span v-if="row.retry_count"> · 重试 {{ row.retry_count }}</span>
+              <span v-if="isTablet"> · {{ fmtDur(row.latency_ms) }}</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="延迟" width="130">
+        <el-table-column v-if="!isTablet" label="延迟" width="96">
           <template #default="{ row }">
             <div>{{ fmtDur(row.latency_ms) }}</div>
             <div v-if="row.ttfb_ms != null" class="hint">TTFB {{ fmtDur(row.ttfb_ms) }}</div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="Tokens" min-width="175">
+        <el-table-column v-if="!isTablet" label="Tokens" min-width="135">
           <template #default="{ row }">
             <div class="token-cell">
               <span>P {{ fmtInt(row.prompt_tokens) }}</span>
@@ -225,7 +232,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="成本" width="150">
+        <el-table-column label="成本" width="110">
           <template #default="{ row }">
             <div v-if="row.cost_cny != null || row.cost_usd != null" class="cost-cell">
               <div>¥ {{ fmtMoney(row.cost_cny) }}</div>
@@ -234,12 +241,50 @@
             <span v-else class="hint">未计价</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="80" fixed="right">
+        <el-table-column label="操作" width="60" fixed="right">
           <template #default="{ row }">
             <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 窄屏/移动端：日志卡片列表，避免多列表格横向滚动 -->
+      <div v-else v-loading="loading" class="log-cards">
+        <EmptyState v-if="!displayRows.length" title="无匹配日志" description="调整时间范围或筛选条件后重试" />
+        <article v-for="row in displayRows" :key="row.request_id" class="log-card">
+          <div class="log-card-head">
+            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <span class="log-card-model">{{ row.model || '-' }}</span>
+            <div class="spacer" />
+            <span class="log-card-cost">
+              <template v-if="row.cost_cny != null || row.cost_usd != null">
+                ¥ {{ fmtMoney(row.cost_cny) }}
+              </template>
+              <template v-else>未计价</template>
+            </span>
+          </div>
+          <div class="log-card-meta hint">
+            <div class="log-card-meta-row">
+              <span>{{ fmtLogTime(row.ts) }}</span>
+              <span v-if="row.request_id" class="mono" :title="row.request_id">#{{ row.request_id.slice(-8) }}</span>
+            </div>
+            <div class="log-card-meta-row">
+              <span>{{ row.upstream_name || '未知上游' }}</span>
+              <span>{{ fmtDur(row.latency_ms) }}</span>
+              <span v-if="row.stream">流式</span>
+              <el-tag v-if="row.degraded" size="small" type="warning" effect="plain">降级</el-tag>
+            </div>
+          </div>
+          <div class="log-card-foot">
+            <span class="hint">
+              P {{ fmtInt(row.prompt_tokens) }} · C {{ fmtInt(row.completion_tokens) }} · Cache
+              {{ fmtInt(row.cache_read_tokens) }}
+            </span>
+            <div class="spacer" />
+            <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
+          </div>
+        </article>
+      </div>
         <div v-if="cursorMode" class="cursor-foot">
           <span class="hint">已加载 {{ cursorRows.length }} 条（游标模式不统计总数）</span>
           <el-button v-if="cursorNext" type="primary" plain :loading="cursorLoading" @click="loadMoreCursor">
@@ -253,7 +298,8 @@
             v-model:page-size="pageSize"
             :total="total"
             :page-sizes="[20, 50, 100]"
-            layout="total, sizes, prev, pager, next"
+            :small="isMobile"
+            :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'"
             @current-change="onPageChange"
             @size-change="onSizeChange"
           />
@@ -369,16 +415,13 @@
             </el-collapse-item>
           </el-collapse>
         </template>
-        <div v-else-if="detailError" class="error-state">
-          <p class="error-msg">详情加载失败：{{ detailError }}</p>
-          <el-button type="primary" :icon="Refresh" @click="retryDetail">重试</el-button>
-        </div>
+        <ErrorState v-else-if="detailError" title="详情加载失败" :message="detailError" @retry="retryDetail" />
         <el-empty v-else-if="!detailLoading" description="无详情" :image-size="80" />
       </div>
     </el-drawer>
 
     <!-- 分区清理弹窗 -->
-    <el-dialog v-model="cleanupVisible" title="日志分区清理" width="680px" :close-on-click-modal="false">
+    <el-dialog v-model="cleanupVisible" title="日志分区清理" class="dlg" :close-on-click-modal="false">
       <div class="cleanup-desc hint">
         日志按约 30 天为周期分区存储。清理仅删除「分区边界 to_ts ≤ 所选时间」的完整分区（整分区 DROP），
         未到期的分区不受影响；系统不会自动清理历史分区。建议先点击「预览（dry-run）」查看将删除的分区，
@@ -459,11 +502,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { keyApi, logApi, upstreamApi, type LogListQuery } from '@/api'
 import { errMsg } from '@/api/http'
 import type { ApiKeyRow, CleanupSummary, LogItem, PartitionInfo, UpstreamOut } from '@/api/types'
-import CopyText from '@/components/common/CopyText.vue'
 import { PROTOCOL_IN_LABELS, statusType } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
 import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtTime, todayRange } from '@/utils/format'
 import { confirmDanger } from '@/utils/confirm'
+import { copyText } from '@/utils/clipboard'
+import ErrorState from '@/components/common/ErrorState.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 type TriState = '' | 'true' | 'false'
 
@@ -525,13 +571,15 @@ function hasAdvancedFilter(): boolean {
 
 // —— 列表状态 ——
 const rows = ref<LogItem[]>([])
+/** 表格/卡片当前数据：页码模式 rows，游标模式 cursorRows */
+const displayRows = computed(() => (cursorMode.value ? cursorRows.value : rows.value))
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
 const listError = ref('')
-/** 响应式判定：≤768px 视为窄屏（挂载时确定即可） */
-const isNarrow = ref(false)
+/** 响应式：手机端用卡片列表，平板（≤1280）隐藏低优先列 */
+const { isMobile, isCompact, isTablet } = useBreakpoint()
 
 const keys = ref<ApiKeyRow[]>([])
 const upstreams = ref<UpstreamOut[]>([])
@@ -671,6 +719,7 @@ function syncQueryToUrl() {
   if (f.upstream_id) q.upstream_id = f.upstream_id
   if (f.model) q.model = f.model
   if (f.request_id) q.request_id = f.request_id
+  if (f.status_group) q.status_group = f.status_group
   if (f.status !== undefined) q.status = f.status
   if (f.stream !== undefined) q.stream = f.stream ? 'true' : 'false'
   if (f.degraded !== undefined) q.degraded = f.degraded ? 'true' : 'false'
@@ -694,9 +743,11 @@ function onReset() {
   upstreamId.value = ''
   model.value = ''
   requestId.value = ''
+  statusGroup.value = ''
   statusStr.value = ''
   streamOpt.value = ''
   degradedOpt.value = ''
+  advancedOpen.value = false
   onQuery()
 }
 
@@ -747,6 +798,10 @@ function restoreFromQuery() {
   model.value = qv('model')
   requestId.value = qv('request_id')
 
+  const statusGroupRaw = qv('status_group')
+  const statusGroups = ['success', '4xx', '5xx', '429', 'degraded']
+  statusGroup.value = statusGroups.includes(statusGroupRaw) ? statusGroupRaw : ''
+
   const status = qv('status')
   statusStr.value = /^\d+$/.test(status) ? status : ''
 
@@ -760,6 +815,8 @@ function restoreFromQuery() {
   if (Number.isFinite(page) && page > 0) currentPage.value = page
   const size = Number.parseInt(qv('page_size'), 10)
   if (Number.isFinite(size) && size > 0) pageSize.value = size
+
+  advancedOpen.value = hasAdvancedFilter()
 }
 
 async function loadKeys() {
@@ -780,7 +837,6 @@ async function loadUpstreams() {
 
 onMounted(() => {
   restoreFromQuery()
-  isNarrow.value = window.innerWidth <= 768
   loadKeys()
   loadUpstreams()
   loadLogs()
@@ -797,6 +853,12 @@ function keyText(row?: LogItem | null): string {
   return parts.length ? parts.join(' · ') : '-'
 }
 
+function fmtLogTime(iso?: string | null): string {
+  if (!iso) return '-'
+  const d = dayjs(iso)
+  return d.isValid() ? d.format('MM-DD HH:mm:ss') : '-'
+}
+
 function protoLabel(v?: string | null): string {
   if (!v) return '-'
   return PROTOCOL_IN_LABELS[v] ?? v
@@ -811,8 +873,8 @@ const detailRequestId = ref('')
 const detailOpen = ref(['usage_raw'])
 
 /** 响应式：≤768px 抽屉全宽、字段单列，桌面 60% / 双列 */
-const drawerSize = computed(() => (isNarrow.value ? '100%' : '60%'))
-const descColumn = computed(() => (isNarrow.value ? 1 : 2))
+const drawerSize = computed(() => (isMobile.value ? '100%' : '60%'))
+const descColumn = computed(() => (isMobile.value ? 1 : 2))
 
 async function fetchDetail() {
   const rid = detailRequestId.value
@@ -839,14 +901,9 @@ function retryDetail() {
   fetchDetail()
 }
 
-async function copyRequestId(id: string) {
+function copyRequestId(id: string) {
   if (!id) return
-  try {
-    await navigator.clipboard.writeText(id)
-    ElMessage.success('已复制 request_id')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+  void copyText(id, '已复制 request_id')
 }
 
 function isEmptyJson(v: unknown): boolean {
@@ -963,58 +1020,91 @@ async function confirmCleanup() {
 </script>
 
 <style scoped>
-.filter-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px 18px;
-  align-items: center;
+.filter-actions {
+  margin-top: var(--nx-space-3);
 }
 
-.f-item {
+.time-cell,
+.model-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.time-main,
+.model-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.time-rid {
+  color: var(--el-text-color-secondary);
+  font-size: var(--nx-font-caption);
+}
+.proto-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.status-sub {
+  margin-top: 2px;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+/* 移动端日志卡片 */
+.log-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 80px;
+}
+.log-card {
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--nx-radius-md);
+  padding: 10px 12px;
+  background: var(--el-bg-color);
+}
+.log-card-head,
+.log-card-meta,
+.log-card-foot {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
-
-.f-item-wide {
-  grid-column: span 2;
+.log-card-head {
+  margin-bottom: 4px;
 }
-
-.f-item > .el-date-editor,
-.f-item > .el-select,
-.f-item > .el-input {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-}
-
-.f-label {
-  color: var(--el-text-color-regular);
-  font-size: var(--el-font-size-small);
+.log-card-model {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.filter-actions {
-  margin-top: 14px;
+.log-card-cost {
+  color: var(--el-text-color-regular);
+  font-size: var(--nx-font-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.log-card-meta {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: var(--nx-font-caption);
+}
+.log-card-meta-row {
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+  gap: 4px 10px;
 }
-
-@media (max-width: 768px) {
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-  .f-item-wide {
-    grid-column: auto;
-  }
-  .f-item {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-  }
+.log-card-foot {
+  margin-top: 6px;
+  font-size: var(--nx-font-caption);
 }
 
 .table-head {
@@ -1026,13 +1116,6 @@ async function confirmCleanup() {
   color: var(--el-text-color-primary);
 }
 
-.proto-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .convert-tag {
   cursor: default;
 }
@@ -1040,20 +1123,25 @@ async function confirmCleanup() {
 .token-cell {
   display: flex;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-primary);
 }
 
 .cost-cell {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   line-height: 1.5;
   color: var(--el-text-color-primary);
 }
 
 .pagination {
-  margin-top: 14px;
+  margin-top: var(--nx-space-3);
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
+}
+@media (min-width: 801px) {
+  .pagination {
+    justify-content: flex-end;
+  }
 }
 
 .json-cards {
@@ -1067,11 +1155,11 @@ async function confirmCleanup() {
   gap: 8px;
   padding-bottom: 10px;
   margin-bottom: 4px;
-  border-bottom: 1px solid #eef0f3;
+  border-bottom: 1px solid var(--nx-border-subtle);
   flex-wrap: wrap;
 }
 .detail-head .rid {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-regular);
   word-break: break-all;
 }
@@ -1085,7 +1173,7 @@ async function confirmCleanup() {
 }
 .group-title {
   margin: 16px 0 8px;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -1093,10 +1181,11 @@ async function confirmCleanup() {
   margin-left: 6px;
 }
 .help-icon {
-  color: var(--el-text-color-secondary);
-  font-size: var(--el-font-size-small);
+  flex-shrink: 0;
+  margin-left: var(--nx-space-1);
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
   vertical-align: -2px;
-  margin-left: 2px;
   cursor: help;
 }
 
@@ -1113,7 +1202,7 @@ async function confirmCleanup() {
   padding: 10px 12px;
   background: var(--el-color-danger-light-9);
   color: var(--el-color-danger);
-  border-radius: var(--el-border-radius-base);
+  border-radius: var(--nx-radius);
   font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
   word-break: break-all;
 }
@@ -1125,6 +1214,6 @@ async function confirmCleanup() {
   margin-bottom: 14px;
   padding: 10px 12px;
   background: var(--el-fill-color-light);
-  border-radius: var(--el-border-radius-base);
+  border-radius: var(--nx-radius);
 }
 </style>

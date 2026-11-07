@@ -128,7 +128,7 @@ function jsonOf(v: unknown): string {
   padding: 12px 0 4px;
 }
 .seg-tip {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   line-height: 1.6;
   white-space: nowrap;
 }
@@ -138,7 +138,7 @@ function jsonOf(v: unknown): string {
   margin-top: 14px;
   padding: 12px 16px;
   background: var(--el-fill-color-light);
-  border-radius: 8px;
+  border-radius: var(--nx-radius);
 }
 .total-item {
   display: flex;
@@ -146,11 +146,11 @@ function jsonOf(v: unknown): string {
   gap: 8px;
 }
 .total-label {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .total-amount {
-  font-size: 20px;
+  font-size: var(--nx-font-lg);
   font-weight: 600;
   color: var(--el-text-color-primary);
   font-variant-numeric: tabular-nums;
@@ -158,10 +158,10 @@ function jsonOf(v: unknown): string {
 .json-pre {
   max-height: 260px;
   overflow: auto;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--nx-code-bg);
+  color: var(--nx-code-text);
   padding: 10px;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--nx-radius);
+  font-size: var(--nx-font-caption);
 }
 </style>

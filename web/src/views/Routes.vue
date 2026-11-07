@@ -25,6 +25,7 @@
         />
         <el-button :icon="Refresh" @click="refresh">刷新</el-button>
         <div class="spacer" />
+        <el-button :icon="Plus" @click="openCreate">新增路由</el-button>
         <div class="hint" v-if="unpricedModelCount > 0">
           有 {{ unpricedModelCount }} 个模型未配置价格（仍可调用，但不计成本）
         </div>
@@ -33,7 +34,6 @@
           <el-button @click="discardLocal">放弃修改</el-button>
           <el-button type="primary" :loading="saving" @click="saveAll">保存全部</el-button>
         </template>
-        <el-button v-else type="primary" :icon="Plus" @click="openCreate">新增路由</el-button>
       </template>
 
       <template v-else>
@@ -65,34 +65,36 @@
     </el-alert>
 
     <!-- 加载失败：不展示空表格，给出重试入口 -->
-    <div v-if="listError" class="page-card error-state">
-      <p class="error-msg">模型路由加载失败：{{ listError }}</p>
-      <el-button type="primary" :icon="Refresh" @click="loadData">重新加载</el-button>
-    </div>
+    <el-card v-if="listError" class="section-card">
+      <ErrorState title="模型路由加载失败" :message="listError" @retry="loadData" />
+    </el-card>
 
     <!-- ===== 模型视图：按对外模型名聚合 ===== -->
-    <el-card v-if="!listError && viewMode === 'models'" shadow="never">
+    <el-card v-if="!listError && viewMode === 'models'" shadow="never" class="section-card">
       <el-table :data="filteredOverviewRows" v-loading="pageLoading">
         <template #empty>
-          <el-empty :description="modelsEmptyText">
-            <el-button type="primary" :icon="Plus" @click="openCreate">新增路由</el-button>
-          </el-empty>
+          <EmptyState title="暂无模型路由" :description="modelsEmptyText">
+            <template #actions>
+              <el-button type="primary" :icon="Plus" @click="openCreate">新增路由</el-button>
+            </template>
+          </EmptyState>
         </template>
 
-        <el-table-column label="对外模型名" :min-width="isNarrow ? 140 : 230" :show-overflow-tooltip="!isNarrow">
+        <el-table-column label="对外模型名" :min-width="isNarrow ? 130 : isCompact ? 180 : isTablet ? 200 : 230" :show-overflow-tooltip="!isNarrow">
           <template #default="{ row }">
             <div class="cell-inline">
               <CopyText :text="row.model" :truncate="28" />
               <el-tag v-if="row.wildcard" size="small" type="warning" effect="plain">通配</el-tag>
               <el-tag v-if="row.autoManaged" size="small" type="primary" effect="plain">自动</el-tag>
             </div>
-            <div v-if="isNarrow && row.upstreamNames.length" class="sub-line muted">
-              {{ row.upstreamNames.join('、') }}
+            <div v-if="isNarrow || isTablet" class="sub-line muted">
+              <span v-if="row.upstreamNames.length">{{ row.upstreamNames.join('、') }}</span>
+              <span v-if="isNarrow" class="route-count">路由 {{ row.enabledCount }}/{{ row.totalCount }}</span>
             </div>
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="上游" min-width="210">
+        <el-table-column v-if="!isNarrow && !isTablet" label="上游" min-width="210">
           <template #default="{ row }">
             <div class="tag-group">
               <el-tag
@@ -116,7 +118,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="优先级" width="90" align="center">
+        <el-table-column v-if="!isNarrow && !isTablet" label="优先级" width="90" align="center">
           <template #default="{ row }">
             <span v-if="row.minPriority != null">{{ row.minPriority }}</span>
             <span v-else class="muted">—</span>
@@ -131,7 +133,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="价格" width="118" align="center">
+        <el-table-column v-if="!isCompact" label="价格" width="118" align="center">
           <template #default="{ row }">
             <el-tooltip :content="priceTooltip(row)" placement="top">
               <el-tag :type="priceTagType(row.priceState)" size="small" effect="plain">
@@ -141,14 +143,14 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="别名" width="80" align="center">
+        <el-table-column v-if="!isNarrow && !isTablet" label="别名" width="80" align="center">
           <template #default="{ row }">
             <span v-if="row.aliases.length">{{ row.aliases.length }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column label="状态" :width="isNarrow ? 92 : 120" align="center">
+        <el-table-column label="状态" :width="isNarrow ? 84 : isTablet ? 110 : 120" align="center">
           <template #default="{ row }">
             <el-tooltip :content="row.healthText" placement="top">
               <el-tag :type="healthTagType(row.health)" size="small" effect="plain">
@@ -160,7 +162,7 @@
 
         <el-table-column
           label="操作"
-          :width="isNarrow ? 68 : 90"
+          :width="isNarrow ? 64 : 90"
           :fixed="isNarrow ? false : 'right'"
           align="center"
         >
@@ -172,13 +174,17 @@
     </el-card>
 
     <!-- ===== 路由视图：现有编辑表格 ===== -->
-    <el-card v-else-if="!listError" shadow="never">
+    <el-card v-else-if="!listError" shadow="never" class="section-card">
       <el-table :data="drafts" border>
         <template #empty>
-          <el-empty description="暂无模型路由，点击左上角「新增规则」创建" />
+          <EmptyState title="暂无模型路由" description="点击「新增规则」创建第一条路由" />
         </template>
 
-        <el-table-column label="模型模式" :min-width="isNarrow ? 150 : 220" :show-overflow-tooltip="!isNarrow">
+        <el-table-column
+          label="模型模式"
+          :min-width="isNarrow ? 150 : isTablet ? 220 : 230"
+          :show-overflow-tooltip="!isNarrow"
+        >
           <template #default="{ row }">
             <div class="cell-inline">
               <CopyText :text="row.model_pattern" :truncate="24" />
@@ -191,25 +197,34 @@
               </el-tooltip>
               <el-tag v-if="isRowDirty(row)" size="small" type="warning" effect="plain">未保存</el-tag>
             </div>
-            <div v-if="isNarrow" class="sub-line muted">{{ row.upstreamName }}</div>
+            <div v-if="isNarrow || isTablet" class="sub-line muted">
+              {{ row.upstreamName }}
+            </div>
+            <div v-if="isNarrow" class="sub-line muted">
+              优先级 {{ row.priority }} · 权重 {{ row.weight }} · 重试 {{ row.retries }}
+            </div>
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="上游" min-width="180" show-overflow-tooltip>
+        <el-table-column v-if="!isNarrow && !isTablet" label="上游" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
             <CopyText :text="row.upstreamName" :truncate="24" />
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="覆盖模型名" min-width="140" show-overflow-tooltip>
+        <el-table-column v-if="!isNarrow && !isTablet" label="覆盖模型名" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.override_model">{{ row.override_model }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" prop="priority" label="优先级" width="90" align="center" />
-        <el-table-column v-if="!isNarrow" prop="weight" label="权重" width="80" align="center" />
+        <el-table-column v-if="!isNarrow && !isCompact" prop="priority" label="优先级" width="90" align="center" />
+        <el-table-column v-if="!isNarrow && !isCompact" prop="weight" label="权重" width="80" align="center" />
+
+        <el-table-column v-if="!isTablet" label="更新时间" width="180">
+          <template #default="{ row }">{{ fmtTime(row.updatedAt) }}</template>
+        </el-table-column>
 
         <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
           <template #default="{ row }">
@@ -219,48 +234,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="重试次数" width="90" align="center">
-          <template #default="{ row }">{{ row.retries }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="重试状态码" min-width="180">
-          <template #default="{ row }">
-            <div v-if="row.retry_status_codes && row.retry_status_codes.length" class="tag-group">
-              <el-tag
-                v-for="c in row.retry_status_codes"
-                :key="c"
-                size="small"
-                type="warning"
-                effect="plain"
-              >
-                {{ c }}
-              </el-tag>
-            </div>
-            <span v-else class="muted">默认</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="锁定上游" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.lock_upstream" size="small" type="warning">锁定</el-tag>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="排序" width="70" align="center">
-          <template #default="{ row }">{{ row.sort_order }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="更新时间" width="180">
-          <template #default="{ row }">
-            <span>{{ fmtTime(row.updatedAt) }}</span>
-          </template>
-        </el-table-column>
-
         <!-- 操作列：窄屏不再 fixed 并把两个按钮收进下拉菜单 -->
         <el-table-column
           label="操作"
-          :width="isNarrow ? 88 : 150"
+          :width="isNarrow ? 88 : 120"
           :fixed="isNarrow ? false : 'right'"
         >
           <template #default="{ $index, row }">
@@ -280,12 +257,15 @@
               </template>
             </el-dropdown>
             <template v-else>
-              <el-button size="small" @click="openEdit($index)">编辑</el-button>
-              <el-button size="small" type="danger" @click="removeRow($index)">删除</el-button>
+              <el-button size="small" link type="primary" @click="openEdit($index)">编辑</el-button>
+              <el-button size="small" link type="danger" @click="removeRow($index)">删除</el-button>
             </template>
           </template>
         </el-table-column>
       </el-table>
+      <div class="hint table-note">
+        重试 / 熔断、锁定上游、排序与更新时间在「编辑」弹窗中维护；列表仅保留路由主参数。
+      </div>
     </el-card>
 
     <!-- 新增 / 编辑弹窗 -->
@@ -387,17 +367,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
 import { aliasApi, pricingApi, routeApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
-import { fmtTime } from '@/utils/format'
 import CopyText from '@/components/common/CopyText.vue'
 import ModelDetailDrawer from '@/components/models/ModelDetailDrawer.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { useDirtyGuard } from '@/composables/useDirtyGuard'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import { confirmDanger } from '@/utils/confirm'
+import { fmtTime } from '@/utils/format'
 import {
   buildModelOverview,
   type ModelHealth,
@@ -432,11 +415,8 @@ const serverCommit = ref<RouteOut[]>([])
 /** 本地草稿（可编辑工作副本） */
 const drafts = ref<RouteRow[]>([])
 
-/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
-const isNarrow = ref(window.innerWidth <= 768)
-function onViewportResize() {
-  isNarrow.value = window.innerWidth <= 768
-}
+/** 窄屏/平板：隐藏次要列；≤900 再隐藏价格列，保证 801–1280 不横向滚动 */
+const { isMobile: isNarrow, isCompact, isTablet } = useBreakpoint()
 
 /** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
 function onRowAction(command: string, index: number, _row: RouteRow) {
@@ -669,8 +649,6 @@ async function loadData() {
 }
 
 onMounted(loadData)
-onMounted(() => window.addEventListener('resize', onViewportResize))
-onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 
 // —— 弹窗打开 / 回填 ——
 function openCreate() {
@@ -962,25 +940,17 @@ function computeDiff(): { added: number; modified: number; deleted: number } {
 </script>
 
 <style scoped>
-.muted {
-  color: var(--el-text-color-secondary);
-}
-/* 窄屏折到主行下方的副信息（上游名等） */
-.sub-line {
-  margin-top: 4px;
-  font-size: var(--el-font-size-extra-small);
-  line-height: 1.5;
-  word-break: break-all;
+.route-count {
+  margin-left: 8px;
 }
 .text-warn {
   color: var(--el-color-warning-dark-2);
 }
-.text-error {
-  color: var(--el-color-danger);
-}
 .cell-inline {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
 }
 </style>

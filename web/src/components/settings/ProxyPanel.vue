@@ -25,7 +25,7 @@
       <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
     </div>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="section-card">
       <el-table :data="filtered" v-loading="loading">
         <template #empty>
           <el-empty :description="keyword.trim() ? '无匹配的代理' : '暂无代理'" :image-size="60" />
@@ -48,19 +48,19 @@
             <span class="mono">{{ row.host }}:{{ row.port }}</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="用户名" min-width="120">
+        <el-table-column v-if="!isNarrow && !isTablet" label="用户名" min-width="120">
           <template #default="{ row }">
             <span v-if="row.username" class="mono">{{ row.username }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="密码" width="110" align="center">
+        <el-table-column v-if="!isNarrow && !isTablet" label="密码" width="110" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.has_password" type="success" size="small" effect="light">已设密码</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isNarrow" label="直连名单" min-width="180">
+        <el-table-column v-if="!isNarrow && !isTablet" label="直连名单" min-width="180">
           <template #default="{ row }">
             <template v-if="row.no_proxy.length">
               <el-tag v-for="(t, i) in showNoProxy(row)" :key="i" size="small" style="margin-right: 4px">{{ t }}</el-tag>
@@ -86,12 +86,12 @@
         <!-- 操作列：窄屏不再 fixed（200px 固定列会挤掉名称），按钮收进下拉菜单 -->
         <el-table-column
           label="操作"
-          :width="isNarrow ? 88 : 200"
-          :fixed="isNarrow ? false : 'right'"
+          :width="isNarrow || isTablet ? 88 : 200"
+          :fixed="isNarrow || isTablet ? false : 'right'"
         >
           <template #default="{ row }">
             <el-dropdown
-              v-if="isNarrow"
+              v-if="isNarrow || isTablet"
               trigger="click"
               @command="(c: string) => onRowAction(c, row)"
             >
@@ -185,9 +185,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import { proxyApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { PROXY_KINDS } from '@/utils/consts'
@@ -201,11 +202,8 @@ const loading = ref(false)
 const saving = ref(false)
 const toggling = reactive(new Set<string>())
 
-/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
-const isNarrow = ref(window.innerWidth <= 768)
-function onViewportResize() {
-  isNarrow.value = window.innerWidth <= 768
-}
+/** 窄屏/平板：隐藏次要列 + 操作列收成下拉菜单 */
+const { isMobile: isNarrow, isTablet } = useBreakpoint()
 
 /** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
 function onRowAction(command: string, row: ProxyOut) {
@@ -497,8 +495,6 @@ async function submit() {
 }
 
 onMounted(load)
-onMounted(() => window.addEventListener('resize', onViewportResize))
-onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 </script>
 
 <style scoped>
@@ -511,35 +507,13 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 .info-text .mono,
 .proxy-panel .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   background: var(--el-fill-color-light);
-  border-radius: 4px;
+  border-radius: var(--nx-radius-sm);
   padding: 1px 6px;
 }
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.toolbar .spacer {
-  flex: 1;
-}
-.search-input {
-  width: 220px;
-}
-.muted {
-  color: var(--el-text-color-secondary);
-}
-/* 窄屏折到名称下方的副信息（类型 · 地址） */
-.sub-line {
-  margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  word-break: break-all;
-}
 .tip-item {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   line-height: 1.6;
   white-space: nowrap;
 }
@@ -560,8 +534,6 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
   width: 220px;
 }
 .hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
   margin-top: 6px;
 }
 </style>

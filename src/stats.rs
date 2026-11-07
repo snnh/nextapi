@@ -521,7 +521,7 @@ pub async fn model_rank(
 }
 
 /// 追加明细源公共 WHERE（ts 区间 + 可选维度），参数一律 bind。占位符由 QueryBuilder 按调用顺序编号。
-fn push_stats_where(qb: &mut QueryBuilder<'_, Postgres>, f: &StatsFilter) {
+fn push_stats_where(qb: &mut QueryBuilder<Postgres>, f: &StatsFilter) {
     qb.push(" WHERE ts >= ").push_bind(f.from_ts);
     qb.push(" AND ts < ").push_bind(f.to_ts);
     if let Some(k) = f.key_id {

@@ -428,7 +428,7 @@ defineExpose({ open })
 .form-indent {
   margin-left: 120px;
 }
-@media (max-width: 768px) {
+@media (max-width: 800px) {
   .form-indent {
     margin-left: 0;
   }

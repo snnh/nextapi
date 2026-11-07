@@ -4,143 +4,147 @@
     <div class="page-head">
       <p class="page-desc">接入并管理实际提供模型的供应商（上游）。接入完成后，到「模型路由」页把这些上游绑定给对外模型。</p>
       <div class="page-head-actions">
-        <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">接入上游</el-button>
-        <el-button :icon="Plus" @click="openCreate">自定义上游</el-button>
+        <el-dropdown trigger="click" @command="onAddCommand">
+          <el-button type="primary" :icon="Plus">
+            添加上游
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="preset">从预设开始</el-dropdown-item>
+              <el-dropdown-item command="manual">手动配置</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-button :icon="QuestionFilled" @click="helpVisible = true">使用说明</el-button>
       </div>
     </div>
 
     <!-- 上游表格 -->
-    <el-card shadow="never">
+    <el-card shadow="never" class="section-card">
       <template #header>
         <div class="table-head">
-          <span>接入的上游列表</span>
-          <el-button size="small" :icon="Refresh" @click="loadUpstreams">刷新</el-button>
+          <div class="table-title">
+            <span>接入的上游列表</span>
+            <span class="hint">{{ filteredUpstreams.length }} / {{ upstreams.length }} 个</span>
+          </div>
+          <div class="table-tools">
+            <el-input
+              v-model="search"
+              class="search-input"
+              clearable
+              :prefix-icon="Search"
+              placeholder="搜索名称 / 地址 / 类型"
+            />
+            <el-select v-model="statusFilter" class="status-filter" aria-label="状态筛选">
+              <el-option label="全部状态" value="all" />
+              <el-option label="启用中" value="enabled" />
+              <el-option label="已禁用" value="disabled" />
+              <el-option label="异常 / 熔断" value="error" />
+              <el-option label="凭证失效" value="auth" />
+            </el-select>
+            <el-button :icon="Refresh" @click="loadUpstreams">刷新</el-button>
+          </div>
         </div>
       </template>
-      <div v-if="listError" class="error-state">
-        <p class="error-msg">上游列表加载失败：{{ listError }}</p>
-        <el-button type="primary" :icon="Refresh" @click="loadUpstreams">重新加载</el-button>
-      </div>
-      <el-table v-else :data="upstreams">
+
+      <ErrorState v-if="listError" :message="`上游列表加载失败：${listError}`" @retry="loadUpstreams" />
+      <el-table v-else :data="filteredUpstreams">
         <template #empty>
-          <div class="empty-guide">
-            <el-empty :image-size="110">
-              <template #description>
-                <div class="empty-title">还没有接入任何上游</div>
-                <div class="empty-sub hint">接入上游后，才能在「模型路由」页把模型请求转发到对应的上游。</div>
-              </template>
-              <div class="empty-actions">
-                <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">接入上游（预设）</el-button>
-                <el-button :icon="Plus" @click="openCreate">自定义上游</el-button>
-              </div>
-            </el-empty>
-          </div>
-        </template>
-        <!-- 名称列：窄屏（≤768px）时把状态标签折到名称下方，省下一整列宽度 -->
-        <el-table-column
-          prop="name"
-          label="名称"
-          :min-width="isNarrow ? 130 : 160"
-          :show-overflow-tooltip="!isNarrow"
-        >
-          <template #default="{ row }">
-            <span>{{ row.name }}</span>
-            <template v-if="isNarrow">
-              <br />
-              <el-tag :type="statusMeta(row).type" size="small" class="status-inline">
-                {{ statusMeta(row).text }}
-              </el-tag>
-              <el-tag
-                v-if="row.auth_state"
-                type="danger"
-                size="small"
-                class="status-inline"
-                effect="plain"
-              >
-                凭证失效
-              </el-tag>
+          <EmptyState
+            v-if="hasFilter"
+            title="没有匹配的上游"
+            description="试试清空搜索或切换状态筛选。"
+            :icon="Search"
+          >
+            <template #actions>
+              <el-button @click="clearFilters">清空筛选</el-button>
             </template>
-          </template>
-        </el-table-column>
+          </EmptyState>
+          <EmptyState
+            v-else
+            title="还没有接入任何上游"
+            description="接入上游后，才能在「模型路由」页把模型请求转发到对应的上游。"
+            :icon="Connection"
+          >
+            <template #actions>
+              <el-button type="primary" :icon="MagicStick" @click="openWizard(null)">从预设接入</el-button>
+              <el-button :icon="Plus" @click="openCreate">手动配置</el-button>
+            </template>
+          </EmptyState>
+        </template>
 
-        <el-table-column v-if="!isNarrow" label="类型" width="140">
+        <!-- 上游：名称 + kind/协议/地址副行；窄屏把状态折到名称下方 -->
+        <el-table-column prop="name" label="上游" :min-width="isNarrow ? 60 : isTablet ? 180 : 240">
           <template #default="{ row }">
-            <span class="meta-text">{{ row.kind }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          v-if="!isNarrow"
-          prop="base_url"
-          label="Base URL"
-          min-width="200"
-          show-overflow-tooltip
-        />
-
-        <el-table-column v-if="!isNarrow" label="协议" min-width="220">
-          <template #default="{ row }">
-            <div class="meta-list">
-              <template v-for="(proto, i) in row.protocols" :key="proto">
-                <span v-if="i < 3 || expandedRows.has(row.id)" class="meta-item">
-                  {{ PROTOCOL_LABEL(proto) }}
-                </span>
-              </template>
-              <el-tooltip
-                v-if="row.protocols.length > 3 && !expandedRows.has(row.id)"
-                content="展开全部协议"
-                placement="top"
+            <div class="up-name">{{ row.name || '(未命名)' }}</div>
+            <div v-if="!isTablet" class="meta-list up-meta">
+              <span class="meta-item">{{ kindLabel(row.kind) }}</span>
+              <span class="meta-item">{{ protocolSummary(row) }}</span>
+              <span class="meta-item" :title="row.base_url">{{ hostOf(row.base_url) }}</span>
+              <span v-if="testingId === row.id" class="meta-item">测试中…</span>
+              <span v-if="capsTags(row).length" class="meta-item">{{ capsTags(row).join(' · ') }}</span>
+            </div>
+            <div v-else class="up-meta-compact">
+              <div class="sub-line">
+                <span>{{ kindLabel(row.kind) }}</span>
+                <span class="mono"> · {{ hostOf(row.base_url) }}</span>
+              </div>
+              <div class="sub-line">
+                <span
+                  class="up-credential"
+                  :class="{ 'is-missing': !row.has_oauth && !row.has_api_key, 'is-oauth': row.has_oauth }"
+                >{{ credentialLabel(row) }}</span>
+                <span v-if="testingId === row.id"> · 测试中…</span>
+              </div>
+            </div>
+            <div v-if="isNarrow" class="mobile-status">
+              <StatusTag :label="statusMeta(row).text" :tone="statusMeta(row).type" />
+              <button
+                v-if="row.auth_state"
+                type="button"
+                class="status-button"
+                @click="showAuthDetail(row)"
               >
-                <el-button link size="small" @click="toggleExpand(row.id)">
-                  +{{ row.protocols.length - 3 }}
-                </el-button>
-              </el-tooltip>
-              <el-tooltip v-if="expandedRows.has(row.id)" content="收起" placement="top">
-                <el-button link size="small" @click="toggleExpand(row.id)">收起</el-button>
-              </el-tooltip>
-              <span v-for="t in capsTags(row)" :key="t" class="meta-item meta-cap">{{ t }}</span>
+                <StatusTag :label="row.auth_blocked ? '凭证失效 · 已跳过' : '凭证失效'" tone="danger" />
+              </button>
             </div>
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="凭证" width="100" align="center">
+        <el-table-column v-if="!isNarrow && !isTablet" label="凭证" width="100" align="center">
           <template #default="{ row }">
-            <el-tooltip v-if="row.has_oauth" content="OAuth 凭证（到期自动刷新）" placement="top">
-              <el-tag type="primary" size="small" effect="plain">OAuth</el-tag>
-            </el-tooltip>
-            <el-tag v-else-if="row.has_api_key" type="success" size="small">已设置</el-tag>
-            <el-tag v-else type="info" size="small">未设置</el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="代理" width="130">
-          <template #default="{ row }">
-            <span v-if="row.use_proxy">{{ proxyName(row.proxy_id) }}</span>
-            <span v-else>直连</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="!isNarrow" label="状态" min-width="240">
-          <template #default="{ row }">
-            <el-tag :type="statusMeta(row).type" size="small">{{ statusMeta(row).text }}</el-tag>
-            <el-tooltip
-              v-if="row.extra?.auto_disable === false"
-              content="该渠道已关闭自动禁用：连续失败不会被熔断/禁用，失败只记日志并故障转移"
-              placement="top"
+            <span
+              class="credential"
+              :class="{ 'is-missing': !row.has_oauth && !row.has_api_key, 'is-oauth': row.has_oauth }"
             >
-              <el-tag type="info" size="small" effect="plain" style="margin-left: 6px">
-                不自动禁用
-              </el-tag>
-            </el-tooltip>
-            <!-- 凭证失效（token 失效四项之③）：悬停看时间/错误码/上游原文 -->
-            <el-tooltip v-if="row.auth_state" :content="authTooltip(row)" placement="top">
-              <el-tag type="danger" size="small" effect="dark" style="margin-left: 6px">
-                {{ row.auth_blocked ? '凭证失效 · 已跳过' : '凭证失效' }}
-              </el-tag>
-            </el-tooltip>
+              {{ credentialLabel(row) }}
+            </span>
           </template>
         </el-table-column>
 
-        <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
+        <el-table-column v-if="!isNarrow" label="状态" :min-width="isTablet ? 140 : 210">
+          <template #default="{ row }">
+            <div class="status-cell">
+              <StatusTag :label="statusMeta(row).text" :tone="statusMeta(row).type" />
+              <span v-if="row.extra?.auto_disable === false" class="meta-item">不自动禁用</span>
+              <button
+                v-if="row.auth_state"
+                type="button"
+                class="status-button"
+                @click="showAuthDetail(row)"
+              >
+                <StatusTag :label="row.auth_blocked ? '凭证失效 · 已跳过' : '凭证失效'" tone="danger" />
+              </button>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column v-if="!isNarrow && !isTablet" label="代理" width="110">
+          <template #default="{ row }">{{ row.use_proxy ? proxyName(row.proxy_id) : '直连' }}</template>
+        </el-table-column>
+
+        <el-table-column label="启用" :width="isNarrow ? 70 : isTablet ? 56 : 80" align="center">
           <template #default="{ row }">
             <el-switch
               v-model="row.enabled"
@@ -151,16 +155,15 @@
           </template>
         </el-table-column>
 
-        <!-- 操作列：窄屏不再 fixed（否则 330px 固定列会吃掉整个视口，名称被挤成 0 宽），
-             并把按钮收进下拉菜单 -->
+        <!-- 操作列：桌面编辑 + 更多；窄屏全部收进下拉 -->
         <el-table-column
           label="操作"
-          :width="isNarrow ? 88 : 330"
+          :width="isNarrow || isTablet ? 88 : 150"
           :fixed="isNarrow ? false : 'right'"
         >
           <template #default="{ row }">
             <el-dropdown
-              v-if="isNarrow"
+              v-if="isNarrow || isTablet"
               trigger="click"
               @command="(c: string) => onRowAction(c, row)"
             >
@@ -170,59 +173,48 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
-                  <el-dropdown-item v-if="row.has_api_key" command="reveal">
-                    查看 Key
-                  </el-dropdown-item>
+                  <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 Key</el-dropdown-item>
                   <el-dropdown-item command="test">连通测试</el-dropdown-item>
-                  <el-dropdown-item v-if="quotaSupported(row)" command="quota">
-                    额度
-                  </el-dropdown-item>
-                  <el-dropdown-item v-if="isDevin(row)" command="reauth">
-                    重新授权
-                  </el-dropdown-item>
-                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                  <el-dropdown-item v-if="quotaSupported(row)" command="quota">额度</el-dropdown-item>
+                  <el-dropdown-item v-if="isDevin(row)" command="reauth">重新授权</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided style="color: var(--nx-danger)">删除</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
-            <template v-else>
+            <RowActions v-else label="上游操作">
               <el-button size="small" @click="openEdit(row)">编辑</el-button>
-              <el-button v-if="row.has_api_key" size="small" @click="openReveal(row)">
-                查看 Key
-              </el-button>
-              <el-button size="small" :loading="testingId === row.id" @click="testUpstream(row)">
-                连通测试
-              </el-button>
-              <el-button v-if="quotaSupported(row)" size="small" @click="openQuota(row)">
-                额度
-              </el-button>
-              <el-button v-if="isDevin(row)" size="small" @click="openReauth(row)">
-                重新授权
-              </el-button>
-              <el-button
-                size="small"
-                type="danger"
-                :loading="deletingSet.has(row.id)"
-                :disabled="deletingSet.has(row.id)"
-                @click="removeUpstream(row)"
-              >
-                删除
-              </el-button>
-            </template>
+              <el-dropdown trigger="click" @command="(c: string) => onRowAction(c, row)">
+                <el-button size="small">
+                  更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 Key</el-dropdown-item>
+                    <el-dropdown-item command="test">连通测试</el-dropdown-item>
+                    <el-dropdown-item v-if="quotaSupported(row)" command="quota">额度</el-dropdown-item>
+                    <el-dropdown-item v-if="isDevin(row)" command="reauth">重新授权</el-dropdown-item>
+                    <el-dropdown-item command="delete" divided style="color: var(--nx-danger)">删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </RowActions>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <div class="hint page-card">
-      说明：API Key 采用掩码存储，列表仅显示「已设置 / 未设置」；编辑时输入框「留空保持不变」，勾选「清除 Key」可移除。
-      完整 Key 默认不可再次查看；如需查看，点行内「查看 Key」并输入管理员密码二次验证（已启用 TOTP 时还需动态码），
-      验证通过后明文仅弹窗内本次展示。
-      默认值：timeout_ms = 300000、breaker_threshold = 5；图片媒体地址留空时回退 base_url。启用/禁用直接切换行内开关（禁用后 disabled_by = manual）。
-      自动禁用（熔断）默认关闭（系统设置 gateway.auto_disable_upstreams）：打开后连续失败达阈值即自动禁用并冷却，成功后自动恢复；
-      在渠道表单关闭「自动禁用」的渠道永不参与（标记「不自动禁用」）。
-      凭证失效（如 Devin session token 过期）由网关自动识别：命中后临时跳过该上游 5 分钟并标注「凭证失效」，
-      点「重新授权」用 Devin 账号换取新 token 即可恢复（无需手动冷却）。
-    </div>
+    <!-- 使用说明：从页尾技术说明移入弹窗 -->
+    <el-dialog v-model="helpVisible" title="上游配置与凭证说明" class="dlg">
+      <div class="help-body">
+        <p>API Key 采用掩码存储，列表仅显示「已设置 / 未设置」；编辑时输入框「留空保持不变」，点「清除 Key」可移除。完整 Key 默认不可再次查看；如需查看，点行内「查看 Key」并输入管理员密码二次验证（已启用 TOTP 时还需动态码），验证通过后明文仅在弹窗内本次展示。</p>
+        <p>默认值：<span class="mono">timeout_ms = 300000</span>、<span class="mono">breaker_threshold = 5</span>；图片媒体地址留空时回退 <span class="mono">base_url</span>。启用/禁用直接切换行内开关（禁用后 <span class="mono">disabled_by = manual</span>）。</p>
+        <p>自动禁用（熔断）默认关闭（系统设置 <span class="mono">gateway.auto_disable_upstreams</span>）：打开后连续失败达阈值即自动禁用并冷却，成功后自动恢复；在渠道表单关闭「自动禁用」的渠道永不参与（标记「不自动禁用」）。</p>
+        <p>凭证失效（如 Devin session token 过期）由网关自动识别：命中后临时跳过该上游 5 分钟并标注「凭证失效」，点「重新授权」用 Devin 账号换取新 token 即可恢复（无需手动冷却）。</p>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="helpVisible = false">知道了</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 接入向导（选择供应商 → 填写凭证 → 连通与模型） -->
     <ProvisionWizard
@@ -243,7 +235,7 @@
     <el-dialog
       v-model="revealVisible"
       :title="revealTitle"
-      width="560px"
+      class="dlg"
       :close-on-click-modal="false"
       :close-on-press-escape="!revealApiKey"
       :show-close="!revealApiKey"
@@ -310,9 +302,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { CopyDocument, ArrowDown, MagicStick, Plus, Refresh } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, Connection, CopyDocument, MagicStick, Plus, QuestionFilled, Refresh, Search } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { authApi, presetApi, proxyApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -320,11 +312,16 @@ import { copyText } from '@/utils/clipboard'
 import { confirmDanger } from '@/utils/confirm'
 import { PROTOCOL_LABEL } from '@/utils/consts'
 import { fmtTime } from '@/utils/format'
-import type { Preset, ProxyOut, UpstreamIn, UpstreamOut } from '@/api/types'
+import type { Preset, ProxyOut, UpstreamOut } from '@/api/types'
 import UpstreamFormDialog from '@/components/upstreams/UpstreamFormDialog.vue'
 import ProvisionWizard from '@/components/upstreams/ProvisionWizard.vue'
 import QuotaDialog from '@/components/upstreams/QuotaDialog.vue'
 import DevinReauthDialog from '@/components/upstreams/DevinReauthDialog.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import RowActions from '@/components/common/RowActions.vue'
+import StatusTag from '@/components/common/StatusTag.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 const DISABLED_BY_LABELS: Record<string, string> = {
   manual: '手动禁用',
@@ -342,15 +339,16 @@ const router = useRouter()
 /** 接入向导可见性 + 预选供应商（null = 从「选择供应商」开始） */
 const wizardVisible = ref(false)
 const wizardPreset = ref<Preset | null>(null)
-const expandedRows = reactive(new Set<string>())
 const togglingSet = reactive(new Set<string>())
 const deletingSet = reactive(new Set<string>())
 const testingId = ref('')
-/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单（与 Logs.vue 同款判定） */
-const isNarrow = ref(window.innerWidth <= 768)
-const onResize = () => {
-  isNarrow.value = window.innerWidth <= 768
-}
+const helpVisible = ref(false)
+/** 列表筛选：搜索 + 状态 */
+const search = ref('')
+type StatusFilter = 'all' | 'enabled' | 'disabled' | 'error' | 'auth'
+const statusFilter = ref<StatusFilter>('all')
+/** 断点：桌面 / 平板（隐藏代理列）/ 窄屏（操作收下拉） */
+const { isMobile: isNarrow, isTablet } = useBreakpoint()
 const formDialogRef = ref<InstanceType<typeof UpstreamFormDialog>>()
 
 async function loadUpstreams() {
@@ -386,11 +384,6 @@ onMounted(() => {
   loadUpstreams()
   loadProxies()
   loadPresets()
-  window.addEventListener('resize', onResize)
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
 })
 
 /** 窄屏操作列下拉菜单分发（桌面端仍是行内按钮） */
@@ -458,11 +451,6 @@ function capsTags(row: UpstreamOut): string[] {
   return tags
 }
 
-function toggleExpand(id: string) {
-  if (expandedRows.has(id)) expandedRows.delete(id)
-  else expandedRows.add(id)
-}
-
 function proxyName(proxyId: string | null): string {
   if (!proxyId) return '跟随默认'
   const p = proxies.value.find((x) => x.id === proxyId)
@@ -480,33 +468,17 @@ function statusMeta(row: UpstreamOut): { type: 'success' | 'warning' | 'danger';
     return { type: 'danger', text }
   }
   if (row.consecutive_failures > 0) {
-    return { type: 'warning', text: `启用 · 连续失败 ${row.consecutive_failures}` }
+    return { type: 'warning', text: `连续失败 ${row.consecutive_failures}` }
   }
   return { type: 'success', text: '启用' }
 }
 
-function rowToIn(row: UpstreamOut): UpstreamIn {
-  return {
-    name: row.name,
-    base_url: row.base_url,
-    kind: row.kind || null,
-    protocols: row.protocols.length ? [...row.protocols] : null,
-    enabled: row.enabled,
-    timeout_ms: row.timeout_ms,
-    breaker_threshold: row.breaker_threshold,
-    probe_model: row.probe_model,
-    use_proxy: row.use_proxy,
-    proxy_id: row.use_proxy ? row.proxy_id : null,
-    extra: row.extra,
-  }
-}
 
 async function toggleEnabled(row: UpstreamOut, val: boolean) {
   togglingSet.add(row.id)
   try {
-    const body = rowToIn(row)
-    body.enabled = val
-    const updated = await upstreamApi.update(row.id, body)
+    // 只提交最小 patch，避免整行回写覆盖服务端并发修改（后端 PUT 支持字段可选）
+    const updated = await upstreamApi.update(row.id, { enabled: val })
     Object.assign(row, updated)
     ElMessage.success(val ? '已启用' : '已禁用')
   } catch (e) {
@@ -569,6 +541,79 @@ function openWizard(p: Preset | null) {
 /** 向导「下一步：配置模型路由」：跳转模型页 */
 function goConfigureRoutes() {
   router.push({ name: 'routes' })
+}
+
+function onAddCommand(command: string) {
+  if (command === 'preset') openWizard(null)
+  else if (command === 'manual') openCreate()
+}
+
+const KIND_LABEL: Record<string, string> = {
+  openai: 'OpenAI',
+  codex: 'Codex OAuth',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+  devin: 'Devin',
+  openai_compatible: 'OpenAI 兼容',
+}
+
+function kindLabel(kind: string): string {
+  return KIND_LABEL[kind] ?? (kind || '未知类型')
+}
+
+function protocolSummary(row: UpstreamOut): string {
+  if (!row.protocols.length) return '未配置协议'
+  const labels = row.protocols.map((p) => PROTOCOL_LABEL(p))
+  return labels.length > 2 ? `${labels.slice(0, 2).join(' · ')} +${labels.length - 2}` : labels.join(' · ')
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+function credentialLabel(row: UpstreamOut): string {
+  if (row.has_oauth) return 'OAuth'
+  if (row.has_api_key) return '已设置'
+  return '未设置'
+}
+
+function isHealthy(row: UpstreamOut): boolean {
+  return !!row.enabled && !row.disabled_by && !row.cooldown_until && !row.auth_blocked
+}
+
+const filteredUpstreams = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return upstreams.value.filter((row) => {
+    if (q) {
+      const hay = [row.name, row.base_url, row.kind].join(' ').toLowerCase()
+      if (!hay.includes(q)) return false
+    }
+    if (statusFilter.value === 'enabled') return isHealthy(row)
+    if (statusFilter.value === 'disabled') return !row.enabled || !!row.disabled_by || !!row.cooldown_until
+    if (statusFilter.value === 'error') {
+      return row.disabled_by === 'breaker' || row.consecutive_failures > 0 || row.auth_blocked
+    }
+    if (statusFilter.value === 'auth') return !!row.auth_state
+    return true
+  })
+})
+
+const hasFilter = computed(() => search.value.trim() !== '' || statusFilter.value !== 'all')
+
+function clearFilters() {
+  search.value = ''
+  statusFilter.value = 'all'
+}
+
+function showAuthDetail(row: UpstreamOut) {
+  if (!row.auth_state) return
+  ElMessageBox.alert(authTooltip(row), `凭证失效详情 · ${row.name}`, {
+    confirmButtonText: '知道了',
+  })
 }
 
 // —— 查看明文 API Key（安全验证） ——
@@ -648,52 +693,109 @@ function closeRevealSecret() {
 </script>
 
 <style scoped>
-.empty-guide {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  padding: 6px 0 12px;
-}
-.empty-title {
-  font-size: var(--el-font-size-base);
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-}
-.empty-sub {
-  margin-top: 4px;
-}
-.empty-actions {
-  margin-top: 14px;
-}
 .table-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.clickable {
-  cursor: pointer;
-}
-/* 窄屏下折到名称下方的状态标签 */
-.status-inline {
-  margin-top: 4px;
-}
-.secret-view {
+.table-title {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-  align-items: flex-start;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--nx-text);
+  font-weight: 600;
 }
-.secret-key {
-  font-size: var(--el-font-size-medium);
+.table-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.status-filter {
+  width: 140px;
+}
+.up-name {
+  color: var(--nx-text);
+  font-weight: 500;
   line-height: 1.5;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color);
-  border-radius: var(--el-border-radius-base);
-  padding: 12px 16px;
-  width: 100%;
-  box-sizing: border-box;
-  color: var(--el-text-color-primary);
-  word-break: break-all;
+}
+.up-meta {
+  margin-top: 2px;
+}
+.up-credential {
+  color: var(--nx-success);
+}
+.up-credential.is-oauth {
+  color: var(--nx-accent);
+}
+.up-credential.is-missing {
+  color: var(--nx-text-3);
+}
+.mobile-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.status-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.status-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+}
+.credential {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--nx-success);
+  font-size: var(--nx-font-caption);
+  white-space: nowrap;
+}
+.credential::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.credential.is-oauth {
+  color: var(--nx-accent);
+}
+.credential.is-missing {
+  color: var(--nx-text-3);
+}
+.help-body p {
+  margin: 0 0 12px;
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-small);
+  line-height: 1.7;
+}
+.help-body p:last-child {
+  margin-bottom: 0;
 }
 
+@media (max-width: 800px) {
+  .table-head {
+    align-items: stretch;
+  }
+  .table-tools {
+    width: 100%;
+  }
+  .status-filter {
+    width: 100%;
+  }
+  .table-tools .el-button {
+    width: 100%;
+  }
+}
 </style>

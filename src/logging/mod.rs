@@ -457,7 +457,7 @@ pub async fn insert_batch(
     }
 
     let insert_sql = usage_logs_insert_sql();
-    let rows = sqlx::query(&insert_sql)
+    let rows = sqlx::query(sqlx::AssertSqlSafe(insert_sql))
         .bind(&request_ids)
         .bind(&ts_col)
         .bind(&key_ids)

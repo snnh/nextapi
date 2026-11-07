@@ -343,13 +343,13 @@ defineExpose({ open })
   gap: 12px;
 }
 .unit-card {
-  border: 1px solid #e2e8eb;
-  border-radius: 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 12px;
-  background: #fff;
+  background: var(--nx-surface);
 }
 .unit-card.off {
-  background: #f7f8f9;
+  background: var(--nx-inset);
 }
 .unit-head {
   display: flex;
@@ -358,9 +358,9 @@ defineExpose({ open })
   margin-bottom: 4px;
 }
 .unit-title {
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   font-weight: 600;
-  color: #17202a;
+  color: var(--nx-text);
 }
 .unit-body {
   margin-top: 8px;
@@ -371,8 +371,8 @@ defineExpose({ open })
   gap: 8px;
 }
 .unit-label {
-  font-size: 12px;
-  color: #4c5f69;
+  font-size: var(--nx-font-caption);
+  color: var(--nx-text-2);
   width: 30px;
   flex-shrink: 0;
 }
@@ -381,8 +381,8 @@ defineExpose({ open })
   --el-collapse-header-height: 34px;
 }
 .segs-title {
-  font-size: 12px;
-  color: #4c5f69;
+  font-size: var(--nx-font-caption);
+  color: var(--nx-text-2);
 }
 .unit-off {
   padding: 10px 0 4px;
@@ -400,7 +400,7 @@ defineExpose({ open })
     transform: rotate(360deg);
   }
 }
-@media (max-width: 768px) {
+@media (max-width: 800px) {
   .head-grid,
   .unit-grid {
     grid-template-columns: 1fr;

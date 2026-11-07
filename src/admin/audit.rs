@@ -121,7 +121,7 @@ async fn list_audit(
 
 /// 追加公共过滤条件：可选 action / object_type（空串视为未提供）。
 /// 绑定前 clone 为属主值，避免借用生命周期与 QueryBuilder 的生命周期纠缠。
-fn push_filters(qb: &mut QueryBuilder<'_, Postgres>, params: &AuditQuery) {
+fn push_filters(qb: &mut QueryBuilder<Postgres>, params: &AuditQuery) {
     if let Some(action) = params.action.as_ref().filter(|s| !s.is_empty()) {
         qb.push(" AND l.action = ").push_bind(action.clone());
     }

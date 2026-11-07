@@ -389,9 +389,9 @@ fn read_attrs(e: &quick_xml::events::BytesStart) -> ApiResult<HashMap<String, St
     let mut attrs = HashMap::new();
     for attr in e.attributes() {
         let attr = attr.map_err(|err| ApiError::bad_request(format!("XML 属性解析失败: {err}")))?;
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let key = attr.key.as_ref().to_string();
         let value = attr
-            .unescape_value()
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
             .map_err(|err| ApiError::bad_request(format!("XML 属性值解码失败: {err}")))?
             .into_owned();
         attrs.insert(key, value);
@@ -420,7 +420,7 @@ fn parse_tree(bytes: &[u8]) -> ApiResult<XNode> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let name = e.local_name().as_ref().to_string();
                 let attrs = read_attrs(&e)?;
                 stack.push(XNode {
                     name,
@@ -430,7 +430,7 @@ fn parse_tree(bytes: &[u8]) -> ApiResult<XNode> {
                 });
             }
             Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let name = e.local_name().as_ref().to_string();
                 let attrs = read_attrs(&e)?;
                 let node = XNode {
                     name,
@@ -441,12 +441,31 @@ fn parse_tree(bytes: &[u8]) -> ApiResult<XNode> {
                 push_child(&mut stack, &mut root, node);
             }
             Ok(Event::Text(e)) => {
-                let t = e
-                    .unescape()
+                let content = e.xml10_content();
+                let t = quick_xml::escape::unescape(&content)
                     .map_err(|err| ApiError::bad_request(format!("XML 文本解码失败: {err}")))?
                     .into_owned();
                 if let Some(top) = stack.last_mut() {
                     top.text.push_str(&t);
+                }
+            }
+            // quick-xml 0.42 将实体引用拆成独立事件（旧版 unescape 会合并）；
+            // 解析树必须显式拼接，否则 `&lt;` / `&quot;` 等会被静默丢弃。
+            Ok(Event::GeneralRef(e)) => {
+                let reference = e.as_ref();
+                let resolved = match e
+                    .resolve_char_ref()
+                    .map_err(|err| ApiError::bad_request(format!("XML 字符引用解析失败: {err}")))?
+                {
+                    Some(ch) => ch.to_string(),
+                    None => quick_xml::escape::resolve_predefined_entity(reference)
+                        .ok_or_else(|| {
+                            ApiError::bad_request(format!("XML 未知实体引用: &{reference};"))
+                        })?
+                        .to_string(),
+                };
+                if let Some(top) = stack.last_mut() {
+                    top.text.push_str(&resolved);
                 }
             }
             Ok(Event::End(_)) => {

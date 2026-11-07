@@ -7,7 +7,7 @@
 
 use crate::config::ConfigFile;
 use crate::crypto::Crypto;
-use rand::Rng;
+use rand::RngExt;
 use sqlx::{PgPool, Postgres, Transaction};
 
 /// 若 app_meta.seeded_at 不存在，则执行种子写入并设置标记；否则直接返回。
@@ -93,17 +93,15 @@ fn resolve_admin_password_hash(cfg: &ConfigFile) -> anyhow::Result<String> {
 }
 
 /// argon2（默认参数）计算 PHC 字符串。
-/// 注意：password-hash 0.5 依赖 rand_core 0.6，与 rand 0.9 不兼容，
-/// 因此使用 argon2 自带 re-export 的 OsRng。
 /// argon2 哈希（内存成本可配：`gateway.argon2_memory_kib`，默认 19 MiB；越界钳制）。
 fn argon2_hash(password: &str, memory_kib: u32) -> anyhow::Result<String> {
-    use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
+    use argon2::password_hash::PasswordHasher;
     use argon2::Argon2;
-    let salt = SaltString::generate(&mut OsRng);
     let m = crate::config::clamp_argon2_memory_kib(memory_kib);
     let params = argon2::Params::new(m, 2, 1, None).unwrap_or_default();
+    // password-hash 0.6：hash_password 内部生成随机盐
     let hash = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map_err(|e| anyhow::anyhow!("argon2 哈希失败: {e}"))?;
     Ok(hash.to_string())
 }
@@ -190,7 +188,7 @@ mod tests {
 
     #[test]
     fn argon2_hash_verifiable() {
-        use argon2::password_hash::{PasswordHash, PasswordVerifier};
+        use argon2::password_hash::{phc::PasswordHash, PasswordVerifier};
         use argon2::Argon2;
         let h = argon2_hash("test-password", 19_456).unwrap();
         let parsed = PasswordHash::new(&h).unwrap();

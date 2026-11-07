@@ -5,7 +5,7 @@
 
 use data_encoding::BASE32_NOPAD;
 use hmac::{Hmac, Mac};
-use rand::RngCore;
+use rand::Rng;
 
 const SECRET_LEN: usize = 20;
 const STEP_SECS: u64 = 30;

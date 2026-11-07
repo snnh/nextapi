@@ -12,7 +12,7 @@
 
 pub mod totp;
 
-use argon2::password_hash::{PasswordHash, PasswordVerifier};
+use argon2::password_hash::{phc::PasswordHash, PasswordVerifier};
 use argon2::Argon2;
 use axum::{
     extract::{ConnectInfo, FromRequestParts, Request, State},
@@ -202,8 +202,11 @@ async fn login(
     let hash: String = row.get("password_hash");
     let session_version: i32 = row.try_get("session_version").unwrap_or(0);
 
-    // 3. argon2 校验密码
-    if !verify_password(&hash, &body.password) {
+    // 3. argon2 校验密码；校验会临时申请约 20MiB，释放后异步归还 arena 空闲页，
+    //    避免登录操作长期抬高常驻内存（周期回收有 60s 延迟，这里即时触发）。
+    let password_ok = verify_password(&hash, &body.password);
+    crate::mem::trim_allocator_soon();
+    if !password_ok {
         let _ = audit(
             &state,
             &body.username,
@@ -868,10 +871,10 @@ fn argon2_with_memory(memory_kib: u32) -> Argon2<'static> {
 
 /// argon2 计算 PHC 哈希（内存成本取调用方给的配置值，默认 19 MiB）。
 fn hash_password(password: &str, memory_kib: u32) -> anyhow::Result<String> {
-    use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
-    let salt = SaltString::generate(&mut OsRng);
+    use argon2::password_hash::PasswordHasher;
+    // password-hash 0.6：hash_password 内部生成随机盐（argon2 默认启用 getrandom）
     let hash = argon2_with_memory(memory_kib)
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map_err(|e| anyhow::anyhow!("argon2 哈希失败: {e}"))?;
     Ok(hash.to_string())
 }

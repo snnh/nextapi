@@ -26,6 +26,7 @@
             v-model="range"
             type="datetimerange"
             :shortcuts="timeShortcuts"
+            :format="isMobile ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm:ss'"
             range-separator="至"
             start-placeholder="开始时间"
             end-placeholder="结束时间"
@@ -58,6 +59,7 @@
         </div>
         <div class="filter-actions">
           <el-button type="primary" :icon="Search" :loading="loading" @click="onQuery">查询</el-button>
+          <el-button :icon="Refresh" @click="onReset">重置</el-button>
         </div>
       </div>
       <div class="hint granularity-hint">{{ granularityHint }}</div>
@@ -69,19 +71,24 @@
 
       <!-- 趋势图 -->
       <el-card shadow="never" class="section-card">
-        <template #header>{{ chartTitle }}</template>
+        <template #header>
+          <div class="chart-head">
+            <span>{{ chartTitle }}</span>
+            <div class="metric-switch">
+              <el-radio-group v-model="metric" size="small">
+                <el-radio-button value="requests">请求数</el-radio-button>
+                <el-radio-button value="tokens">Token 数</el-radio-button>
+                <el-radio-button value="cache">缓存命中</el-radio-button>
+                <el-radio-button value="hit">命中率</el-radio-button>
+                <el-radio-button value="cost">成本</el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+        </template>
         <EChart v-if="hasData" :option="chartOption" height="360px" />
         <el-empty v-else :description="emptyText" :image-size="90" />
-        <div class="metric-switch">
-          <span class="hint">切换指标：</span>
-          <el-radio-group v-model="metric" size="small">
-            <el-radio-button value="requests">请求数</el-radio-button>
-            <el-radio-button value="tokens">Token 数</el-radio-button>
-            <el-radio-button value="cache">缓存命中</el-radio-button>
-            <el-radio-button value="hit">命中率</el-radio-button>
-            <el-radio-button value="cost">成本</el-radio-button>
-          </el-radio-group>
-          <span class="hint">Token 口径：输入（未缓存）+ 输出 + 缓存读 + 缓存写；命中率仅统计输入侧。</span>
+        <div class="hint metric-note">
+          Token 口径：输入（未缓存）+ 输出 + 缓存读 + 缓存写；命中率仅统计输入侧。
         </div>
       </el-card>
 
@@ -89,26 +96,31 @@
       <el-card v-if="dimension" shadow="never" class="section-card">
         <template #header>维度明细</template>
         <el-table :data="detailRows" max-height="420">
-          <el-table-column label="时间" width="140">
+          <el-table-column v-if="!isMobile && !isCompact" label="时间" width="140">
             <template #default="{ row }">{{ row.bucketText }}</template>
           </el-table-column>
-          <el-table-column prop="dimLabel" label="维度" min-width="140" show-overflow-tooltip />
-          <el-table-column label="请求数" width="104" align="right">
+          <el-table-column label="维度" :min-width="isMobile ? 118 : isCompact ? 126 : 140" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ row.dimLabel }}</span>
+              <span v-if="isMobile || isCompact" class="hint dim-time">{{ row.bucketText }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="请求数" :width="isMobile ? 72 : isCompact ? 78 : 104" align="right">
             <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
           </el-table-column>
-          <el-table-column label="错误" width="88" align="right">
+          <el-table-column v-if="!isTablet" label="错误" width="88" align="right">
             <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
           </el-table-column>
-          <el-table-column label="Token 数（含缓存）" width="148" align="right">
+          <el-table-column v-if="!isMobile && !isCompact" label="Token 数（含缓存）" width="148" align="right">
             <template #default="{ row }">{{ fmtInt(totalTokensOf(row)) }}</template>
           </el-table-column>
-          <el-table-column label="缓存命中" width="116" align="right">
+          <el-table-column v-if="!isTablet" label="缓存命中" width="116" align="right">
             <template #default="{ row }">{{ fmtInt(row.cache_read_tokens ?? 0) }}</template>
           </el-table-column>
-          <el-table-column label="命中率" width="96" align="right">
+          <el-table-column v-if="!isTablet" label="命中率" width="96" align="right">
             <template #default="{ row }">{{ fmtPctOrNull(hitRateOf(row)) }}</template>
           </el-table-column>
-          <el-table-column label="成本" width="128" align="right">
+          <el-table-column label="成本" :width="isMobile ? 96 : isCompact ? 108 : 128" align="right">
             <template #default="{ row }">{{ fmtMoney(row.cost_display) }}</template>
           </el-table-column>
         </el-table>
@@ -145,43 +157,45 @@
           </div>
         </template>
         <el-table v-if="rankRows.length" :data="rankRows" max-height="460">
-          <el-table-column label="模型" min-width="180" show-overflow-tooltip>
+          <el-table-column label="模型" :min-width="isMobile ? 118 : isCompact ? 140 : 180" show-overflow-tooltip>
             <template #default="{ row }">
               <el-link type="primary" :underline="false" @click="drillToLogs(row.model)">
                 {{ row.model || '—' }}
               </el-link>
             </template>
           </el-table-column>
-          <el-table-column label="请求数" width="100" align="right">
+          <el-table-column label="请求数" :width="isMobile ? 72 : isCompact ? 78 : 100" align="right">
             <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
           </el-table-column>
-          <el-table-column label="错误" width="84" align="right">
+          <el-table-column v-if="!isTablet" label="错误" width="84" align="right">
             <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
           </el-table-column>
-          <el-table-column label="Token 数（含缓存）" width="150" align="right">
+          <el-table-column v-if="!isMobile && !isCompact" label="Token 数（含缓存）" width="150" align="right">
             <template #default="{ row }">{{ fmtInt(row.total_tokens) }}</template>
           </el-table-column>
-          <el-table-column label="缓存命中" width="116" align="right">
+          <el-table-column v-if="!isTablet" label="缓存命中" width="116" align="right">
             <template #default="{ row }">{{ fmtInt(row.cache_read_tokens) }}</template>
           </el-table-column>
-          <el-table-column label="命中率" width="96" align="right">
+          <el-table-column v-if="!isTablet" label="命中率" width="96" align="right">
             <template #default="{ row }">{{ fmtPctOrNull(row.cache_hit_rate) }}</template>
           </el-table-column>
-          <el-table-column label="平均延迟" width="104" align="right">
+          <el-table-column v-if="!isTablet" label="平均延迟" width="104" align="right">
             <template #default="{ row }">{{ fmtDur(row.avg_latency_ms) }}</template>
           </el-table-column>
-          <el-table-column label="成本" width="128" align="right">
+          <el-table-column label="成本" :width="isMobile ? 96 : isCompact ? 108 : 128" align="right">
             <template #default="{ row }">
               {{ fmtMoney(row.cost_display) }}
-              <span v-if="row.cost_na_count > 0" class="hint">（{{ row.cost_na_count }} 未计价）</span>
+              <span v-if="row.cost_na_count > 0 && !isMobile" class="hint">（{{ row.cost_na_count }} 未计价）</span>
             </template>
           </el-table-column>
         </el-table>
-        <el-empty
-          v-else
-          :description="rankError ? `排行加载失败：${rankError}` : '当前条件下暂无模型数据'"
-          :image-size="80"
+        <ErrorState
+          v-else-if="rankError"
+          title="模型排行加载失败"
+          :message="rankError"
+          @retry="loadRank"
         />
+        <EmptyState v-else title="当前条件下暂无模型数据" />
       </el-card>
     </div>
   </div>
@@ -190,12 +204,14 @@
 <script setup lang="ts">
 // 统计报表页（M8 §4.8）：汇总卡 + 趋势图 + 维度明细 + CSV 导出
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
-import { Download, Search } from '@element-plus/icons-vue'
+import { Download, Refresh, Search } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import StatCards from '@/components/stats/StatCards.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
 import type { EChartsOption } from 'echarts'
 import { keyApi, statsApi, upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -213,6 +229,7 @@ import type {
 import { CURRENCIES, DIMENSION_OPTIONS, PROTOCOL_IN_LABELS } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
 import { fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 /** 趋势图指标：请求数 / 总 Token（含缓存）/ 缓存命中 Token / 缓存命中率 / 成本 */
 type Metric = 'requests' | 'tokens' | 'cache' | 'hit' | 'cost'
@@ -229,8 +246,10 @@ const upstreamId = ref('')
 const keys = ref<ApiKeyRow[]>([])
 const upstreams = ref<UpstreamOut[]>([])
 const metric = ref<Metric>('requests')
+const { isMobile, isCompact, isTablet } = useBreakpoint()
 
 // —— 模型排行（P5-a）——
+const route = useRoute()
 const router = useRouter()
 const rankOrder = ref<ModelRankOrder>('total_tokens')
 const rankLimit = ref(10)
@@ -336,6 +355,78 @@ const emptyText = computed(() => {
   return loadError.value ? `加载失败：${loadError.value}` : '加载中…'
 })
 
+// —— URL query 同步（分享/刷新/返回保持筛选条件） ——
+function qv(key: string): string {
+  const v = route.query[key]
+  if (Array.isArray(v)) return v[0] ?? ''
+  return v ?? ''
+}
+
+function canonicalQuery(q: Record<string, string>): string {
+  return Object.keys(q)
+    .filter((k) => q[k] !== '')
+    .sort()
+    .map((k) => `${k}=${q[k]}`)
+    .join('&')
+}
+
+function restoreFromQuery() {
+  const from = qv('from_ts')
+  const to = qv('to_ts')
+  const d1 = new Date(from)
+  const d2 = new Date(to)
+  if (from && to && !Number.isNaN(d1.getTime()) && !Number.isNaN(d2.getTime())) {
+    range.value = [d1, d2]
+  }
+
+  const dim = qv('dimension')
+  if (DIMENSION_OPTIONS.some((o) => o.value === dim)) {
+    dimension.value = dim as SeriesDimension
+  }
+
+  const cur = qv('currency')
+  if ((CURRENCIES as readonly string[]).includes(cur)) {
+    currency.value = cur as StatsCurrency
+  }
+
+  keyId.value = qv('key_id')
+  upstreamId.value = qv('upstream_id')
+
+  const m = qv('metric')
+  if (['requests', 'tokens', 'cache', 'hit', 'cost'].includes(m)) {
+    metric.value = m as Metric
+  }
+
+  const ro = qv('rank_order')
+  if (['total_tokens', 'requests', 'cost', 'cache_read', 'errors'].includes(ro)) {
+    rankOrder.value = ro as ModelRankOrder
+  }
+
+  const rl = Number.parseInt(qv('rank_limit'), 10)
+  if ([10, 20, 50, 100].includes(rl)) {
+    rankLimit.value = rl
+  }
+}
+
+function syncUrl() {
+  const q: Record<string, string> = {}
+  if (range.value) {
+    q.from_ts = dayjs(range.value[0]).toISOString()
+    q.to_ts = dayjs(range.value[1]).toISOString()
+  }
+  if (dimension.value) q.dimension = dimension.value
+  q.currency = currency.value
+  if (keyId.value) q.key_id = keyId.value
+  if (upstreamId.value) q.upstream_id = upstreamId.value
+  q.metric = metric.value
+  q.rank_order = rankOrder.value
+  q.rank_limit = String(rankLimit.value)
+  if (canonicalQuery(q) === canonicalQuery(route.query as Record<string, string>)) return
+  router.replace({ path: route.path, query: q })
+}
+
+restoreFromQuery()
+
 // —— 下拉选项加载 ——
 async function loadFilterOptions() {
   try {
@@ -428,6 +519,7 @@ async function loadRank() {
 
 /** 并发触发两路查询，互不阻塞（各自维护 loading 与错误态） */
 function loadData() {
+  syncUrl()
   void loadMain()
   void loadRank()
 }
@@ -447,16 +539,34 @@ function onQuery() {
   loadData()
 }
 
+function onReset() {
+  if (autoTimer) clearTimeout(autoTimer)
+  if (rankTimer) clearTimeout(rankTimer)
+  range.value = [dayjs().subtract(7, 'day').toDate(), dayjs().toDate()]
+  dimension.value = ''
+  currency.value = 'CNY'
+  keyId.value = ''
+  upstreamId.value = ''
+  metric.value = 'requests'
+  rankOrder.value = 'total_tokens'
+  rankLimit.value = 10
+}
+
 // 时间/币种/维度/Key/上游 变化 → 主查询 + 排行都刷新：300ms 防抖
 watch([range, currency, dimension, keyId, upstreamId], () => {
   if (autoTimer) clearTimeout(autoTimer)
   autoTimer = setTimeout(loadData, 300)
 })
 
+watch(metric, syncUrl)
+
 // 排行的排序字段/条数变化 → 只刷新排行，不重拉 summary/series（后者可能走明细 + 百分位，代价高）
 watch([rankOrder, rankLimit], () => {
   if (rankTimer) clearTimeout(rankTimer)
-  rankTimer = setTimeout(loadRank, 300)
+  rankTimer = setTimeout(() => {
+    syncUrl()
+    loadRank()
+  }, 300)
 })
 
 onMounted(() => {
@@ -789,46 +899,16 @@ async function exportRankCsv() {
 </script>
 
 <style scoped>
-.filter-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px 18px;
-  align-items: center;
-}
-
-.f-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.f-item-wide {
-  grid-column: span 2;
-}
-
-.f-item > .el-date-editor,
-.f-item > .el-select,
-.f-item > .el-input {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-}
-
-.f-label {
-  color: var(--el-text-color-regular);
-  font-size: var(--el-font-size-small);
-  white-space: nowrap;
-}
-
-.filter-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: flex-start;
-}
-
 .granularity-hint {
   margin-top: 12px;
+}
+
+.chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .metric-switch {
@@ -836,14 +916,13 @@ async function exportRankCsv() {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
 }
 
-.metric-switch .hint:last-child {
-  flex: 1 1 100%;
+.metric-note {
+  margin-top: 10px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 800px) {
   .filter-grid {
     grid-template-columns: 1fr;
   }
@@ -857,16 +936,29 @@ async function exportRankCsv() {
   }
 }
 
+.dim-time {
+  display: block;
+  font-size: var(--nx-font-caption);
+}
+
 .rank-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .rank-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 800px) {
+  .metric-switch :deep(.el-radio-button__inner) {
+    padding: 5px 8px;
+  }
 }
 </style>

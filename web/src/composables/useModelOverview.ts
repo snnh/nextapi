@@ -62,7 +62,7 @@ export function effectiveModelId(route: RouteOut): string {
 }
 
 /** 价格规则是否命中某条路由（精确匹配 upstream_id + model_id，且规则启用） */
-export function isRoutePriced(route: RouteOut, rules: RuleItem[]): boolean {
+function isRoutePriced(route: RouteOut, rules: RuleItem[]): boolean {
   const modelId = effectiveModelId(route)
   return rules.some(
     (r) => r.enabled && r.upstream_id === route.upstream_id && r.model_id === modelId,
@@ -70,7 +70,7 @@ export function isRoutePriced(route: RouteOut, rules: RuleItem[]): boolean {
 }
 
 /** 单条路由的价格状态：无法判定（通配且无覆盖模型名）/ 已配 / 未配 */
-export function routePriceState(
+function routePriceState(
   route: RouteOut,
   rules: RuleItem[],
 ): boolean | 'unknown' {

@@ -53,6 +53,16 @@ export const UNIT_LABEL = (u: string): string => UNIT_LABELS[u as PriceUnit] ?? 
 // —— 币种 ——
 export const CURRENCIES = ['CNY', 'USD'] as const
 
+/** 统计指标释义（仪表盘与统计页共用一个来源） */
+export const STAT_LABEL_TIPS = {
+  requests: '统计区间内的网关请求总数',
+  success: '成功率 = 状态码 < 400 的请求占比',
+  tokens: '总 Token 数 = 输入（未缓存）+ 输出 + 缓存命中（读）+ 缓存写入，与配额口径一致',
+  cacheRead: '缓存命中（读）Token：各协议已归一（OpenAI/Gemini 上游含缓存的输入已拆分）',
+  cacheHitRate: '缓存命中率 = 缓存命中 ÷（输入未缓存 + 缓存命中 + 缓存写入），仅统计输入侧',
+  cost: '按所选币种折算的合计成本；未计价（无定价规则）条数不计入',
+} as const
+
 // —— 配额 ——
 export const QUOTA_UNIT_LABELS: Record<QuotaUnit, string> = {
   tokens: 'Token 数',

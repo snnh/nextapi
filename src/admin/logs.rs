@@ -289,10 +289,10 @@ async fn get_log(
         .await?;
 
     let row = with_log_timeout(
-        sqlx::query_as::<_, UsageLogRow>(&format!(
+        sqlx::query_as::<_, UsageLogRow>(sqlx::AssertSqlSafe(format!(
             "SELECT {LOG_COLS} FROM usage_logs WHERE request_id = $1 \
              ORDER BY ts DESC, id DESC LIMIT 1"
-        ))
+        )))
         .bind(&request_id)
         .fetch_optional(&mut *tx),
     )
@@ -465,7 +465,7 @@ fn build_log_filter(q: &LogQuery, tz: &str) -> ApiResult<LogFilter> {
 }
 
 /// 追加日志过滤 WHERE（与计数/数据查询共用）。参数一律 bind。
-fn push_log_where(qb: &mut QueryBuilder<'_, Postgres>, f: &LogFilter) {
+fn push_log_where(qb: &mut QueryBuilder<Postgres>, f: &LogFilter) {
     qb.push(" ts >= ").push_bind(f.from_ts);
     qb.push(" AND ts < ").push_bind(f.to_ts);
     if let Some(k) = f.key_id {

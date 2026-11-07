@@ -15,6 +15,7 @@ import type {
   ConfigFileView,
   ConfigPutReq,
   DiagnosticsResp,
+  FxPutResp,
   FxRefreshResp,
   FxRow,
   ImportReport,
@@ -38,6 +39,7 @@ import type {
   ProxyIn,
   ProxyOut,
   ProxyTestResp,
+  PutFxItem,
   ProvisionReq,
   ProvisionResp,
   QuotaResp,
@@ -54,7 +56,7 @@ import type {
   ModelRankResp,
   SuggestResp,
   TestResp,
-  UnpricedItem,
+  UnpricedResp,
   UpstreamIn,
   UpstreamOut,
   UpstreamRevealReq,
@@ -100,7 +102,8 @@ export const keyApi = {
 export const upstreamApi = {
   list: () => http.get<{ items: UpstreamOut[] }>('/api/upstreams').then((r) => r.data.items),
   create: (body: UpstreamIn) => http.post<UpstreamOut>('/api/upstreams', body).then((r) => r.data),
-  update: (id: string, body: UpstreamIn) =>
+  /** 更新：后端按字段可选合并，启用开关等场景可只传差量 */
+  update: (id: string, body: Partial<UpstreamIn>) =>
     http.put<UpstreamOut>(`/api/upstreams/${id}`, body).then((r) => r.data),
   remove: (id: string) => http.delete<OkResp>(`/api/upstreams/${id}`).then((r) => r.data),
   test: (id: string) => http.post<TestResp>(`/api/upstreams/${id}/test`).then((r) => r.data),
@@ -279,7 +282,7 @@ export const pricingApi = {
     http
       .get<SuggestResp>('/api/pricing/suggest', { params: clean({ upstream_id, model_id }) })
       .then((r) => r.data),
-  unpriced: () => http.get<{ items: UnpricedItem[] }>('/api/pricing/unpriced').then((r) => r.data.items),
+  unpriced: () => http.get<UnpricedResp>('/api/pricing/unpriced').then((r) => r.data.items),
   /** 导出：返回 XML/JSON 纯文本 */
   exportText: async (format: PriceExportFormat) => {
     const r = await http.get<string>('/api/pricing/export', { params: { format }, responseType: 'text' })
@@ -308,8 +311,7 @@ export const pricingApi = {
 // ---------------------------------------------------------------------------
 export const fxApi = {
   list: () => http.get<{ items: FxRow[] }>('/api/fx').then((r) => r.data.items),
-  put: (items: { from: string; to: string; rate: number }[]) =>
-    http.put<{ ok: boolean; updated: number }>('/api/fx', items).then((r) => r.data),
+  put: (items: PutFxItem[]) => http.put<FxPutResp>('/api/fx', items).then((r) => r.data),
   refresh: () => http.post<FxRefreshResp>('/api/fx/refresh').then((r) => r.data),
 }
 

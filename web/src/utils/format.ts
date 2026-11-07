@@ -49,6 +49,14 @@ export function fmtDur(ms?: number | null): string {
   return `${(ms / 1000).toFixed(1)} s`
 }
 
+/** 秒 → 运行时长：秒/分钟/小时/天，保留最高两级 */
+export function fmtUptime(secs: number): string {
+  if (secs < 60) return `${Math.floor(secs)} 秒`
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟`
+  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时 ${Math.floor((secs % 3600) / 60)} 分`
+  return `${Math.floor(secs / 86400)} 天 ${Math.floor((secs % 86400) / 3600)} 小时`
+}
+
 /** 本地 00:00 起当天 ISO；用于默认「今天」区间 */
 export function todayRange(): [string, string] {
   const start = dayjs().startOf('day')

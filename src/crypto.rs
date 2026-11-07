@@ -9,7 +9,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 
 pub const ENV_SECRET_KEY: &str = "NEXTAPI_SECRET_KEY";
@@ -41,8 +41,9 @@ impl Crypto {
             .ok_or_else(|| anyhow::anyhow!("{ENV_SECRET_KEY} 未设置，无法加密敏感字段"))?;
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::try_from(&nonce_bytes[..]).expect("12 字节 nonce");
         let ct = cipher
-            .encrypt(Nonce::from_slice(&nonce_bytes), plain.as_bytes())
+            .encrypt(&nonce, plain.as_bytes())
             .map_err(|_| anyhow::anyhow!("AES-256-GCM 加密失败"))?;
         let mut buf = Vec::with_capacity(12 + ct.len());
         buf.extend_from_slice(&nonce_bytes);
@@ -62,8 +63,9 @@ impl Crypto {
             anyhow::bail!("密文长度非法");
         }
         let (nonce, ct) = buf.split_at(12);
+        let nonce = Nonce::try_from(nonce).expect("12 字节 nonce");
         let pt = cipher
-            .decrypt(Nonce::from_slice(nonce), ct)
+            .decrypt(&nonce, ct)
             .map_err(|_| anyhow::anyhow!("AES-256-GCM 解密失败（密钥错误或密文损坏）"))?;
         Ok(String::from_utf8(pt)?)
     }

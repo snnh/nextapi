@@ -144,13 +144,13 @@ async fn create_rule(
     validate_create_fields(&body)?;
     let dimension_key = normalize_dimension_key(body.dimensions.as_ref());
 
-    let row: PriceRuleRow = sqlx::query_as::<_, PriceRuleRow>(&format!(
+    let row: PriceRuleRow = sqlx::query_as::<_, PriceRuleRow>(sqlx::AssertSqlSafe(format!(
         "INSERT INTO price_rules \
          (upstream_id, model_id, unit, currency, base_price, source, dimensions, dimension_key, \
           segments, context_basis, effective_from, effective_to, priority, sort_order, enabled) \
          VALUES ($1,$2,$3,$4,$5,'manual',$6,$7,$8,$9,$10,$11,$12,$13,$14) \
          RETURNING {PRICE_RULE_COLS}"
-    ))
+    )))
     .bind(body.upstream_id)
     .bind(&body.model_id)
     .bind(&body.unit)
@@ -264,13 +264,13 @@ async fn update_rule(
     )?;
     let dimension_key = normalize_dimension_key(dimensions.as_ref());
 
-    let row: PriceRuleRow = sqlx::query_as::<_, PriceRuleRow>(&format!(
+    let row: PriceRuleRow = sqlx::query_as::<_, PriceRuleRow>(sqlx::AssertSqlSafe(format!(
         "UPDATE price_rules SET \
          upstream_id=$1, model_id=$2, unit=$3, currency=$4, base_price=$5, dimensions=$6, \
          dimension_key=$7, segments=$8, context_basis=$9, effective_from=$10, effective_to=$11, \
          priority=$12, sort_order=$13, enabled=$14, updated_at=now() \
          WHERE id=$15 RETURNING {PRICE_RULE_COLS}"
-    ))
+    )))
     .bind(upstream_id)
     .bind(&model_id)
     .bind(&unit)
@@ -335,9 +335,9 @@ async fn delete_rule(
 }
 
 async fn fetch_rule(state: &AppState, id: Uuid) -> ApiResult<PriceRuleRow> {
-    sqlx::query_as::<_, PriceRuleRow>(&format!(
+    sqlx::query_as::<_, PriceRuleRow>(sqlx::AssertSqlSafe(format!(
         "SELECT {PRICE_RULE_COLS} FROM price_rules WHERE id=$1"
-    ))
+    )))
     .bind(id)
     .fetch_optional(&state.db)
     .await?
@@ -480,10 +480,10 @@ async fn suggest_rules(
         return Err(ApiError::bad_request("请提供 model_id"));
     };
 
-    let rows: Vec<PriceRuleRow> = sqlx::query_as::<_, PriceRuleRow>(&format!(
+    let rows: Vec<PriceRuleRow> = sqlx::query_as::<_, PriceRuleRow>(sqlx::AssertSqlSafe(format!(
         "SELECT {PRICE_RULE_COLS} FROM price_rules WHERE model_id=$1 AND upstream_id<>$2 \
          ORDER BY upstream_id, currency, unit, dimension_key"
-    ))
+    )))
     .bind(&model_id)
     .bind(up_id)
     .fetch_all(&state.db)
@@ -592,9 +592,9 @@ async fn export_rules(
     _admin: AdminUsername,
     Query(q): Query<ExportQuery>,
 ) -> ApiResult<Response> {
-    let rows: Vec<PriceRuleRow> = sqlx::query_as::<_, PriceRuleRow>(&format!(
+    let rows: Vec<PriceRuleRow> = sqlx::query_as::<_, PriceRuleRow>(sqlx::AssertSqlSafe(format!(
         "SELECT {PRICE_RULE_COLS} FROM price_rules ORDER BY upstream_id, model_id, currency, unit, dimension_key"
-    ))
+    )))
     .fetch_all(&state.db)
     .await?;
 

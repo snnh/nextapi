@@ -2,10 +2,11 @@
   <el-dialog
     v-model="visible"
     title="修改密码"
-    width="440px"
+    class="dlg-sm"
     :close-on-click-modal="false"
     @closed="resetForm"
   >
+    <p v-if="errorMsg" class="dialog-error" role="alert" aria-live="polite">{{ errorMsg }}</p>
     <el-form ref="formRef" :model="form" :rules="rules" label-width="90px" @submit.prevent>
       <el-form-item label="原密码" prop="old_password">
         <el-input v-model="form.old_password" type="password" show-password autocomplete="current-password" />
@@ -42,6 +43,7 @@ import { errMsg } from '@/api/http'
 
 const visible = ref(false)
 const saving = ref(false)
+const errorMsg = ref('')
 const formRef = ref<FormInstance>()
 
 const form = reactive({ old_password: '', new_password: '', confirm: '' })
@@ -91,6 +93,7 @@ function open() {
   form.old_password = ''
   form.new_password = ''
   form.confirm = ''
+  errorMsg.value = ''
   visible.value = true
 }
 
@@ -99,6 +102,7 @@ function resetForm() {
   form.old_password = ''
   form.new_password = ''
   form.confirm = ''
+  errorMsg.value = ''
 }
 
 async function submit() {
@@ -109,12 +113,13 @@ async function submit() {
     return
   }
   saving.value = true
+  errorMsg.value = ''
   try {
     await authApi.changePassword({ old_password: form.old_password, new_password: form.new_password })
     ElMessage.success('密码已修改，下次登录请使用新密码')
     visible.value = false
   } catch (e) {
-    ElMessage.error(errMsg(e))
+    errorMsg.value = errMsg(e)
   } finally {
     saving.value = false
   }
@@ -135,7 +140,17 @@ defineExpose({ open })
   max-width: 160px;
 }
 .pwd-label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--nx-font-caption);
+  color: var(--nx-text-3);
+}
+.dialog-error {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--nx-danger-border);
+  border-radius: var(--nx-radius);
+  background: var(--nx-danger-soft);
+  color: var(--nx-danger);
+  font-size: var(--nx-font-small);
+  line-height: 1.6;
 }
 </style>

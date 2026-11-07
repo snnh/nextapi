@@ -162,6 +162,7 @@ impl ClientPools {
     }
 
     fn build_client(proxy: Option<reqwest::Proxy>) -> reqwest::Client {
+        crate::tls::ensure_crypto_provider();
         let mut b = reqwest::Client::builder()
             .pool_max_idle_per_host(32)
             .tcp_keepalive(Duration::from_secs(60))

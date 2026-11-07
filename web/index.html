@@ -1,8 +1,26 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
   <head>
+    <script>
+      // 首屏主题引导：必须在 CSS 之前执行，避免深色偏好下闪白
+      (function () {
+        try {
+          var mode = localStorage.getItem('nextapi.theme') || 'light';
+          var dark =
+            mode === 'dark' ||
+            (mode === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var root = document.documentElement;
+          root.classList.toggle('dark', !!dark);
+          root.dataset.theme = dark ? 'dark' : 'light';
+          root.dataset.themeMode = mode;
+        } catch (e) {}
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <!-- 部署前缀占位：后端返回 index.html 时按 X-Forwarded-Prefix / 请求路径替换（M15 §6.4） -->
     <base href="/" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />

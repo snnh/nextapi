@@ -23,6 +23,7 @@ mod idempotency;
 mod limit;
 mod logging;
 mod media;
+mod mem;
 mod metrics;
 mod netguard;
 mod presets;
@@ -33,6 +34,7 @@ mod settings;
 mod state;
 mod stats;
 mod text;
+mod tls;
 mod upstream;
 
 use state::AppState;
@@ -67,6 +69,9 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "nextapi=info,tower_http=info".into()),
         )
         .init();
+
+    // reqwest 0.13（rustls-no-provider）：先安装 ring provider，再构建任何 Client。
+    tls::ensure_crypto_provider();
 
     // 1. 加载 YAML 配置（NEXTAPI_CONFIG 覆盖默认路径）
     let config_path = std::env::var("NEXTAPI_CONFIG").unwrap_or_else(|_| "config.yaml".into());
@@ -148,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
         }
         // debug 模式空密钥：生成随机临时密钥（重启会话失效，但不可伪造）
         let mut buf = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut buf);
+        rand::Rng::fill_bytes(&mut rand::rng(), &mut buf);
         jwt_secret = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf);
         warn!("server.debug 且未配置 JWT 密钥：已生成随机临时密钥（重启后所有会话失效）");
     }
@@ -264,6 +269,18 @@ async fn main() -> anyhow::Result<()> {
             .await
             {
                 warn!("WAL 周期重放失败: {e}");
+            }
+        }
+    });
+    // 内存回收：glibc arena 的空闲页不会自动归还 OS。固定周期在阻塞线程池
+    // 调用 malloc_trim(0)，只回收空闲块，不影响存活请求；不新增配置项。
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(mem::TRIM_INTERVAL).await;
+            match tokio::task::spawn_blocking(mem::trim_allocator).await {
+                Ok(true) => tracing::debug!("malloc_trim 已归还空闲内存"),
+                Ok(false) => {}
+                Err(e) => tracing::debug!("malloc_trim 任务失败: {e}"),
             }
         }
     });

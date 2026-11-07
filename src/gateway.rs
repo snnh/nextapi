@@ -1398,6 +1398,9 @@ async fn run_gateway(
             crate::logging::DEBUG_MAX_BYTES,
         ));
     }
+    // 原始请求体 Bytes 到此已无引用（后续用解析后的 body_value）；显式提前 drop，
+    // 避免大请求体一直存活到上游调用/响应结束，降低单请求内存峰值。
+    drop(body);
 
     // 4. 模型白名单
     if !key.model_allowed(&model) {

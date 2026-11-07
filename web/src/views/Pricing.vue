@@ -34,18 +34,15 @@
           </el-tooltip>
         </div>
 
-        <el-card shadow="never">
-          <div v-if="rulesError" class="error-state">
-            <p class="error-msg">价格规则加载失败：{{ rulesError }}</p>
-            <el-button type="primary" :icon="Refresh" @click="loadRules">重新加载</el-button>
-          </div>
+        <el-card shadow="never" class="section-card">
+          <ErrorState v-if="rulesError" title="价格规则加载失败" :message="rulesError" @retry="loadRules" />
           <template v-else>
           <el-table :data="pageGroups" :empty-text="rulesEmptyText" v-loading="rulesLoading" row-key="key">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="rule-expand">
                   <el-table :data="row.rules" size="small">
-                    <el-table-column label="计价单位" :min-width="isNarrow ? 110 : 150">
+                    <el-table-column label="计价单位" :min-width="isNarrow ? 90 : 150">
                       <template #default="{ row: r }">
                         {{ UNIT_LABEL(r.unit) }}
                         <template v-if="isNarrow && !r.enabled">
@@ -59,7 +56,7 @@
                     <el-table-column v-if="!isNarrow" label="币种" width="70" align="center">
                       <template #default="{ row: r }">{{ r.currency }}</template>
                     </el-table-column>
-                    <el-table-column label="基础单价" :min-width="isNarrow ? 96 : 110" align="right">
+                    <el-table-column label="基础单价" :min-width="isNarrow ? 84 : 110" align="right">
                       <template #default="{ row: r }"><span class="mono">{{ fmtMoney(r.base_price) }}</span></template>
                     </el-table-column>
                     <el-table-column v-if="!isNarrow" label="分段" width="90" align="center">
@@ -100,7 +97,7 @@
                     </el-table-column>
                     <el-table-column
                       label="操作"
-                      :width="isNarrow ? 84 : 150"
+                      :width="isNarrow ? 80 : 150"
                       :fixed="isNarrow ? false : 'right'"
                     >
                       <template #default="{ row: r }">
@@ -132,7 +129,7 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="模型" :min-width="isNarrow ? 160 : 220">
+            <el-table-column label="模型" :min-width="isNarrow ? 120 : isCompact ? 140 : isTablet ? 190 : 220">
               <template #default="{ row }">
                 <CopyText :text="row.model_id" :truncate="28" />
                 <!-- 窄屏：把各计价单位单价折到模型名下方（否则单位列全被隐藏后价格无处可看） -->
@@ -147,11 +144,16 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column v-if="!isNarrow" label="上游" min-width="140" show-overflow-tooltip>
+            <el-table-column v-if="!isNarrow && !isTablet" label="上游" min-width="120" show-overflow-tooltip>
               <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
             </el-table-column>
             <template v-if="!isNarrow">
-              <el-table-column v-for="u in TOKEN_UNITS" :key="u" min-width="120" align="right">
+              <template v-for="u in TOKEN_UNITS" :key="u">
+              <el-table-column
+                v-if="!isTablet || (u !== 'token_cache_write' && (!isCompact || u !== 'token_cache_read'))"
+                :min-width="isCompact ? 94 : isTablet ? 96 : 100"
+                align="right"
+              >
               <template #header>
                 <el-tooltip :content="UNIT_LABEL(u)" placement="top">
                   <span>{{ UNIT_SHORT[u] }} /1M</span>
@@ -160,7 +162,7 @@
               <template #default="{ row }">
                 <template v-if="row.unitMap[u]">
                   <span class="mono">{{ fmtMoney(row.unitMap[u].base_price) }}</span>
-                  <span class="hint"> {{ row.unitMap[u].currency }}</span>
+                  <span class="hint currency">{{ row.unitMap[u].currency }}</span>
                   <el-tag
                     v-if="row.unitMap[u].segments?.length"
                     size="small"
@@ -182,8 +184,9 @@
                 <span v-else class="hint">—</span>
               </template>
             </el-table-column>
+              </template>
             </template>
-            <el-table-column v-if="!isNarrow" label="其他" width="90" align="center">
+            <el-table-column v-if="!isNarrow && !isTablet" label="其他" width="90" align="center">
               <template #default="{ row }">
                 <el-tag v-if="row.otherCount" size="small" type="info" effect="plain">{{ row.otherCount }} 条</el-tag>
                 <span v-else class="hint">—</span>
@@ -191,12 +194,12 @@
             </el-table-column>
             <el-table-column
               label="操作"
-              :width="isNarrow ? 88 : 150"
+              :width="isNarrow ? 72 : isCompact ? 76 : isTablet ? 110 : 150"
               :fixed="isNarrow ? false : 'right'"
             >
               <template #default="{ row }">
                 <el-dropdown
-                  v-if="isNarrow"
+                  v-if="isNarrow || isTablet"
                   trigger="click"
                   @command="(c: string) => onModelAction(c, row)"
                 >
@@ -215,17 +218,15 @@
               </template>
             </el-table-column>
           </el-table>
-          <div class="table-foot">
-            <el-pagination
-              v-model:current-page="page"
-              v-model:page-size="pageSize"
-              :page-sizes="[10, 20, 50]"
-              :total="filteredGroups.length"
-              layout="total, sizes, prev, pager, next, jumper"
-              background
-              small
-            />
+          <div v-if="isTablet && !isNarrow" class="hint table-note">
+            窄屏已收起上游、其他等次要列（缓存列随宽度收敛）；展开行可查看全部计价规则，编辑定价不受影响。
           </div>
+          <TablePager
+            v-model:page="page"
+            v-model:size="pageSize"
+            :total="filteredGroups.length"
+            :page-sizes="[10, 20, 50]"
+          />
           </template>
         </el-card>
       </el-tab-pane>
@@ -239,7 +240,7 @@
           title="未设置价格即不计价：成本记 NULL 并在列表/统计中提示未定价。"
           style="margin-bottom: 14px"
         />
-        <el-card shadow="never">
+        <el-card shadow="never" class="section-card">
           <el-table :data="unpricedItems" empty-text="暂无未定价模型" v-loading="unpricedLoading">
             <el-table-column label="上游" min-width="180">
               <template #default="{ row }">{{ row.upstream_name }}</template>
@@ -327,7 +328,7 @@
           </el-form>
         </el-card>
 
-        <el-card shadow="never" style="margin-top: 16px">
+        <el-card shadow="never" class="section-card">
           <template #header>
             <div class="card-head"><span>试算结果</span></div>
           </template>
@@ -346,7 +347,7 @@
 
       <!-- ===== Tab4 导入/导出 ===== -->
       <el-tab-pane label="导入 / 导出" name="import" lazy>
-        <el-card shadow="never" style="margin-bottom: 16px">
+        <el-card shadow="never" class="section-card">
           <template #header>
             <div class="card-head"><span>导出价格</span></div>
           </template>
@@ -383,7 +384,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Download, ArrowDown, Plus, PriceTag, Refresh, RefreshLeft, Search, Setting, View } from '@element-plus/icons-vue'
@@ -395,6 +396,8 @@ import { fmtMoney } from '@/utils/format'
 import { downloadText } from '@/utils/download'
 import { confirmDanger } from '@/utils/confirm'
 import CopyText from '@/components/common/CopyText.vue'
+import TablePager from '@/components/common/TablePager.vue'
+import ErrorState from '@/components/common/ErrorState.vue'
 import type {
   PreviewReq,
   PreviewResp,
@@ -406,6 +409,7 @@ import type {
   UpstreamOut,
 } from '@/api/types'
 import { fmtDimensionValue } from '@/components/pricing/types'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 import RuleFormDialog from '@/components/pricing/RuleFormDialog.vue'
 import ModelPriceDialog from '@/components/pricing/ModelPriceDialog.vue'
 import PreviewPanel from '@/components/pricing/PreviewPanel.vue'
@@ -416,11 +420,8 @@ const upstreams = ref<UpstreamOut[]>([])
 const pageLoading = ref(false)
 const route = useRoute()
 
-/** 窄屏（≤768px）：隐藏次要列 + 操作列取消固定并收成下拉菜单 */
-const isNarrow = ref(window.innerWidth <= 768)
-function onViewportResize() {
-  isNarrow.value = window.innerWidth <= 768
-}
+/** 窄屏/平板：隐藏次要列 + 操作列收成下拉菜单；≤900 再收窄列宽 */
+const { isMobile: isNarrow, isCompact, isTablet } = useBreakpoint()
 
 /** 窄屏模型聚合行操作分发 */
 function onModelAction(command: string, row: ModelGroup) {
@@ -560,17 +561,23 @@ const rulesEmptyText = computed(() => {
   return '暂无价格规则'
 })
 
-// 客户端分页（10/20/50，默认 20）；页码越界时自动收敛
+// 客户端分页（10/20/50，默认 20）；渲染时取安全页码，不在 computed 内改状态
 const pageGroups = computed<ModelGroup[]>(() => {
   const total = filteredGroups.value.length
   const maxPage = Math.max(1, Math.ceil(total / pageSize.value))
-  if (page.value > maxPage) page.value = maxPage
-  if (page.value < 1) page.value = 1
-  const start = (page.value - 1) * pageSize.value
+  const current = Math.min(Math.max(page.value, 1), maxPage)
+  const start = (current - 1) * pageSize.value
   return filteredGroups.value.slice(start, start + pageSize.value)
 })
 
-// 数据量变化时回到首页，避免停留在空页
+// 数据量变化时收敛页码；筛选/页大小变化回到首页，避免停留在空页
+watch(
+  () => filteredGroups.value.length,
+  (total) => {
+    const maxPage = Math.max(1, Math.ceil(total / pageSize.value))
+    if (page.value > maxPage) page.value = maxPage
+  },
+)
 watch(
   () => [filterUpstream.value, filterModel.value, pageSize.value] as const,
   () => {
@@ -813,9 +820,6 @@ onMounted(() => {
     pageLoading.value = false
   })
 })
-
-onMounted(() => window.addEventListener('resize', onViewportResize))
-onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
 </script>
 
 <style scoped>
@@ -826,40 +830,40 @@ onBeforeUnmount(() => window.removeEventListener('resize', onViewportResize))
   width: 240px;
   max-width: 100%;
 }
-.table-foot {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  padding-top: 12px;
-}
 .export-row {
   display: flex;
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
 }
+
 .card-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--el-font-size-base);
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
+.currency {
+  margin-left: 2px;
+}
 .seg-tip {
-  font-size: var(--el-font-size-extra-small);
+  font-size: var(--nx-font-caption);
   line-height: 1.6;
   white-space: nowrap;
-}
-/* 窄屏折到主行下方的副信息（单价行 / 已停用标记） */
-.sub-line {
-  margin-top: 4px;
-  font-size: var(--el-font-size-extra-small);
-  line-height: 1.6;
 }
 .price-line + .price-line::before {
   content: ' · ';
   color: var(--el-text-color-placeholder);
+}
+@media (max-width: 800px) {
+  .price-line {
+    display: block;
+  }
+  .price-line + .price-line::before {
+    content: none;
+  }
 }
 .rule-expand {
   padding: 4px 16px 8px 48px;

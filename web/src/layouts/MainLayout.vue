@@ -1,33 +1,49 @@
 <template>
+  <a class="skip-link" href="#main">跳到主内容</a>
   <el-container class="layout">
     <el-aside
       :width="isMobile ? '248px' : collapsed ? '64px' : '220px'"
       class="aside"
       :class="{ 'aside-mobile': isMobile, 'aside-mobile-open': navOpen }"
+      :role="isMobile ? 'dialog' : undefined"
+      :aria-modal="isMobile && navOpen ? 'true' : undefined"
+      :aria-hidden="isMobile && !navOpen ? 'true' : undefined"
+      :aria-label="isMobile ? '导航菜单' : undefined"
+      :inert="isMobile && !navOpen ? '' : undefined"
+      id="app-nav"
     >
-      <div class="brand" :class="{ 'brand-collapsed': collapsed && !isMobile }">
-        <span class="brand-mark">next</span>
-        <div v-show="!collapsed || isMobile" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
+      <div ref="asideRef" class="aside-inner">
+        <el-button
+          v-if="isMobile"
+          class="drawer-close"
+          link
+          :icon="Close"
+          aria-label="关闭菜单"
+          @click="closeNav"
+        />
+        <div class="brand" :class="{ 'brand-collapsed': collapsed && !isMobile }">
+          <span class="brand-mark">next</span>
+          <div v-show="!collapsed || isMobile" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
+        </div>
+        <el-menu :default-active="active" router :collapse="collapsed && !isMobile" :collapse-transition="false"
+          class="menu" popper-class="aside-menu-popup" @select="onMenuSelect">
+          <!-- 菜单按「概览 / 接入 / 监控 / 高级」分组展示（index 仍为路由 path，兼容旧书签） -->
+          <el-sub-menu v-for="g in menus" :key="g.label" :index="g.label">
+            <template #title>
+              <el-icon><component :is="g.icon" /></el-icon>
+              <span>{{ g.label }}</span>
+            </template>
+            <el-menu-item v-for="m in g.items" :key="m.path" :index="m.path">
+              <el-icon><component :is="m.icon" /></el-icon>
+              <template #title><span>{{ m.title }}</span></template>
+            </el-menu-item>
+          </el-sub-menu>
+        </el-menu>
+        <div v-show="!collapsed || isMobile" class="aside-version">v{{ version }}</div>
       </div>
-      <el-menu :default-active="active" router :collapse="collapsed && !isMobile" :collapse-transition="false"
-        background-color="transparent" text-color="#9aa7ae" active-text-color="#ffffff" class="menu"
-        popper-class="aside-menu-popup" @select="onMenuSelect">
-        <!-- 菜单按「概览 / 接入 / 监控 / 高级」分组展示（index 仍为路由 path，兼容旧书签） -->
-        <el-sub-menu v-for="g in menus" :key="g.label" :index="g.label">
-          <template #title>
-            <el-icon><component :is="g.icon" /></el-icon>
-            <span>{{ g.label }}</span>
-          </template>
-          <el-menu-item v-for="m in g.items" :key="m.path" :index="m.path">
-            <el-icon><component :is="m.icon" /></el-icon>
-            <template #title><span>{{ m.title }}</span></template>
-          </el-menu-item>
-        </el-sub-menu>
-      </el-menu>
-      <div v-show="!collapsed || isMobile" class="aside-version">v{{ version }}</div>
     </el-aside>
     <transition name="mask-fade">
-      <div v-if="isMobile && navOpen" class="nav-mask" @click="navOpen = false" />
+      <div v-if="isMobile && navOpen" class="nav-mask" @click="closeNav" />
     </transition>
     <el-container>
       <el-header class="header">
@@ -39,14 +55,16 @@
             :title="isMobile ? '打开菜单' : collapsed ? '展开侧栏' : '收起侧栏'"
             :aria-label="isMobile ? '打开菜单' : collapsed ? '展开侧栏' : '收起侧栏'"
             :aria-expanded="isMobile ? navOpen : !collapsed"
+            aria-controls="app-nav"
             @click="onMenuBtn"
           />
           <div class="page-title">{{ route.meta.title ?? '' }}</div>
         </div>
         <div class="header-right">
           <SystemStatusBadge />
+          <ThemeToggle />
           <el-dropdown @command="onCommand" trigger="click">
-            <el-button class="user" link>
+            <el-button class="user" link :aria-label="`用户菜单：${auth.username ?? 'admin'}`">
               <el-icon><UserFilled /></el-icon>
               <span class="username">{{ auth.username ?? 'admin' }}</span>
               <el-icon><ArrowDown /></el-icon>
@@ -60,7 +78,7 @@
           </el-dropdown>
         </div>
       </el-header>
-      <el-main class="main">
+      <el-main id="main" class="main" tabindex="-1">
         <router-view />
       </el-main>
     </el-container>
@@ -70,14 +88,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { ArrowDown, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-plus/icons-vue'
+import { ArrowDown, Close, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 import SystemStatusBadge from '@/components/common/SystemStatusBadge.vue'
+import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 const route = useRoute()
 const router = useRouter()
@@ -131,6 +151,7 @@ const NAV_COLLAPSED_KEY = 'nextapi.nav.collapsed'
 const collapsed = ref(readCollapsed())
 const navOpen = ref(false)
 const pwdDlg = ref<InstanceType<typeof ChangePwdDialog>>()
+const asideRef = ref<HTMLElement | null>(null)
 
 // 桌面侧栏收起偏好持久化；移动端抽屉状态不落盘（两种形态互不影响）
 function readCollapsed(): boolean {
@@ -148,14 +169,11 @@ function saveCollapsed(v: boolean) {
   }
 }
 
-// 移动端断点：≤768px 时侧栏改为滑出式抽屉（不占据布局宽度）
-const MOBILE_MQ = '(max-width: 768px)'
-const isMobile = ref(false)
-let mq: MediaQueryList | null = null
-const onMq = (e: MediaQueryListEvent) => {
-  isMobile.value = e.matches
-  if (!e.matches) navOpen.value = false
-}
+// 移动端（≤800px）侧栏改为滑出式抽屉；断点与全站 useBreakpoint 同源
+const { isMobile } = useBreakpoint()
+watch(isMobile, (mobile) => {
+  if (!mobile) navOpen.value = false
+})
 // 侧栏底部版本号（来自后端真实二进制版本，失败静默）
 const version = ref('')
 onMounted(async () => {
@@ -166,12 +184,9 @@ onMounted(async () => {
   }
 })
 
-onMounted(() => {
-  mq = window.matchMedia(MOBILE_MQ)
-  isMobile.value = mq.matches
-  mq.addEventListener('change', onMq)
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onDrawerKeydown)
 })
-onBeforeUnmount(() => mq?.removeEventListener('change', onMq))
 
 const menuBtnIcon = computed(() => {
   if (isMobile.value) return MenuIcon
@@ -180,7 +195,8 @@ const menuBtnIcon = computed(() => {
 
 function onMenuBtn() {
   if (isMobile.value) {
-    navOpen.value = !navOpen.value
+    if (navOpen.value) closeNav()
+    else openNav()
   } else {
     collapsed.value = !collapsed.value
     saveCollapsed(collapsed.value)
@@ -188,8 +204,63 @@ function onMenuBtn() {
 }
 
 function onMenuSelect() {
-  if (isMobile.value) navOpen.value = false
+  if (isMobile.value) closeNav()
 }
+
+// 移动端抽屉：Esc 关闭、焦点陷阱、关闭后焦点回归触发按钮
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+let lastFocused: HTMLElement | null = null
+
+function focusableNodes(): HTMLElement[] {
+  const root = asideRef.value
+  if (!root) return []
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (el) => el.getAttribute('aria-hidden') !== 'true' && el.getClientRects().length > 0,
+  )
+}
+
+function openNav() {
+  lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  navOpen.value = true
+}
+
+function closeNav() {
+  navOpen.value = false
+}
+
+function onDrawerKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeNav()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const nodes = focusableNodes()
+  if (!nodes.length) return
+  const first = nodes[0]
+  const last = nodes[nodes.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+watch([navOpen, isMobile], async ([open, mobile]) => {
+  document.removeEventListener('keydown', onDrawerKeydown)
+  if (!mobile) return
+  if (open) {
+    await nextTick()
+    focusableNodes()[0]?.focus()
+    document.addEventListener('keydown', onDrawerKeydown)
+  } else {
+    await nextTick()
+    lastFocused?.focus()
+  }
+})
 
 async function onCommand(cmd: string) {
   if (cmd === 'logout') {
@@ -209,15 +280,37 @@ async function onCommand(cmd: string) {
 <style scoped>
 .layout {
   height: 100%;
+  background: var(--nx-canvas);
 }
 
-/* ---------- 侧栏（深色） ---------- */
+/* ---------- 侧栏：跟随主题，无阴影 ---------- */
 .aside {
   position: relative;
-  background: #17202a;
-  transition: width .2s ease;
+  background: var(--nx-sidebar-bg);
+  border-right: 1px solid var(--nx-sidebar-border);
+  transition: width var(--nx-dur-slow) var(--nx-ease);
   overflow: hidden;
   flex-shrink: 0;
+}
+.aside-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.drawer-close {
+  position: absolute;
+  top: 12px;
+  right: 8px;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--nx-sidebar-text);
+}
+.drawer-close:hover {
+  background: var(--nx-sidebar-hover);
+  color: var(--nx-sidebar-strong);
 }
 .brand {
   display: flex;
@@ -225,6 +318,7 @@ async function onCommand(cmd: string) {
   gap: 10px;
   padding: 18px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .brand-collapsed {
   justify-content: center;
@@ -236,54 +330,75 @@ async function onCommand(cmd: string) {
   padding: 0 10px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: #3d444c;
-  color: #fff;
+  border-radius: var(--nx-radius);
+  background: var(--nx-accent-solid);
+  color: var(--nx-on-accent);
   font-weight: 800;
-  font-size: 14px;
-  letter-spacing: .5px;
+  font-size: var(--nx-font-body);
+  letter-spacing: 0.5px;
   line-height: 1;
-  box-shadow: 0 2px 8px rgba(23, 32, 42, .35);
 }
-.brand strong { display: block; font-size: 15px; letter-spacing: .2px; color: #f5f7f8; }
-.brand small { display: block; margin-top: 2px; color: #7c8890; font-size: 11px; }
+.brand strong {
+  display: block;
+  font-size: 15px;
+  letter-spacing: 0.2px;
+  color: var(--nx-sidebar-strong);
+}
+.brand small {
+  display: block;
+  margin-top: 2px;
+  color: var(--nx-sidebar-muted);
+  font-size: 11px;
+}
 .menu {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   border-right: none;
   padding: 4px 8px;
   --el-menu-item-height: 42px;
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: var(--nx-sidebar-text);
+  --el-menu-active-color: var(--nx-sidebar-strong);
+  --el-menu-hover-bg-color: var(--nx-sidebar-hover);
+  --el-menu-hover-text-color: var(--nx-sidebar-strong);
 }
 .aside-version {
-  position: absolute;
-  bottom: 12px;
-  left: 0;
-  right: 0;
+  flex-shrink: 0;
+  padding: 12px 0 14px;
   text-align: center;
-  color: #8b98a3;
+  color: var(--nx-sidebar-muted);
   font-size: 11px;
-  letter-spacing: .3px;
+  letter-spacing: 0.3px;
   user-select: none;
 }
 .menu :deep(.el-menu-item) {
-  border-radius: 8px;
+  border-radius: var(--nx-radius);
   margin: 2px 0;
 }
 .menu :deep(.el-menu-item:hover) {
-  background-color: rgba(255, 255, 255, .07);
-  color: #e8edef;
+  background-color: var(--nx-sidebar-hover);
+  color: var(--nx-sidebar-strong);
 }
 .menu :deep(.el-menu-item.is-active) {
-  background-color: rgba(255, 255, 255, .12);
-  color: #fff;
-
+  background-color: var(--nx-sidebar-active-bg);
+  color: var(--nx-sidebar-active-text);
+  box-shadow: inset 3px 0 0 var(--nx-sidebar-accent);
+}
+.menu :deep(.el-menu-item:focus-visible),
+.menu :deep(.el-sub-menu__title:focus-visible) {
+  outline: 2px solid var(--nx-focus-ring);
+  outline-offset: -2px;
 }
 /* 分组标题（el-sub-menu）与菜单项一致的圆角/悬停反馈 */
 .menu :deep(.el-sub-menu__title) {
-  border-radius: 8px;
+  border-radius: var(--nx-radius);
   margin: 2px 0;
 }
 .menu :deep(.el-sub-menu__title:hover) {
-  background-color: rgba(255, 255, 255, .07);
-  color: #e8edef;
+  background-color: var(--nx-sidebar-hover);
+  color: var(--nx-sidebar-strong);
 }
 
 /* ---------- 移动端：侧栏变滑出抽屉 ---------- */
@@ -294,8 +409,7 @@ async function onCommand(cmd: string) {
   bottom: 0;
   z-index: 1001;
   transform: translateX(-100%);
-  transition: transform .22s ease;
-  box-shadow: 8px 0 24px rgba(0, 0, 0, .3);
+  transition: transform var(--nx-dur-slow) var(--nx-ease);
 }
 .aside-mobile-open {
   transform: translateX(0);
@@ -304,11 +418,11 @@ async function onCommand(cmd: string) {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(8, 12, 16, .5);
+  background: var(--nx-mask);
 }
 .mask-fade-enter-active,
 .mask-fade-leave-active {
-  transition: opacity .2s ease;
+  transition: opacity var(--nx-dur-slow) var(--nx-ease);
 }
 .mask-fade-enter-from,
 .mask-fade-leave-to {
@@ -317,12 +431,15 @@ async function onCommand(cmd: string) {
 
 /* ---------- 顶栏 ---------- */
 .header {
-  background: var(--el-bg-color);
-  border-bottom: 1px solid var(--el-border-color-light);
+  background: var(--nx-surface);
+  border-bottom: 1px solid var(--nx-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 56px;
+  padding: 0 20px;
+  transition: background-color var(--nx-dur-base) var(--nx-ease),
+    border-color var(--nx-dur-base) var(--nx-ease);
 }
 .header-left {
   display: flex;
@@ -333,25 +450,25 @@ async function onCommand(cmd: string) {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-shrink: 0;
 }
 .collapse-btn {
   width: var(--el-component-size);
   height: var(--el-component-size);
   padding: 0;
-  font-size: 18px;
-  color: var(--el-text-color-regular);
-  border-radius: var(--el-border-radius-base);
+  font-size: var(--el-font-size-large);
+  color: var(--nx-text-2);
+  border-radius: var(--nx-radius);
 }
 .collapse-btn:hover {
-  background: var(--el-fill-color-light);
-  color: var(--el-text-color-primary);
+  background: var(--nx-hover);
+  color: var(--nx-text);
 }
 .page-title {
-  font-size: var(--el-font-size-medium);
+  font-size: var(--nx-font-title);
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -362,56 +479,70 @@ async function onCommand(cmd: string) {
   gap: 4px;
   height: auto;
   padding: 0;
-  color: var(--el-text-color-regular);
+  color: var(--nx-text-2);
 }
 .user:hover {
-  color: var(--el-text-color-primary);
+  color: var(--nx-text);
   background: transparent;
 }
 .main {
   padding: 0;
   overflow-y: auto;
-  background: var(--el-bg-color-page);
+  background: var(--nx-canvas);
+  outline: none;
 }
 
-@media (max-width: 768px) {
-  .header { padding: 0 12px; }
-  .page-title { font-size: var(--el-font-size-base); }
-  .collapse-btn { width: 40px; height: 40px; }
+@media (max-width: 800px) {
+  .header {
+    padding: 0 12px;
+  }
+  .header-left {
+    gap: 8px;
+  }
+  .page-title {
+    font-size: var(--nx-font-body);
+  }
+  .collapse-btn {
+    width: 40px;
+    height: 40px;
+  }
 }
 @media (max-width: 400px) {
-  .username { display: none; }
+  .username {
+    display: none;
+  }
 }
 </style>
 
 <!-- 收起态（仅图标 64px）分组弹出面板由 el-sub-menu 渲染到 body，需非 scoped 才能命中 -->
 <style>
 .aside-menu-popup.el-popper {
-  border: none;
-  border-radius: 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius);
   padding: 4px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+  background: var(--nx-floating);
+  box-shadow: var(--nx-shadow-pop);
 }
 .aside-menu-popup .el-menu--popup {
-  background-color: #1d2731;
+  background-color: var(--nx-floating);
   min-width: 160px;
   padding: 0;
 }
 .aside-menu-popup .el-menu-item {
-  border-radius: 6px;
+  border-radius: var(--nx-radius-sm);
   margin: 2px 4px;
-  color: #9aa7ae;
+  color: var(--nx-sidebar-text);
 }
 .aside-menu-popup .el-menu-item:hover {
-  background-color: rgba(255, 255, 255, .07);
-  color: #e8edef;
+  background-color: var(--nx-sidebar-hover);
+  color: var(--nx-sidebar-strong);
 }
 .aside-menu-popup .el-menu-item.is-active {
-  background-color: rgba(255, 255, 255, .12);
-  color: #fff;
+  background-color: var(--nx-sidebar-active-bg);
+  color: var(--nx-sidebar-active-text);
 }
 .aside-menu-popup .el-popper__arrow::before {
-  background-color: #1d2731 !important;
-  border-color: #1d2731 !important;
+  background-color: var(--nx-floating) !important;
+  border-color: var(--nx-border) !important;
 }
 </style>

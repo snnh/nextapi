@@ -138,7 +138,7 @@ async function check() {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -153,23 +153,19 @@ async function check() {
   gap: 4px;
   padding: 8px 12px;
   background: var(--el-fill-color-light);
-  border-radius: 6px;
+  border-radius: var(--nx-radius);
 }
 .summary-label {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .summary-value {
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   color: var(--el-text-color-primary);
   word-break: break-all;
 }
 .check-btn {
   margin-top: 14px;
-}
-.hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
 }
 .version-row {
   display: flex;
@@ -184,11 +180,11 @@ async function check() {
   gap: 4px;
 }
 .version-sub {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .version-big {
-  font-size: 24px;
+  font-size: var(--nx-font-stat);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -208,7 +204,7 @@ async function check() {
   margin-top: 4px;
 }
 .notes-title {
-  font-size: 14px;
+  font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -217,11 +213,11 @@ async function check() {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: var(--nx-font-small);
   line-height: 1.7;
   background: var(--el-fill-color-light);
   padding: 12px;
-  border-radius: 6px;
+  border-radius: var(--nx-radius);
   max-height: 360px;
   overflow: auto;
 }

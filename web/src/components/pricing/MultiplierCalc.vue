@@ -88,12 +88,12 @@ function clear() {
   flex-wrap: wrap;
 }
 .mc-label {
-  font-size: 12px;
-  color: #4c5f69;
+  font-size: var(--nx-font-caption);
+  color: var(--nx-text-2);
   flex-shrink: 0;
 }
 .mc-unit-hint {
-  font-size: 12px;
+  font-size: var(--nx-font-caption);
   color: var(--el-text-color-secondary);
 }
 .mc-op {

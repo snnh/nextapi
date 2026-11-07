@@ -21,21 +21,26 @@ async function fallbackCopy(text: string): Promise<void> {
 }
 
 /**
- * 复制文本并给出统一反馈。
+ * 复制文本并按需给出统一反馈。
  * @param text 待复制文本
  * @param label 成功提示文案（默认「已复制」）
+ * @param options toast=false 时只返回结果，由调用方做局部反馈
  */
-export async function copyText(text: string, label = '已复制'): Promise<boolean> {
+export async function copyText(
+  text: string,
+  label = '已复制',
+  options: { toast?: boolean } = {},
+): Promise<boolean> {
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text)
     } else {
       await fallbackCopy(text)
     }
-    ElMessage.success(label)
+    if (options.toast !== false) ElMessage.success(label)
     return true
   } catch {
-    ElMessage.error('复制失败，请手动选择文本复制')
+    if (options.toast !== false) ElMessage.error('复制失败，请手动选择文本复制')
     return false
   }
 }

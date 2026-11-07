@@ -83,7 +83,7 @@ fn connect_headers(token: Option<&str>, streaming: bool, emulation: Emulation) -
     h.insert(reqwest::header::ACCEPT, "*/*".parse().unwrap());
     if emulation.enabled {
         let mut raw = [0u8; 24];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut raw);
+        rand::Rng::fill_bytes(&mut rand::rng(), &mut raw);
         let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
         let trace = format!("{}-{}-1", &hex[..32], &hex[32..48]);
         h.insert("sentry-trace", trace.parse().unwrap());
@@ -523,7 +523,7 @@ pub struct PkceStart {
 /// 生成 CLI PKCE 授权会话（`.owc/devin-ref/RESEARCH.md` §4 实测参数）。
 pub fn pkce_start() -> PkceStart {
     use base64::Engine;
-    use rand::RngCore;
+    use rand::Rng;
     use sha2::Digest;
     let state = uuid::Uuid::new_v4().to_string();
     // code_verifier：48 字节随机 → base64url（64 字符，满足 RFC 7636 的 43–128）
