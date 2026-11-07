@@ -4,6 +4,7 @@
 //! - SSE 透传边转发边按行解析，改写 chunk 的 model/id；单行解析失败该行原样放行；
 //! - 敏感头（Host/Cookie/Proxy-*）不透传；其余头按白名单默认放行（M3：仅转发 content-type/accept）。
 
+pub mod balance;
 pub mod codex;
 pub mod codex_ws;
 pub mod cred;
@@ -1204,6 +1205,7 @@ mod tests {
             base_url: "http://127.0.0.1".into(),
             api_key_plain: None,
             oauth_plain: None,
+            balance_key_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,
             timeout_ms: 30000,

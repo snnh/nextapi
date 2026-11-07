@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::crypto::Crypto;
 use crate::entities::{ApiKeyRow, ModelAliasRow, ModelRouteRow, ProxyRow, UpstreamRow};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     /// key_hash(sha256 hex) → ApiKeyRow
     pub api_keys: HashMap<String, ApiKeyRow>,
@@ -41,6 +41,22 @@ impl EntityCache {
         self.inner.read().unwrap().clone()
     }
 
+    /// 更新单个上游的 `extra.quota` 快照（额度探测成功后调用，避免全量 reload）。
+    pub fn update_upstream_quota(&self, id: Uuid, quota: serde_json::Value) {
+        let mut w = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut snap = (**w).clone();
+        let Some(up) = snap.upstreams.get_mut(&id) else {
+            return;
+        };
+        if !up.extra.is_object() {
+            up.extra = serde_json::json!({});
+        }
+        if let Some(obj) = up.extra.as_object_mut() {
+            obj.insert("quota".into(), quota);
+        }
+        *w = Arc::new(snap);
+    }
+
     /// 从 DB 全量加载并原子替换快照（api_key/代理密码在此解密进内存）。
     pub async fn reload(&self, pool: &PgPool, crypto: &Crypto) -> anyhow::Result<()> {
         // 1. 全量读取（sqlx::query_as 运行时校验；与 sqlx::query! 宏区分，无编译期 DB）
@@ -60,7 +76,7 @@ impl EntityCache {
             "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
              breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
              use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
-             oauth_enc, created_at, updated_at FROM upstreams",
+             oauth_enc, balance_key_enc, created_at, updated_at FROM upstreams",
         )
         .fetch_all(pool)
         .await?;
@@ -122,6 +138,16 @@ impl EntityCache {
                 },
                 _ => None,
             };
+            let balance_key_plain = match u.balance_key_enc.as_deref() {
+                Some(enc) if !enc.is_empty() => match crypto.decrypt(enc) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("上游 `{}` 的 balance_key 解密失败: {e}", u.name);
+                        None
+                    }
+                },
+                _ => None,
+            };
             let row = UpstreamRow {
                 id: u.id,
                 name: u.name,
@@ -129,6 +155,7 @@ impl EntityCache {
                 base_url: u.base_url,
                 api_key_plain,
                 oauth_plain,
+                balance_key_plain,
                 protocols: u.protocols,
                 enabled: u.enabled,
                 timeout_ms: u.timeout_ms,
@@ -219,6 +246,7 @@ struct UpstreamDbRow {
     models_cache: serde_json::Value,
     models_fetched_at: Option<DateTime<Utc>>,
     oauth_enc: Option<String>,
+    balance_key_enc: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }

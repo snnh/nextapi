@@ -500,6 +500,7 @@ mod tests {
             base_url: "http://localhost".into(),
             api_key_plain: None,
             oauth_plain: None,
+            balance_key_plain: None,
             protocols: vec!["openai_chat".into()],
             enabled: true,
             timeout_ms: 300_000,

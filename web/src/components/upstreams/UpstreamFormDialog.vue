@@ -305,6 +305,113 @@
         </el-form-item>
       </template>
 
+      <!-- 余额/额度查询：codex/devin 已有专用额度，不显示 -->
+      <template v-if="!isCodex && !isDevin">
+        <el-divider content-position="left">余额/额度</el-divider>
+        <el-form-item label="查询方式">
+          <el-select v-model="form.balanceAdapter" style="width: 100%">
+            <el-option label="自动（按渠道类型识别）" value="auto" />
+            <el-option label="关闭" value="off" />
+            <el-option label="DeepSeek 余额" value="deepseek" />
+            <el-option label="Kimi 余额" value="kimi" />
+            <el-option label="OpenRouter 余额（Management Key）" value="openrouter" />
+            <el-option label="Zenmux 余额（Management Key）" value="zenmux" />
+            <el-option label="智谱 GLM 套餐额度（实验性）" value="zhipu" />
+            <el-option label="OpenAI billing 兼容" value="openai_billing" />
+            <el-option label="自定义端点" value="custom" />
+          </el-select>
+          <div class="hint">
+            自动仅识别 DeepSeek / Kimi / OpenRouter / Zenmux / 智谱；OpenAI billing 与自定义需手动选择。
+          </div>
+        </el-form-item>
+
+        <template v-if="form.balanceAdapter === 'custom'">
+          <el-form-item label="端点 URL">
+            <el-input
+              v-model="form.balanceUrl"
+              placeholder="/api/user/self 或 https://public.example.com/api/balance"
+              clearable
+            />
+            <div class="hint">
+              以 / 开头拼到渠道 origin；否则拼到 base_url；绝对地址仅允许公网 HTTPS。
+            </div>
+          </el-form-item>
+          <el-form-item label="鉴权 Header">
+            <div class="balance-grid">
+              <el-input v-model="form.balanceHeader" placeholder="Header 名，留空=匿名" clearable />
+              <el-input v-model="form.balancePrefix" placeholder="值前缀，如 Bearer " clearable />
+            </div>
+          </el-form-item>
+          <el-form-item label="字段路径">
+            <div class="balance-grid balance-grid-3">
+              <el-input v-model="form.balanceAmountPath" placeholder="余额路径，如 data.balance" clearable />
+              <el-input v-model="form.balanceCurrencyPath" placeholder="币种路径，如 data.currency" clearable />
+              <el-input v-model="form.balanceCurrency" placeholder="或固定币种，如 CNY" clearable />
+            </div>
+            <div class="hint">余额路径必填；币种路径与固定币种二选一。支持对象点路径与数组下标。</div>
+          </el-form-item>
+          <el-form-item label="可选映射">
+            <div class="balance-grid balance-grid-3">
+              <el-input v-model="form.balanceTotalPath" placeholder="总额路径（可选）" clearable />
+              <el-input v-model="form.balanceUsedPath" placeholder="已用路径（可选）" clearable />
+              <el-input v-model="form.balanceResetPath" placeholder="重置时间路径（可选）" clearable />
+            </div>
+          </el-form-item>
+        </template>
+
+        <el-form-item label="查询凭证">
+          <div v-if="isEdit" class="api-key-block">
+            <div class="api-key-row">
+              <el-tag v-if="form.hasBalanceKey" type="success" size="small" class="api-key-tag">已设置</el-tag>
+              <el-tag v-else type="info" size="small" class="api-key-tag">未设置</el-tag>
+              <el-input
+                v-model="form.balance_key"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore
+                class="api-key-input"
+                :disabled="form.clearBalanceKey"
+                :placeholder="form.hasBalanceKey ? '留空保持不变' : '输入独立查询 Key（留空回退推理 Key）'"
+                clearable
+              />
+              <el-button
+                v-if="form.hasBalanceKey && !form.clearBalanceKey"
+                link
+                type="danger"
+                size="small"
+                @click="form.clearBalanceKey = true"
+              >
+                清除凭证
+              </el-button>
+              <el-button
+                v-else-if="form.clearBalanceKey"
+                link
+                size="small"
+                @click="form.clearBalanceKey = false"
+              >
+                撤销清除
+              </el-button>
+            </div>
+            <div class="hint">
+              OpenRouter / Zenmux 需单独 Management Key，普通推理 Key 会 403；留空则回退推理 Key。
+            </div>
+          </div>
+          <el-input
+            v-else
+            v-model="form.balance_key"
+            type="password"
+            show-password
+            autocomplete="new-password"
+            data-lpignore="true"
+            data-1p-ignore
+            placeholder="（可选）独立查询 Key；留空回退推理 Key"
+            clearable
+          />
+        </el-form-item>
+      </template>
+
       <el-form-item label="协议" prop="protocols">
         <el-select
           v-model="form.protocols"
@@ -632,6 +739,8 @@ import {
 import { upstreamApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type {
+  BalanceAdapterId,
+  BalanceConfig,
   ModelSyncReport,
   TestResp,
   Overrides,
@@ -720,6 +829,21 @@ interface FormState {
   protocolBaseUrls: Record<string, string>
   /** Codex：auth.json 原文（仅传输用，不展示回读） */
   auth_json: string
+  /** 余额查询适配器（extra.balance.adapter） */
+  balanceAdapter: BalanceAdapterId
+  balanceUrl: string
+  balanceHeader: string
+  balancePrefix: string
+  balanceAmountPath: string
+  balanceCurrency: string
+  balanceCurrencyPath: string
+  balanceTotalPath: string
+  balanceUsedPath: string
+  balanceResetPath: string
+  /** 余额查询独立凭证（仅传输用，不展示回读） */
+  balance_key: string
+  hasBalanceKey: boolean
+  clearBalanceKey: boolean
   hasOauth: boolean
   oauthAccountId: string
   oauthExpiresAt: string
@@ -764,6 +888,19 @@ function defaultForm(): FormState {
     model_exclude: [],
     protocolBaseUrls: {},
     auth_json: '',
+    balanceAdapter: 'auto',
+    balanceUrl: '',
+    balanceHeader: 'Authorization',
+    balancePrefix: 'Bearer ',
+    balanceAmountPath: '',
+    balanceCurrency: '',
+    balanceCurrencyPath: '',
+    balanceTotalPath: '',
+    balanceUsedPath: '',
+    balanceResetPath: '',
+    balance_key: '',
+    hasBalanceKey: false,
+    clearBalanceKey: false,
     hasOauth: false,
     oauthAccountId: '',
     oauthExpiresAt: '',
@@ -1088,6 +1225,7 @@ function onClosed() {
   lastTest.value = null
   form.api_key = ''
   form.auth_json = ''
+  form.balance_key = ''
 }
 
 /** Enter 提交：排除 textarea / 下拉 / 数字步进器内的回车 */
@@ -1322,6 +1460,19 @@ function open(upstream?: UpstreamOut) {
       base.systemInfoEnabled = true
       base.systemInfoTemplate = siTpl || DEVIN_DEFAULT_SYSTEM_INFO
     }
+    const bc = upstream.extra?.balance
+    const ba = (bc?.adapter as string | undefined) === 'moonshot' ? 'kimi' : bc?.adapter
+    base.balanceAdapter = (ba as BalanceAdapterId) ?? 'auto'
+    base.balanceUrl = bc?.url ?? ''
+    base.balanceHeader = bc?.header ?? 'Authorization'
+    base.balancePrefix = bc?.prefix ?? 'Bearer '
+    base.balanceAmountPath = bc?.amount_path ?? ''
+    base.balanceCurrency = bc?.currency ?? ''
+    base.balanceCurrencyPath = bc?.currency_path ?? ''
+    base.balanceTotalPath = bc?.total_path ?? ''
+    base.balanceUsedPath = bc?.used_path ?? ''
+    base.balanceResetPath = bc?.reset_at_path ?? ''
+    base.hasBalanceKey = upstream.has_balance_key
   }
   Object.assign(form, base)
   extraSnapshot.value = upstream?.extra
@@ -1347,6 +1498,7 @@ function buildExtra(): UpstreamExtra {
   // 以快照为底（保留 protocol_base_urls 等表单未覆盖的键）；表单管辖区以表单为准：
   // overrides / protocol_priority / media_base_url / capabilities 覆盖或清除
   const extra: UpstreamExtra = JSON.parse(JSON.stringify(extraSnapshot.value ?? {}))
+  delete extra.quota
   if (Object.keys(form.overrides).length) extra.overrides = form.overrides
   else delete extra.overrides
   const pbu = Object.fromEntries(
@@ -1407,7 +1559,48 @@ function buildExtra(): UpstreamExtra {
       extra.system_info = form.systemInfoTemplate
     }
   }
+  // 余额/额度：auto 不落键；off/具体适配器落 adapter；custom 附带映射字段。
+  if (form.balanceAdapter === 'auto') {
+    delete extra.balance
+  } else {
+    const prev = (extraSnapshot.value?.balance ?? {}) as BalanceConfig
+    const bc: BalanceConfig = JSON.parse(JSON.stringify(prev))
+    bc.adapter = form.balanceAdapter
+    if (form.balanceAdapter === 'custom') {
+      bc.url = form.balanceUrl.trim() || null
+      bc.header = form.balanceHeader.trim()
+      bc.prefix = form.balancePrefix
+      bc.amount_path = form.balanceAmountPath.trim() || null
+      bc.currency = form.balanceCurrency.trim() || null
+      bc.currency_path = form.balanceCurrencyPath.trim() || null
+      bc.total_path = form.balanceTotalPath.trim() || null
+      bc.used_path = form.balanceUsedPath.trim() || null
+      bc.reset_at_path = form.balanceResetPath.trim() || null
+    } else {
+      delete bc.url
+      delete bc.header
+      delete bc.prefix
+      delete bc.amount_path
+      delete bc.currency
+      delete bc.currency_path
+      delete bc.total_path
+      delete bc.used_path
+      delete bc.reset_at_path
+    }
+    extra.balance = bc
+  }
   return extra
+}
+
+/** 自定义余额配置的前端必填校验（后端仍会二次校验）。 */
+function validateBalance(): string | null {
+  if (form.balanceAdapter !== 'custom') return null
+  if (!form.balanceUrl.trim()) return '自定义余额端点缺少 URL'
+  if (!form.balanceAmountPath.trim()) return '自定义余额端点缺少余额字段路径'
+  if (!form.balanceCurrency.trim() && !form.balanceCurrencyPath.trim()) {
+    return '自定义余额端点需填币种或币种路径'
+  }
+  return null
 }
 
 function buildBody(): UpstreamIn {
@@ -1437,8 +1630,11 @@ function buildBody(): UpstreamIn {
   if (isEdit.value) {
     if (form.clearKey) body.api_key = ''
     else if (form.api_key && form.api_key !== '***') body.api_key = form.api_key
-  } else if (form.api_key && form.api_key.trim()) {
-    body.api_key = form.api_key
+    if (form.clearBalanceKey) body.clear_balance_key = true
+    else if (form.balance_key && form.balance_key !== '***') body.balance_key = form.balance_key
+  } else {
+    if (form.api_key && form.api_key.trim()) body.api_key = form.api_key
+    if (form.balance_key.trim()) body.balance_key = form.balance_key
   }
   return body
 }
@@ -1448,6 +1644,11 @@ async function submit(afterTest = false) {
   try {
     await formRef.value.validate()
   } catch {
+    return
+  }
+  const balanceError = validateBalance()
+  if (balanceError) {
+    ElMessage.warning(balanceError)
     return
   }
   saving.value = true
@@ -1468,8 +1669,11 @@ async function submit(afterTest = false) {
       if (!afterTest) ElMessage.success('上游已创建')
     }
     dirty.disarm()
+    if (body.clear_balance_key) form.hasBalanceKey = false
+    else if (body.balance_key) form.hasBalanceKey = true
     form.api_key = '' // 敏感字段用完即清（发布审阅前端 M3）
     form.auth_json = ''
+    form.balance_key = ''
     emit('saved')
 
     if (!afterTest) {
@@ -1485,6 +1689,7 @@ async function submit(afterTest = false) {
     ElMessage.error(errMsg(e))
     form.api_key = '' // 失败也清：避免已输入的新密钥长期驻留
     form.auth_json = ''
+    form.balance_key = ''
   } finally {
     saving.value = false
   }
@@ -1512,6 +1717,21 @@ defineExpose({ open })
 .api-key-input {
   flex: 1;
   min-width: 0;
+}
+.balance-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+.balance-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 640px) {
+  .balance-grid,
+  .balance-grid-3 {
+    grid-template-columns: 1fr;
+  }
 }
 .auth-json-warn {
   margin-top: 6px;

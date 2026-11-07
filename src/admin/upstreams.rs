@@ -1,6 +1,7 @@
 //! 上游渠道管理 API（/api/upstreams，PLAN.md §5.3 / §7.2）。
 //!
-//! - `api_key_enc` / `api_key_plain` 绝不对外输出，响应改用 `has_api_key: bool`；
+//! - `api_key_enc` / `api_key_plain`、`balance_key_enc` / `balance_key_plain` 绝不对外输出，
+//!   响应改用 `has_api_key` / `has_balance_key: bool`；
 //!   POST /{id}/reveal-key 例外：管理员密码（+ TOTP）安全验证通过后才解密返回明文，仅本次展示；
 //! - api_key 语义（更新）：未传或掩码回传（`"***"`）→ 保持；空串 `""` → 清除；其他 → 加密更新；
 //!   创建时非空即加密，`NEXTAPI_SECRET_KEY` 未设置则拒绝保存（BadRequest）；
@@ -14,7 +15,7 @@
 //! 全部 SQL 使用运行时校验（sqlx::query / query_as），不使用 query! 宏。
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::{get, post, put},
     Json, Router,
 };
@@ -229,6 +230,7 @@ struct UpstreamDbRow {
     models_cache: serde_json::Value,
     models_fetched_at: Option<DateTime<Utc>>,
     oauth_enc: Option<String>,
+    balance_key_enc: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -264,6 +266,12 @@ struct UpstreamOut {
     auth_state: Option<serde_json::Value>,
     /// 是否处于失效冷却期（网关当前会跳过该上游）
     auth_blocked: bool,
+    /// 是否已配置独立余额查询凭证（不暴露值）
+    has_balance_key: bool,
+    /// 是否支持余额/额度查询（codex/devin 或已解析适配器）
+    balance_supported: bool,
+    /// 实际生效的适配器：codex/devin/balance adapter；不支持时 null
+    balance_adapter: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -293,12 +301,16 @@ fn to_out(
         .or_else(|| crate::upstream::cred::auth_state_from_extra(&row.extra));
     // 是否正在被跳过，只看内存守卫（网关侧的真实闸门；重启后守卫为空即不再跳过）
     let auth_blocked = live_auth.is_some_and(|f| f.blocked_at(chrono::Utc::now()));
+    let balance_support = crate::upstream::balance::support_from(&row.kind, &row.extra);
     UpstreamOut {
         auth_state: auth_failure
             .as_ref()
             .and_then(|f| serde_json::to_value(f).ok()),
         auth_blocked,
         has_api_key: row.api_key_enc.is_some(),
+        has_balance_key: row.balance_key_enc.is_some(),
+        balance_supported: balance_support.supported,
+        balance_adapter: balance_support.adapter.map(str::to_string),
         id: row.id,
         name: row.name,
         kind: row.kind,
@@ -362,6 +374,12 @@ struct CreateUpstreamReq {
     /// Codex 渠道：粘贴 codex CLI 的 auth.json 原文（解析后加密存储，不落明文）
     #[serde(default)]
     auth_json: Option<String>,
+    /// 余额查询独立凭证（留空回退推理 Key；创建时非空即加密）
+    #[serde(default)]
+    balance_key: Option<String>,
+    /// 显式清除余额查询独立凭证（创建时可忽略）
+    #[serde(default)]
+    clear_balance_key: Option<bool>,
 }
 
 /// 更新上游请求体（全字段 Option）。
@@ -397,6 +415,10 @@ struct UpdateUpstreamReq {
     model_exclude: Option<Vec<String>>,
     #[serde(default)]
     auth_json: Option<String>,
+    #[serde(default)]
+    balance_key: Option<String>,
+    #[serde(default)]
+    clear_balance_key: Option<bool>,
 }
 
 /// GET /：列表（has_api_key 布尔；绝不输出 api_key）。
@@ -408,7 +430,7 @@ async fn list_upstreams(
         "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
          breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
          use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
-         oauth_enc, created_at, updated_at FROM upstreams ORDER BY name",
+         oauth_enc, balance_key_enc, created_at, updated_at FROM upstreams ORDER BY name",
     )
     .fetch_all(&state.db)
     .await?;
@@ -470,26 +492,40 @@ async fn create_upstream(
     };
     let timeout_ms = body.timeout_ms.unwrap_or(300000);
     let breaker_threshold = body.breaker_threshold.unwrap_or(5);
-    let extra = body.extra.clone().unwrap_or_else(|| serde_json::json!({}));
+    let mut extra = body.extra.clone().unwrap_or_else(|| serde_json::json!({}));
+    // quota 由后端探测/捕获维护，创建时忽略客户端传值。
+    if let Some(o) = extra.as_object_mut() {
+        o.remove("quota");
+    }
     let model_sync = body
         .model_sync
         .clone()
         .unwrap_or_else(|| "manual".to_string());
     let model_exclude = body.model_exclude.clone().unwrap_or_default();
     validate_model_sync(&model_sync, &model_exclude)?;
+    if let Some(err) = crate::upstream::balance::validate_extra(&extra) {
+        return Err(ApiError::bad_request(format!("余额配置非法: {err}")));
+    }
 
     // Codex 渠道：auth.json 解析加密
     let oauth_enc = match api_key_semantics(body.auth_json.as_deref()) {
         ApiKeySemantics::Keep | ApiKeySemantics::Clear => None,
         ApiKeySemantics::Set(raw) => Some(encrypt_auth_json(&state, &raw)?),
     };
+    let balance_key_enc = match balance_key_semantics(
+        body.balance_key.as_deref(),
+        body.clear_balance_key.unwrap_or(false),
+    ) {
+        ApiKeySemantics::Keep | ApiKeySemantics::Clear => None,
+        ApiKeySemantics::Set(raw) => Some(encrypt_secret(&state, &raw)?),
+    };
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO upstreams \
          (name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, breaker_threshold, \
           probe_model, consecutive_failures, disabled_by, cooldown_until, use_proxy, proxy_id, extra, \
-          model_sync, model_exclude, oauth_enc) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,NULL,$11,$12,$13,$14,$15,$16) RETURNING id",
+          model_sync, model_exclude, oauth_enc, balance_key_enc) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,NULL,$11,$12,$13,$14,$15,$16,$17) RETURNING id",
     )
     .bind(&body.name)
     .bind(body.kind.as_deref().unwrap_or("custom"))
@@ -507,6 +543,7 @@ async fn create_upstream(
     .bind(model_sync)
     .bind(&model_exclude)
     .bind(&oauth_enc)
+    .bind(&balance_key_enc)
     .fetch_one(&state.db)
     .await?;
 
@@ -521,7 +558,8 @@ async fn create_upstream(
         "upstream.create",
         "upstream",
         Some(&id.to_string()),
-        serde_json::json!({ "name": body.name, "kind": body.kind, "base_url": body.base_url, "enabled": enabled }),
+        serde_json::json!({ "name": body.name, "kind": body.kind, "base_url": body.base_url, "enabled": enabled,
+                            "balance_key_changed": balance_key_enc.is_some() }),
         None,
     )
     .await?;
@@ -556,16 +594,30 @@ async fn update_upstream(
     let probe_model = body.probe_model.or(row.probe_model.clone());
     let use_proxy = body.use_proxy.unwrap_or(row.use_proxy);
     let proxy_id = body.proxy_id.or(row.proxy_id);
-    // auth_state 由后端维护（凭证失效联动写入），忽略前端回传的旧值，避免编辑其它字段时复活失效标记
+    // auth_state / quota 由后端维护（凭证失效联动、额度探测写入），忽略前端回传的旧值；
+    // quota 保留库里最近一次快照，避免编辑其它字段时被前端旧快照覆盖或丢失。
+    let old_quota = row.extra.get("quota").cloned();
     let mut extra = body.extra.unwrap_or_else(|| row.extra.clone());
     if let Some(o) = extra.as_object_mut() {
         o.remove(crate::upstream::cred::AUTH_STATE_KEY);
+        o.remove("quota");
+    }
+    if old_quota.is_some() && !extra.is_object() {
+        extra = serde_json::json!({});
+    }
+    if let Some(q) = old_quota {
+        if let Some(o) = extra.as_object_mut() {
+            o.insert("quota".into(), q);
+        }
     }
     let model_sync = body.model_sync.unwrap_or_else(|| row.model_sync.clone());
     let model_exclude = body
         .model_exclude
         .unwrap_or_else(|| row.model_exclude.clone());
     validate_model_sync(&model_sync, &model_exclude)?;
+    if let Some(err) = crate::upstream::balance::validate_extra(&extra) {
+        return Err(ApiError::bad_request(format!("余额配置非法: {err}")));
+    }
 
     // auth_json：未传/掩码保持、空串清除、其他按 auth.json 解析加密更新
     let oauth_enc = match api_key_semantics(body.auth_json.as_deref()) {
@@ -599,6 +651,21 @@ async fn update_upstream(
                     .map_err(|e| ApiError::bad_request(e.to_string()))?,
             )
         }
+    };
+
+    // 余额凭证：未传/掩码保持、空串或 clear=true 清除、其他加密更新
+    let balance_key_changed = body.clear_balance_key == Some(true)
+        || matches!(
+            balance_key_semantics(body.balance_key.as_deref(), false),
+            ApiKeySemantics::Set(_) | ApiKeySemantics::Clear
+        );
+    let balance_key_enc = match balance_key_semantics(
+        body.balance_key.as_deref(),
+        body.clear_balance_key.unwrap_or(false),
+    ) {
+        ApiKeySemantics::Keep => row.balance_key_enc,
+        ApiKeySemantics::Clear => None,
+        ApiKeySemantics::Set(plain) => Some(encrypt_secret(&state, &plain)?),
     };
 
     // enabled 切换：disabled_by / cooldown_until / consecutive_failures 联动
@@ -635,8 +702,8 @@ async fn update_upstream(
         "UPDATE upstreams SET name=$1, kind=$2, base_url=$3, api_key_enc=$4, protocols=$5, \
          enabled=$6, timeout_ms=$7, breaker_threshold=$8, probe_model=$9, consecutive_failures=$10, \
          disabled_by=$11, cooldown_until=$12, use_proxy=$13, proxy_id=$14, extra=$15, \
-         model_sync=$16, model_exclude=$17, oauth_enc=$18, updated_at=now() \
-         WHERE id=$19",
+         model_sync=$16, model_exclude=$17, oauth_enc=$18, balance_key_enc=$19, updated_at=now() \
+         WHERE id=$20",
     )
     .bind(&name)
     .bind(&kind)
@@ -656,6 +723,7 @@ async fn update_upstream(
     .bind(&model_sync)
     .bind(&model_exclude)
     .bind(&oauth_enc)
+    .bind(&balance_key_enc)
     .bind(id)
     .execute(&state.db)
     .await?;
@@ -693,7 +761,8 @@ async fn update_upstream(
         Some(&id.to_string()),
         serde_json::json!({ "name": name, "enabled": enabled, "disabled_by": disabled_by,
                             "auto_disable": crate::entities::auto_disable_allowed_in(&extra),
-                            "api_key_changed": api_key_changed }),
+                            "api_key_changed": api_key_changed,
+                            "balance_key_changed": balance_key_changed }),
         None,
     )
     .await?;
@@ -744,8 +813,16 @@ async fn delete_upstream(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-/// codex 额度探测的缓存有效期（秒）：期内直接复用快照，不再发上游请求（省额度）。
+/// 额度/余额探测的默认缓存有效期（秒）：期内直接复用快照；`?force=true` 跳过。
 const QUOTA_CACHE_SECS: i64 = 300;
+
+/// POST /{id}/quota 的可选参数。
+#[derive(Debug, Deserialize, Default)]
+struct QuotaProbeQuery {
+    /// true = 跳过 5 分钟缓存，强制实时探测（UI「立即探测」）。
+    #[serde(default)]
+    force: Option<bool>,
+}
 
 /// GET /{id}/quota：最近一次额度快照（真实流量旁路抓取或上次探测结果）。
 async fn quota_get(
@@ -756,10 +833,13 @@ async fn quota_get(
     let snap = state.cache.snapshot();
     let up = snap.upstreams.get(&id).cloned().ok_or(ApiError::NotFound)?;
     let quota = crate::upstream::quota::load(&state.db, id).await;
+    let support = crate::upstream::balance::support(&up);
     Ok(Json(serde_json::json!({
         "id": id,
         "kind": up.kind,
-        "supported": supports_quota(&up.kind),
+        "supported": supports_quota(&up),
+        "adapter": support.adapter,
+        "reason": support.reason,
         "quota": quota,
     })))
 }
@@ -776,6 +856,7 @@ async fn quota_probe(
     State(state): State<Arc<AppState>>,
     _admin: AdminUsername,
     Path(id): Path<Uuid>,
+    Query(query): Query<QuotaProbeQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let snap = state.cache.snapshot();
     let up = snap.upstreams.get(&id).cloned().ok_or(ApiError::NotFound)?;
@@ -785,19 +866,25 @@ async fn quota_probe(
             .client_for(&up, &snap, &state.hot.load().proxy.default_proxy_id);
     let cached = crate::upstream::quota::load(&state.db, id).await;
     let started = std::time::Instant::now();
+    let force = query.force.unwrap_or(false);
+    let support = crate::upstream::balance::support(&up);
 
-    if !supports_quota(&up.kind) {
-        return Err(ApiError::bad_request(
-            "该渠道不支持额度探测（当前支持 codex / devin）",
-        ));
+    if !support.supported {
+        return Err(ApiError::bad_request(format!(
+            "该渠道不支持额度探测：{}",
+            support.reason.unwrap_or_else(|| "未配置额度适配器".into())
+        )));
     }
 
-    // 新鲜快照直接复用（codex/devin 同策；避免无谓消耗上游额度）
-    if let Some(c) = cached.as_ref() {
-        if crate::upstream::quota::is_fresh(c, QUOTA_CACHE_SECS) {
-            return Ok(Json(serde_json::json!({
-                "ok": true, "probed": false, "cached": true, "latency_ms": 0, "quota": c,
-            })));
+    // 新鲜快照直接复用（默认缓存；force=true 跳过，供 UI 手动刷新）。
+    if !force {
+        if let Some(c) = cached.as_ref() {
+            if crate::upstream::quota::is_fresh(c, QUOTA_CACHE_SECS) {
+                return Ok(Json(serde_json::json!({
+                    "ok": true, "probed": false, "cached": true, "latency_ms": 0,
+                    "adapter": support.adapter, "quota": c,
+                })));
+            }
         }
     }
     if up.kind == "codex" {
@@ -879,6 +966,7 @@ async fn quota_probe(
         return Ok(Json(match fresh {
             Some(s) => {
                 crate::upstream::quota::store(&state.db, id, &s).await;
+                state.cache.update_upstream_quota(id, s.clone());
                 serde_json::json!({
                     "ok": true, "probed": true, "status": status,
                     "latency_ms": latency_ms, "quota": s,
@@ -892,53 +980,78 @@ async fn quota_probe(
         }));
     }
 
-    // devin：GetUserStatus 读取额度块
-    let token = up
-        .api_key_plain
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty());
-    let Some(tok) = token else {
-        return Ok(Json(serde_json::json!({
-            "ok": false, "probed": true, "latency_ms": 0,
-            "error": "尚未完成 Devin 授权：请先兑换 session token", "quota": cached,
-        })));
-    };
-    let base = if up.base_url.trim().is_empty() {
-        crate::upstream::devin::DEFAULT_BASE_URL
-    } else {
-        up.base_url.trim()
-    };
-    let emu = crate::upstream::devin::emulation_config(&up.extra);
-    match crate::upstream::devin::user_status(&client, base, tok, 10_000, emu).await {
-        Ok(info) => {
-            state.clear_auth_failure(up.id);
-            let s = crate::upstream::devin::quota_snapshot(&info);
-            // 上游未返回额度块（quota 为 None）时不落库：避免用「无额度」的空快照
-            // 覆盖上一次的有效额度；此时仍返回本次探测到的套餐/账号/模型数
-            if info.quota.is_some() {
-                crate::upstream::quota::store(&state.db, id, &s).await;
+    if up.kind == "devin" {
+        // devin：GetUserStatus 读取额度块
+        let token = up
+            .api_key_plain
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        let Some(tok) = token else {
+            return Ok(Json(serde_json::json!({
+                "ok": false, "probed": true, "latency_ms": 0,
+                "error": "尚未完成 Devin 授权：请先兑换 session token", "quota": cached,
+            })));
+        };
+        let base = if up.base_url.trim().is_empty() {
+            crate::upstream::devin::DEFAULT_BASE_URL
+        } else {
+            up.base_url.trim()
+        };
+        let emu = crate::upstream::devin::emulation_config(&up.extra);
+        return match crate::upstream::devin::user_status(&client, base, tok, 10_000, emu).await {
+            Ok(info) => {
+                state.clear_auth_failure(up.id);
+                let s = crate::upstream::devin::quota_snapshot(&info);
+                // 上游未返回额度块（quota 为 None）时不落库：避免用「无额度」的空快照
+                // 覆盖上一次的有效额度；此时仍返回本次探测到的套餐/账号/模型数
+                if info.quota.is_some() {
+                    crate::upstream::quota::store(&state.db, id, &s).await;
+                    state.cache.update_upstream_quota(id, s.clone());
+                }
+                Ok(Json(serde_json::json!({
+                    "ok": true, "probed": true, "status": 200,
+                    "latency_ms": started.elapsed().as_millis() as u64, "quota": s,
+                    "stored": info.quota.is_some(),
+                })))
             }
+            Err(e) => {
+                let err = note_probe_auth(&state, &up, &e);
+                Ok(Json(serde_json::json!({
+                    "ok": false, "probed": true,
+                    "latency_ms": started.elapsed().as_millis() as u64,
+                    "error": err, "quota": cached,
+                })))
+            }
+        };
+    }
+
+    // 通用余额适配器（DeepSeek/Kimi/OpenRouter/Zenmux/智谱/OpenAI billing/自定义）
+    let adapter = crate::upstream::balance::resolve_adapter(&up)
+        .ok_or_else(|| ApiError::bad_request("未匹配到余额适配器"))?;
+    match crate::upstream::balance::probe(&state, &up, adapter).await {
+        Ok(s) => {
+            crate::upstream::quota::store(&state.db, id, &s).await;
+            state.cache.update_upstream_quota(id, s.clone());
             Ok(Json(serde_json::json!({
-                "ok": true, "probed": true, "status": 200,
-                "latency_ms": started.elapsed().as_millis() as u64, "quota": s,
-                "stored": info.quota.is_some(),
-            })))
-        }
-        Err(e) => {
-            let err = note_probe_auth(&state, &up, &e);
-            Ok(Json(serde_json::json!({
-                "ok": false, "probed": true,
+                "ok": true, "probed": true, "status": 200, "cached": false,
+                "adapter": support.adapter,
                 "latency_ms": started.elapsed().as_millis() as u64,
-                "error": err, "quota": cached,
+                "quota": s,
             })))
         }
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false, "probed": true, "status": 200, "cached": false,
+            "adapter": support.adapter,
+            "latency_ms": started.elapsed().as_millis() as u64,
+            "error": e, "quota": cached,
+        }))),
     }
 }
 
-/// 渠道是否支持额度探测（codex：响应头；devin：GetUserStatus）。可单测。
-fn supports_quota(kind: &str) -> bool {
-    matches!(kind, "codex" | "devin")
+/// 渠道额度支持（codex/devin 或通用 balance 适配器）。可单测。
+fn supports_quota(up: &crate::entities::UpstreamRow) -> bool {
+    crate::upstream::balance::support(up).supported
 }
 
 /// codex 探测模型：probe_model → 模型缓存首个 → 官方默认（探测只为取额度头）。
@@ -1336,6 +1449,26 @@ enum ApiKeySemantics {
     Set(String),
 }
 
+fn balance_key_semantics(key: Option<&str>, clear: bool) -> ApiKeySemantics {
+    if clear {
+        ApiKeySemantics::Clear
+    } else {
+        api_key_semantics(key)
+    }
+}
+
+fn encrypt_secret(state: &AppState, plain: &str) -> ApiResult<String> {
+    if !state.crypto.is_available() {
+        return Err(ApiError::bad_request(
+            "未设置 NEXTAPI_SECRET_KEY，无法保存余额查询凭证",
+        ));
+    }
+    state
+        .crypto
+        .encrypt(plain)
+        .map_err(|e| ApiError::bad_request(e.to_string()))
+}
+
 fn api_key_semantics(api_key: Option<&str>) -> ApiKeySemantics {
     match api_key {
         None => ApiKeySemantics::Keep,
@@ -1351,7 +1484,7 @@ async fn fetch_upstream(state: &AppState, id: Uuid) -> ApiResult<UpstreamDbRow> 
         "SELECT id, name, kind, base_url, api_key_enc, protocols, enabled, timeout_ms, \
          breaker_threshold, probe_model, consecutive_failures, disabled_by, cooldown_until, \
          use_proxy, proxy_id, extra, model_sync, model_exclude, models_cache, models_fetched_at, \
-         oauth_enc, created_at, updated_at FROM upstreams WHERE id=$1",
+         oauth_enc, balance_key_enc, created_at, updated_at FROM upstreams WHERE id=$1",
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -1363,23 +1496,15 @@ async fn fetch_upstream(state: &AppState, id: Uuid) -> ApiResult<UpstreamDbRow> 
 mod tests {
     use super::{quota_probe_model, supports_quota};
 
-    #[test]
-    fn quota_supported_kinds() {
-        assert!(supports_quota("codex"));
-        assert!(supports_quota("devin"));
-        assert!(!supports_quota("openai"));
-        assert!(!supports_quota("aliyun"));
-    }
-
-    #[test]
-    fn quota_probe_model_precedence() {
-        let mut up = crate::entities::UpstreamRow {
+    fn up_kind(kind: &str) -> crate::entities::UpstreamRow {
+        crate::entities::UpstreamRow {
             id: Uuid::new_v4(),
             name: "up".into(),
-            kind: "codex".into(),
+            kind: kind.into(),
             base_url: "https://chatgpt.com/backend-api/codex".into(),
             api_key_plain: None,
             oauth_plain: None,
+            balance_key_plain: None,
             protocols: vec!["openai_responses".into()],
             enabled: true,
             timeout_ms: 300_000,
@@ -1397,7 +1522,25 @@ mod tests {
             models_fetched_at: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
-        };
+        }
+    }
+
+    #[test]
+    fn quota_supported_kinds() {
+        assert!(supports_quota(&up_kind("codex")));
+        assert!(supports_quota(&up_kind("devin")));
+        assert!(!supports_quota(&up_kind("openai")));
+        assert!(!supports_quota(&up_kind("aliyun")));
+        assert!(supports_quota(&up_kind("deepseek")));
+        assert!(supports_quota(&up_kind("kimi")));
+        assert!(supports_quota(&up_kind("openrouter")));
+        assert!(supports_quota(&up_kind("zenmux")));
+        assert!(supports_quota(&up_kind("zhipu")));
+    }
+
+    #[test]
+    fn quota_probe_model_precedence() {
+        let mut up = up_kind("codex");
         // 缓存首个模型优先于官方默认
         assert_eq!(quota_probe_model(&up), "cached-model");
         // probe_model 优先于缓存
@@ -1420,6 +1563,28 @@ mod tests {
             api_key_semantics(Some("new-key")),
             ApiKeySemantics::Set("new-key".into())
         );
+    }
+
+    #[test]
+    fn balance_key_semantics_cases() {
+        assert_eq!(balance_key_semantics(None, false), ApiKeySemantics::Keep);
+        assert_eq!(
+            balance_key_semantics(Some("***"), false),
+            ApiKeySemantics::Keep
+        );
+        assert_eq!(
+            balance_key_semantics(Some(""), false),
+            ApiKeySemantics::Clear
+        );
+        assert_eq!(
+            balance_key_semantics(Some("new-key"), false),
+            ApiKeySemantics::Set("new-key".into())
+        );
+        assert_eq!(
+            balance_key_semantics(Some("new-key"), true),
+            ApiKeySemantics::Clear
+        );
+        assert_eq!(balance_key_semantics(None, true), ApiKeySemantics::Clear);
     }
 
     #[test]

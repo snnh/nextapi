@@ -123,6 +123,20 @@
           </template>
         </el-table-column>
 
+        <el-table-column v-if="!isNarrow" label="余额" width="160">
+          <template #default="{ row }">
+            <span
+              v-if="quotaSummary(row)"
+              class="quota-summary"
+              :class="{ stale: quotaStale(row) }"
+              :title="quotaSummaryTitle(row)"
+            >
+              {{ quotaSummary(row) }}
+            </span>
+            <span v-else class="quota-empty">—</span>
+          </template>
+        </el-table-column>
+
         <el-table-column v-if="!isNarrow" label="状态" :min-width="isTablet ? 140 : 210">
           <template #default="{ row }">
             <div class="status-cell">
@@ -175,7 +189,7 @@
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
                   <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 Key</el-dropdown-item>
                   <el-dropdown-item command="test">连通测试</el-dropdown-item>
-                  <el-dropdown-item v-if="quotaSupported(row)" command="quota">额度</el-dropdown-item>
+                  <el-dropdown-item v-if="quotaSupported(row)" command="quota">余额/额度</el-dropdown-item>
                   <el-dropdown-item v-if="isDevin(row)" command="reauth">重新授权</el-dropdown-item>
                   <el-dropdown-item command="delete" divided style="color: var(--nx-danger)">删除</el-dropdown-item>
                 </el-dropdown-menu>
@@ -191,7 +205,7 @@
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 Key</el-dropdown-item>
                     <el-dropdown-item command="test">连通测试</el-dropdown-item>
-                    <el-dropdown-item v-if="quotaSupported(row)" command="quota">额度</el-dropdown-item>
+                    <el-dropdown-item v-if="quotaSupported(row)" command="quota">余额/额度</el-dropdown-item>
                     <el-dropdown-item v-if="isDevin(row)" command="reauth">重新授权</el-dropdown-item>
                     <el-dropdown-item command="delete" divided style="color: var(--nx-danger)">删除</el-dropdown-item>
                   </el-dropdown-menu>
@@ -210,6 +224,7 @@
         <p>默认值：<span class="mono">timeout_ms = 300000</span>、<span class="mono">breaker_threshold = 5</span>；图片媒体地址留空时回退 <span class="mono">base_url</span>。启用/禁用直接切换行内开关（禁用后 <span class="mono">disabled_by = manual</span>）。</p>
         <p>自动禁用（熔断）默认关闭（系统设置 <span class="mono">gateway.auto_disable_upstreams</span>）：打开后连续失败达阈值即自动禁用并冷却，成功后自动恢复；在渠道表单关闭「自动禁用」的渠道永不参与（标记「不自动禁用」）。</p>
         <p>凭证失效（如 Devin session token 过期）由网关自动识别：命中后临时跳过该上游 5 分钟并标注「凭证失效」，点「重新授权」用 Devin 账号换取新 token 即可恢复（无需手动冷却）。</p>
+        <p>余额/额度为上游供应商侧只读监控，不涉及网关用户余额或扣费。DeepSeek/Kimi 可直接复用推理 Key；OpenRouter/Zenmux 需在渠道表单另填 Management Key。自定义端点支持同源相对路径或公网 HTTPS，凭证加密保存、不回传明文。</p>
       </div>
       <template #footer>
         <el-button type="primary" @click="helpVisible = false">知道了</el-button>
@@ -226,7 +241,7 @@
     />
 
     <!-- 额度探测（codex / devin） -->
-    <QuotaDialog v-model="quotaVisible" :row="quotaRow" />
+    <QuotaDialog v-model="quotaVisible" :row="quotaRow" @probed="loadUpstreams" />
 
     <!-- Devin 重新授权（PKCE 换新 session token 并写回该上游） -->
     <DevinReauthDialog v-model="reauthVisible" :row="reauthRow" @done="loadUpstreams" />
@@ -396,13 +411,12 @@ function onRowAction(command: string, row: UpstreamOut) {
   else if (command === 'delete') removeUpstream(row)
 }
 
-// —— 额度探测（codex：响应头；devin：GetUserStatus）——
+// —— 余额/额度快照（codex/devin + 通用 balance 适配器）——
 const quotaVisible = ref(false)
 const quotaRow = ref<UpstreamOut | null>(null)
 const reauthVisible = ref(false)
 const reauthRow = ref<UpstreamOut | null>(null)
 
-/** 支持额度探测的渠道（与后端 quota_probe 的 supports_quota 同口径） */
 /** Devin 渠道（支持 PKCE 重新授权） */
 function isDevin(row: UpstreamOut): boolean {
   return row.kind === 'devin'
@@ -431,7 +445,52 @@ function openReauth(row: UpstreamOut) {
 }
 
 function quotaSupported(row: UpstreamOut): boolean {
-  return row.kind === 'codex' || row.kind === 'devin'
+  return row.balance_supported === true || row.kind === 'codex' || row.kind === 'devin'
+}
+
+function pctText(v?: number | null): string {
+  if (v == null) return '—'
+  return `${Number(v).toFixed(v >= 10 ? 0 : 1)}%`
+}
+
+/** 列表摘要：金额优先，多币种并列；无金额时窗口百分比兜底。 */
+function quotaSummary(row: UpstreamOut): string {
+  const q = row.extra?.quota
+  if (!q) return ''
+  if (q.kind === 'balance') {
+    const balances = (q.balances ?? [])
+      .filter((b) => b.available != null && b.available !== '')
+      .slice(0, 2)
+      .map((b) => `${b.currency} ${b.available}`)
+    if (balances.length) return balances.join(' · ')
+    const w = (q.windows ?? [])[0]
+    if (w) return `${w.label || w.name} ${pctText(w.used_percent)}`
+    return ''
+  }
+  if (row.kind === 'codex') {
+    const p = q.primary?.used_percent
+    if (p != null) return `主窗口 ${pctText(p)}`
+  }
+  if (row.kind === 'devin') {
+    if (q.percent_value != null && q.percent_total != null) {
+      return `余量 ${q.percent_value}/${q.percent_total}`
+    }
+    if (q.daily_quota != null) return `日额度 ${q.daily_quota}`
+  }
+  return ''
+}
+
+function quotaStale(row: UpstreamOut): boolean {
+  const ts = row.extra?.quota?.captured_at
+  if (!ts) return false
+  return Date.now() / 1000 - ts > 24 * 3600
+}
+
+function quotaSummaryTitle(row: UpstreamOut): string {
+  const q = row.extra?.quota
+  if (!q) return ''
+  const ts = q.captured_at ? new Date(q.captured_at * 1000).toLocaleString() : '时间未知'
+  return `${q.source === 'probe' ? '主动探测' : '上游快照'} · ${ts}${quotaStale(row) ? '（超过 24h，可能过期）' : ''}`
 }
 
 function openQuota(row: UpstreamOut) {
@@ -797,5 +856,19 @@ function closeRevealSecret() {
   .table-tools .el-button {
     width: 100%;
   }
+}
+.quota-summary {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.quota-summary.stale {
+  color: var(--el-text-color-placeholder);
+}
+.quota-empty {
+  color: var(--el-text-color-placeholder);
 }
 </style>

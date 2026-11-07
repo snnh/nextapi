@@ -188,6 +188,12 @@ export interface UpstreamOut {
   auth_state: AuthStateInfo | null
   /** 是否正处于失效冷却期（网关会跳过该上游） */
   auth_blocked: boolean
+  /** 是否已配置独立余额查询凭证（不暴露值） */
+  has_balance_key: boolean
+  /** 是否支持余额/额度查询（codex/devin 或已解析适配器） */
+  balance_supported: boolean
+  /** 实际生效的适配器：codex/devin/balance adapter；不支持时 null */
+  balance_adapter: string | null
   created_at: string
   updated_at: string
 }
@@ -240,6 +246,38 @@ export interface UpstreamExtra {
    * false 或空串=不注入；对象 { template } 亦可。
    */
   system_info?: false | string | { enabled?: boolean; template?: string | null } | null
+  /** 余额/额度查询配置（非敏感；凭证走 balance_key_enc） */
+  balance?: BalanceConfig | null
+  /** 最近一次额度/余额快照（后端写入 extra.quota） */
+  quota?: QuotaSnapshot | null
+}
+
+export type BalanceAdapterId =
+  | 'auto'
+  | 'off'
+  | 'deepseek'
+  | 'kimi'
+  | 'openrouter'
+  | 'zenmux'
+  | 'zhipu'
+  | 'openai_billing'
+  | 'custom'
+
+/** 上游余额/额度查询配置（extra.balance） */
+export interface BalanceConfig {
+  adapter?: BalanceAdapterId | null
+  /** custom：相对路径或公网 HTTPS 绝对 URL */
+  url?: string | null
+  /** custom：鉴权 Header 名（空 = 匿名） */
+  header?: string | null
+  /** custom：Header 值前缀（默认 Bearer ） */
+  prefix?: string | null
+  amount_path?: string | null
+  currency?: string | null
+  currency_path?: string | null
+  total_path?: string | null
+  used_path?: string | null
+  reset_at_path?: string | null
 }
 
 export interface UpstreamIn {
@@ -260,6 +298,10 @@ export interface UpstreamIn {
   model_exclude?: string[] | null
   /** Codex 渠道：粘贴 auth.json 原文；未传/"***"=保持，""=清除 */
   auth_json?: string | null
+  /** 余额查询独立凭证：未传/"***"=保持，""=清除，其他=新明文 */
+  balance_key?: string | null
+  /** 显式清除余额查询独立凭证 */
+  clear_balance_key?: boolean | null
 }
 
 export interface TestResp {
@@ -274,9 +316,36 @@ export interface TestResp {
   models?: number
 }
 
-/** 上游额度快照（codex：响应头；devin：GetUserStatus 额度块） */
+/** 上游余额金额 */
+export interface BalanceAmount {
+  currency: string
+  /** 十进制字符串，避免浮点误差 */
+  available?: string
+  total?: string
+  used?: string
+}
+
+/** 上游额度窗口（通用 balance schema） */
+export interface BalanceWindow {
+  name: string
+  label?: string
+  used_percent?: number
+  remaining_percent?: number
+  reset_at?: number | null
+}
+
+/** 余额明细（赠送/充值/软限额等） */
+export interface BalanceDetail {
+  label: string
+  value: string
+  currency?: string
+}
+
+/** 上游额度快照（codex/devin 专用；通用适配器为 kind=balance） */
 export interface QuotaSnapshot {
   kind?: string
+  /** 通用余额适配器 id */
+  adapter?: string
   /** live = 真实流量自动抓取；probe = 主动探测 */
   source?: string
   captured_at?: number
@@ -299,6 +368,12 @@ export interface QuotaSnapshot {
   percent_total?: number
   daily_reset_at?: number
   weekly_reset_at?: number
+  // 通用 balance schema
+  balances?: BalanceAmount[]
+  windows?: BalanceWindow[]
+  details?: BalanceDetail[]
+  /** 自定义端点的重置时间（epoch 秒） */
+  reset_at?: number | null
 }
 
 /** 额度窗口（codex 主/次窗口；区别于 Key 用量的 QuotaWindow） */
@@ -314,12 +389,17 @@ export interface QuotaResp {
   id?: string
   kind?: string
   supported?: boolean
+  /** 实际生效适配器（codex/devin/balance adapter） */
+  adapter?: string | null
+  /** 不支持原因（诊断） */
+  reason?: string | null
   ok?: boolean
   probed?: boolean
   cached?: boolean
   status?: number
   latency_ms?: number
   error?: string
+  stored?: boolean
   quota: QuotaSnapshot | null
 }
 

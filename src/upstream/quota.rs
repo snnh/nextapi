@@ -1,4 +1,4 @@
-//! 上游额度探测（M12.1：codex / devin 渠道）。
+//! 上游额度/余额快照存取（codex / devin / 通用 balance 适配器）。
 //!
 //! - **codex**：ChatGPT 后端在每次 Responses 响应（含 429）回带 `x-codex-*` 额度头
 //!   （官方 CLI `/status` 的同一数据源）。网关在真实流量旁路抓头 → 归一化快照 →
@@ -134,6 +134,9 @@ pub fn is_fresh(snapshot: &serde_json::Value, ttl_secs: i64) -> bool {
 }
 
 /// 写快照到 `upstreams.extra.quota`（原子合并；失败静默，仅 debug 日志）。
+///
+/// 调用方在成功后还需更新内存快照（`EntityCache::update_upstream_quota`），
+/// 否则渠道列表的余额摘要要等下一次全量 reload 才会更新。
 pub async fn store(db: &PgPool, upstream_id: Uuid, snapshot: &serde_json::Value) {
     let res = sqlx::query(
         "UPDATE upstreams SET extra = jsonb_set(coalesce(extra, '{}'::jsonb), '{quota}', $2::jsonb, \

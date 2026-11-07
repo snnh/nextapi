@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **上游供应商余额/额度只读监控**（不涉及用户余额/充值/扣费）：
+  - 复用 `GET/POST /api/upstreams/{id}/quota`；GET 读缓存，POST `?force=true` 强制实时刷新。
+  - 内置 DeepSeek、Kimi、OpenRouter、Zenmux、OpenAI billing 兼容、智谱 GLM（实验性）适配器；
+    自定义端点支持同源相对路径或公网 HTTPS、单 Header + 前缀、金额/币种/可选总额/已用/重置映射。
+  - 新增 `upstreams.balance_key_enc` 加密列；独立余额凭证留空时回退推理 Key，响应只返回
+    `has_balance_key`，不暴露密文或明文。
+  - 统一 `kind:"balance"` 快照（`balances[]`/`windows[]`/`details[]`）；codex/devin 旧快照不变。
+  - 上游列表新增余额摘要（金额优先、窗口兜底，超过 24h 灰显）；额度弹窗扩展为「余额/额度」。
+  - 余额查询失败不写 `auth_state`、不触发熔断或自动禁用。
 ## [0.3.13] - 2026-11-03
 
 ### Changed

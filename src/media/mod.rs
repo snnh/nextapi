@@ -644,6 +644,7 @@ mod tests {
             base_url: "http://127.0.0.1".into(),
             api_key_plain: None,
             oauth_plain: None,
+            balance_key_plain: None,
             protocols: protocols.into_iter().map(String::from).collect(),
             enabled: true,
             timeout_ms: 30000,
