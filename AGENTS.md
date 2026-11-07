@@ -4,14 +4,14 @@
 
 ## 项目概述
 
-**NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 管理后台 API，定位为「面向团队/应用的工具型网关」。
+**NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 上游余额/额度只读监控 + 管理后台 API，定位为「面向团队/应用的工具型网关」。
 
 仓库为 Rust + axum 单体服务（PostgreSQL 存储），管理后台前端在 `web/`（Vue 3，构建产物经 rust-embed 内嵌进二进制，Docker 多阶段自动构建）；模块划分见「代码组织」。
 
 其他文件说明：
 
 - `PLAN.md` — 里程碑与开发顺序；`CHANGELOG.md` — 版本变更记录。
-- `docs/` — `protocol-matrix.md`（协议能力矩阵）、`reverse-proxy.md`（反向代理/子路径部署指南）。
+- `docs/` — `protocol-matrix.md`（协议能力矩阵）、`reverse-proxy.md`（反向代理/子路径部署指南）、`upstream-balance.md`（上游余额/额度监控）。
 - `contracts/` — 模块设计契约（m4 日志 / m5 计价 / m6 媒体 / m7 预设 / m8 前端）。
 - `.owc/memory.md` — AI 代理的会话记忆（非项目文档）。
 - `.owc/venv/` — AI 代理工具链的 Python venv，与项目无关，勿动。
@@ -19,7 +19,7 @@
 ### 明确不做（硬约束）
 
 - 如非极为必要，不新增测试；测试规模硬上限：`tests/` 独立测试文件与源文件内联 `#[cfg(test)]` 模块合计 ≤ 100 个，单个 ≤ 2000 行；测试必须无外部依赖（不连真实 PG / 上游，DB 逻辑用纯函数覆盖）。
-- 不做任何运营售卖功能：充值、余额、积分、兑换码、邀请、套餐、支付、账单、发票；
+- 不做任何用户侧运营售卖功能：充值、用户余额、积分、兑换码、邀请、套餐、支付、账单、发票；上游供应商余额/额度只读监控不属于用户侧余额语义；
 - 不做终端用户账号体系：仅单管理员登录，无用户/角色/分组；
 - 不做倍率体系：后端只存直接价格（倍率仅为纯前端试算工具）；
 - v1 不做 Embeddings / Rerank / Audio / Moderation / Fine-tuning 端点。
@@ -79,8 +79,10 @@ src/
 ├── upstream/cred.rs # 凭证失效（token 失效）：错误文本→鉴权失效识别 + 内存守卫
 │                    #（冷却期内跳过该上游）+ extra.auth_state 落库（后台可见）
 ├── upstream/usage.rs # 4 协议 usage 提取（非流式 JSON / 流式 SSE / 请求参数元数据）
-├── upstream/quota.rs # 上游额度快照（codex：x-codex-* 响应头解析，网关旁路抓头 + 节流落库；
-│                    # devin：GetUserStatus 额度块）→ upstreams.extra.quota
+├── upstream/balance.rs # 通用上游余额/额度适配器（DeepSeek/Kimi/OpenRouter/Zenmux/
+│                     # OpenAI billing/智谱/自定义；凭证回退、SSRF 校验、点路径解析）
+├── upstream/quota.rs # 上游额度快照存取（codex：x-codex-* 响应头解析 + 节流落库；
+│                    # devin：GetUserStatus；通用 balance 快照同槽位）→ upstreams.extra.quota
 ├── upstream/codex.rs # Codex OAuth 渠道：auth.json 解析、ensure_token 临期刷新（single-flight
 │                     # + 轮换回写）、官方客户端指纹模拟（预设 UA/originator/会话头 + body 字段
 │                     # 补齐；extra.codex_fingerprint 可配）、传输选择（extra.codex_transport）
@@ -121,10 +123,10 @@ src/
 └── admin/
     ├── mod.rs       # /api 路由聚合
     ├── keys.rs      # /api/keys CRUD + rotate（完整 Key 仅创建/轮换时展示一次；debug 开关）
-    ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key 加密、掩码回传=保持；
-                     # codex 渠道 auth_json 创建 + /{id}/oauth/refresh 手动刷新
-                     # + /{id}/quota 额度快照读取/探测（codex 响应头 / devin GetUserStatus）
-                     # + /{id}/devin/reauth 重新授权（PKCE 换 token 写回 + 探测验证 + 解隔离））
+    ├── upstreams.rs # /api/upstreams CRUD + 连通性测试（api_key / balance_key 加密、
+                     # 掩码回传=保持；codex 渠道 auth_json 创建 + /{id}/oauth/refresh 手动刷新
+                     # + /{id}/quota 余额/额度快照读取/探测（codex/devin + 通用 balance 适配器，
+                     # ?force=true 跳过缓存）+ /{id}/devin/reauth 重新授权（PKCE + 解隔离））
     ├── model_sync.rs # /api/upstreams/{id}/models 拉取（协议/codex 适配）+ 同步引擎
                      #（auto 全量对账仅动 managed_by='auto' 托管路由；manual 勾选创建）+ 周期任务
     ├── routes.rs    # /api/model-routes 批量替换
@@ -140,9 +142,10 @@ src/
     ├── presets.rs   # /api/presets 列表 + /{name}/provision 一键接入
     ├── system.rs    # /api/system/version + check-update（GitHub Releases，代理矩阵）+ 定时检查任务
     └── audit.rs     # /api/audit 分页查询
-migrations/          # 0001_init ~ 0017_usage_hourly_cache（sqlx::migrate! 启动自动执行；
+migrations/          # 0001_init ~ 0018_upstream_balance_key（sqlx::migrate! 启动自动执行；
                      # 含分区/计价/媒体/加固/别名/幂等/TOTP/模型同步/Codex OAuth/
-                     # 日志索引与游标/请求头/上游模型名 upstream_model/汇总表缓存列与回填）
+                     # 日志索引与游标/请求头/上游模型名 upstream_model/汇总表缓存列与回填/
+                     # 上游余额查询独立凭证加密列）
 tests/               # 集成测试目录（当前不存在：测试全部为 src/** 内联 #[cfg(test)]，
                      # 无外部依赖；建立集成测试需 PG + mock 上游）
 web/                 # Vue3 管理后台：src/views 9 页面（含模型别名）+ components/{pricing,settings,upstreams,stats}/
@@ -166,6 +169,7 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - **上游多根**：`base_url` 为主根，`extra.protocol_base_urls` 按协议覆盖、`extra.media_base_url` 为图像原生根、`extra.models_path` 为模型列表路径；URL 拼接统一走 `UpstreamRow` 的既有方法（如 `models_url()`），不在调用点手拼。
 - **Anthropic 兼容根写到 `/v1`**：`endpoint_path` 只拼 `/messages`，故覆盖根须写到 `…/apps/anthropic/v1`（官方 SDK base_url 为 `…/apps/anthropic` + `/v1/messages`，两者等价）。
 - **供应商地址不可跨套餐复用**：各 Token Plan 的 Base URL 独立——千帆 Token Plan 必须用订阅专属 Key（普通千帆 Key 会 401）、模型列表在 `/v1/models`；阿里百炼 Token Plan 仅华北 2 地域（国际站是另一套地址）。
+- **上游余额只读**：`extra.balance` 配置 + `balance_key_enc` 独立凭证；`/api/upstreams/{id}/quota` GET 读缓存、POST `?force=true` 强制刷新；余额查询失败不写 `auth_state`、不熔断、不影响推理链路。
 
 ## 工作约定
 
@@ -180,7 +184,7 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 
 - 网关 Key：DB 只存 SHA-256 哈希 + 前 8 位前缀，完整 Key 仅创建时展示一次。
 - 管理员密码 argon2；JWT 短期 access token；登录接口防爆破限速（默认 10 次/分钟）。
-- 敏感字段（上游 api_key、JWT secret、代理密码）落库前 AES-256-GCM 加密，密钥来自 env `NEXTAPI_SECRET_KEY`；导出/展示一律掩码，掩码值回传语义 = 保持原值。
+- 敏感字段（上游 api_key、余额查询凭证 balance_key、JWT secret、代理密码）落库前 AES-256-GCM 加密，密钥来自 env `NEXTAPI_SECRET_KEY`；导出/展示一律掩码，掩码值回传语义 = 保持原值；余额凭证接口只返回 `has_balance_key`。
 - 脱敏：永不记录 `Authorization` / `x-api-key` / `x-goog-api-key` / `Cookie` / `Proxy-*`；debug 模式完整记录限 64KB 且强制脱敏，最长 1 小时自动过期。
 - SSRF 防护：URL 导入/媒体下载默认仅 https、限制大小与超时、禁内网地址；代理连通性测试只允许固定探测地址白名单。
 - 任务查询校验归属 Key（防跨 Key 遍历）；`/v1/upstream/*` 透传需 Key 显式授权。

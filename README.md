@@ -24,7 +24,7 @@ NextAPI 是一个自托管的 LLM 网关，Rust + axum + PostgreSQL 写就，管
 - Docker：Docker 20.10+ 与 Compose v2。镜像里依赖齐全，启动时自动执行数据库迁移，推荐这种方式；
 - 源码运行：Linux / macOS，Rust stable、Node.js ≥ 20（只用于构建前端）、PostgreSQL 15+。
 
-资源：整套栈空载约 34 MiB 内存（见「性能与资源占用」），单核 256 MiB 的机器就能带得动；磁盘预留 500 MiB 以上，之后主要增长的是 PostgreSQL 里的日志。
+资源：空载通常几十 MiB；管理后台登录后 glibc 可能保留堆内存，v0.4.0 起会在登录后与周期任务中主动 `malloc_trim`，但仍建议给容器 512 MiB 配额；磁盘预留 500 MiB 以上，之后主要增长的是 PostgreSQL 里的日志。
 
 客户端：
 
@@ -36,11 +36,18 @@ NextAPI 是一个自托管的 LLM 网关，Rust + axum + PostgreSQL 写就，管
 - 四协议互转：OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 两两互转。上游本身就支持入口协议时原样透传，只改模型名和鉴权头，不掺和请求体。
 - 多上游聚合：模型名支持 `*` 通配，同优先级组内加权随机，配合重试与故障转移；渠道自动禁用（熔断）默认关闭，需要时到系统设置里打开，支持全局与单渠道两级开关。
 - 渠道接入：内置常见供应商预设，填个 API Key 就能接（百炼、千帆、火山、智谱、Kimi、OpenRouter 等）；Codex 用 OAuth，粘贴 `~/.codex/auth.json` 即可，token 临期自动刷新并轮换回写；渠道的模型列表可以拉取后自动同步成托管路由。
+- 上游余额监控：只读查询 DeepSeek、Kimi、OpenRouter、Zenmux、OpenAI billing 兼容、智谱 GLM 套餐额度，也支持自定义余额端点；只展示上游供应商侧余额/额度，不涉及用户余额或扣费。
 - 鉴权与限流：网关 Key 以 SHA-256 哈希落库，完整 Key 只在创建时显示一次；每个 Key 可单独配 RPM、TPM 和 token / 成本配额。管理员登录有防爆破限速，可以开启 TOTP 二次验证。
 - 日志与成本：请求明细按 30 天声明式分区存放，不做自动清理（要腾空间就在后台手动 DROP 分区）；小时聚合表供长区间统计。计价支持分时段、分上下文长度分段与 CNY/USD 双币种，价格表可用 XML / JSON 导入导出。写库是异步批量的，队列满了先落 WAL 再丢内存条目，不阻塞转发。
 - 图片生成：`/v1/images/generations` 统一入口，适配 OpenAI / Gemini / Dashscope 同步 / Dashscope 异步任务四种上游形状，异步任务自动轮询并在完成时计费。
 - 可观测：Prometheus `/metrics`（管理员 JWT 鉴权）、含来源 IP 的审计日志、日志 CSV 导出、按 Key 开关的 debug 抓包（自动脱敏、有 TTL）。
 - 管理后台：仪表盘、密钥、上游、路由、价格、日志、统计、系统设置，移动端能正常使用。
+
+### 上游余额/额度监控
+
+在「上游」页的渠道表单中启用「余额/额度」，选中适配器即可。DeepSeek/Kimi 可直接复用推理 Key；OpenRouter/Zenmux 需单独 Management Key；自定义端点支持同源相对路径或公网 HTTPS、点路径映射和可选总额/已用/重置字段。凭证加密保存，接口只返回是否已配置。
+
+额度弹窗的「立即探测」会强制实时查询；日常列表直接展示最近快照，超过 24 小时灰显。详见 [`docs/upstream-balance.md`](./docs/upstream-balance.md)。
 
 ## 快速开始
 
@@ -116,34 +123,15 @@ curl http://localhost:3220/v1beta/models/gemini-1.5-pro:generateContent \
 
 ## 性能与资源占用
 
-下面这些数字来自全新实例（默认配置，与 v0.3.11 发布镜像测得的数值一致）：16 核 Debian 宿主机，全新 PostgreSQL 数据卷，`docker stats` 采样，并用容器内 `/proc/1/status` 与 cgroup `memory.stat` 交叉核对。
+资源占用与登录次数、请求体大小、日志队列和 glibc malloc arena 的保留策略有关。历史版本在全新实例上的基线是「空载数 MiB、登录后数十 MiB」；长时间运行、多次登录或处理过大请求体后，glibc 可能保留多个 arena，容器占用可能显著高于空载基线，进程 RSS 通常也高于容器口径。两个口径都正常：`docker stats` 不计宿主机 page cache 中的共享库文件页，RSS 则把私有驻留和共享页都算进来。
 
-| 组件 | 内存占用 | CPU | 测量状态 |
-| --- | --- | --- | --- |
-| nextapi | 容器口径 3.2–3.3 MiB；进程 RSS 12.2 MiB（其中堆与栈 2.3 MiB，其余是二进制和共享库缺页） | < 0.1% | 启动完成、无人访问，只有健康检查 |
-| nextapi | 容器口径 22.5 MiB；进程 RSS 32.2 MiB | < 0.1% | 管理员登录一次之后 |
-| nextapi | 容器口径 60.6 MiB；进程 RSS 71.1 MiB | < 0.1% | 连续登录三次之后 |
-| postgres:16 | 30–33 MiB | < 0.1% | 空库 |
+v0.4.0 起新增：
 
-登录会让内存跳一截，来源是密码哈希：argon2 默认一次要用 19 MiB 工作内存（`m=19456`），被 glibc 留在了堆里，所以每次登录都可能再叠一块。这是有意留的强度，嫌占内存可以在系统设置里调低：
+- 管理员登录成功后主动 `malloc_trim` 归还空闲堆；
+- 周期性 `malloc_trim`，降低长期运行后的 arena 保留；
+- 请求体读完后提前释放，减少大请求峰值占用。
 
-| 场景（容器口径） | 默认配置 | 调优后（argon2 8 MiB / 请求体 16 MiB / 连接池 8） |
-| --- | --- | --- |
-| 空载 | 3.3 MiB | 3.2 MiB |
-| 登录一次 | 22.5 MiB | 3.3 MiB |
-| 登录三次 | 60.6 MiB | 19.3 MiB |
-| 后台访问后 | 60.7 MiB | 27.3 MiB |
-
-调优的三个开关都在「系统设置」里：`gateway.argon2_memory_kib`、`gateway.max_body_mb`、`database.max_connections`。注意 argon2 只作用于新哈希，调低后要改一次密码才见效；请求体上限和连接池是启动类参数，改完重启。整套栈加上 PostgreSQL：空载 34 MiB 左右；用过管理后台之后，默认配置 55–95 MiB（取决于登录过几次），调优后 60 MiB 上下。
-
-几点补充：
-
-- 全新库从容器启动到 `/healthz` 返回 200 用了 0.2 秒出头（含 17 个迁移和管理员种子计算）；启动瞬间峰值约 30 MiB，主要是种子那一次 argon2。从 `compose up` 到可以访问大约 6 秒，时间基本花在初始化 PostgreSQL 数据卷上。
-- 被访问后内存不主动回落是正常现象：tokio 按 CPU 核数铺工作线程（16 核就是 16 个），线程栈碰过就常驻；sqlx 的运行期语句缓存同理。生产上跑了几小时、库 35 MB 的实例是 nextapi 18.7 MiB + postgres 54.7 MiB，和「被访问过」的稳态是一个量级。
-- `docker stats` 的数字比进程 RSS 小属于正常：libc、libssl 这类文件页先由宿主的 page cache 记账，不计入容器。两个口径都列出来，用哪个取决于你看的是配额还是进程本身。
-- 磁盘方面：镜像 160 MB（前端内嵌，未压缩大小），二进制 17.5 MiB；PostgreSQL 空库 8.8 MiB，之后随日志增长，明细保留策略由你决定。
-- 内存里的状态都是有界的：日志写队列默认 10000 条，满了先写 WAL 再丢内存条目；debug 抓包按 64 KB 截断，并受开启时长（TTL）限制。
-- 部署建议：单核 256 MiB 跑单实例足够，日常占用不到 100 MiB；并发量大或者开着 debug 抓包时，配额放到 512 MiB 更从容。
+`malloc_trim` 只归还 glibc 认为空闲的堆页，不保证 RSS 立即下降，也不替代合理的内存配额。生产建议给 nextapi 容器 512 MiB 配额，并同时观察 cgroup `memory.current` 与进程 RSS；PostgreSQL 的空库通常几十 MiB，之后主要随日志增长。
 
 ## 配置
 
@@ -176,7 +164,7 @@ curl http://localhost:3220/v1beta/models/gemini-1.5-pro:generateContent \
 
 - 记账走旁路：有界队列 + 批量写者，一个事务里写明细、聚合和配额；队列满先落 WAL（JSONL + CRC 校验），后台幂等重放，主链路不受影响。
 - 计价公式是 `cost = matched_price × quantity`，分段规则按数组顺序取第一个命中，都没命中就用 base_price；汇率可以手工维护，也可以定时从 ECB / Frankfurter 拉取。网关只统计成本，不碰余额和扣费。
-- 明确不做：充值、余额、兑换码、套餐、支付一类运营功能；终端用户账号体系；倍率体系；Embeddings / Rerank / Audio / Moderation / Fine-tuning 端点。
+- 明确不做：用户侧充值、用户余额、兑换码、套餐、支付一类运营功能；终端用户账号体系；倍率体系；Embeddings / Rerank / Audio / Moderation / Fine-tuning 端点。上游供应商余额只读监控不属于用户侧余额售卖语义。
 
 ## 从源码构建
 
@@ -197,6 +185,7 @@ cargo test                               # 单元测试
 - [`CHANGELOG.md`](./CHANGELOG.md) — 版本更新日志
 - [`docs/reverse-proxy.md`](./docs/reverse-proxy.md) — 反向代理与子路径部署
 - [`docs/protocol-matrix.md`](./docs/protocol-matrix.md) — 四协议能力矩阵
+- [`docs/upstream-balance.md`](./docs/upstream-balance.md) — 上游余额/额度监控
 
 ## License
 
