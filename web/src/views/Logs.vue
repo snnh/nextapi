@@ -11,20 +11,21 @@
             CSV 导出
           </el-button>
         </el-tooltip>
-        <el-button type="warning" plain :icon="Delete" @click="openCleanup">分区清理</el-button>
-        <el-tooltip
-          content="按 (时间, id) 顺序翻页，深页不退化（不统计总数）；适合连续排查，筛选变化时自动回到最新一页"
-          placement="top"
-        >
-          <el-button
-            :type="cursorMode ? 'primary' : 'default'"
-            plain
-            :icon="Sort"
-            @click="toggleCursorMode"
-          >
-            {{ cursorMode ? '游标浏览中' : '游标浏览' }}
+        <el-dropdown trigger="click" @command="onLogMoreCommand">
+          <el-button>
+            更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
           </el-button>
-        </el-tooltip>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="cursor" :icon="Sort">
+                {{ cursorMode ? '退出游标浏览' : '游标浏览（连续排查）' }}
+              </el-dropdown-item>
+              <el-dropdown-item command="cleanup" :icon="Delete" divided>
+                分区清理
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -123,6 +124,7 @@
         >
           <el-button link class="adv-toggle" :type="hasAdvancedFilter() ? 'primary' : 'info'" @click="advancedOpen = !advancedOpen">
             高级筛选
+            <span v-if="advancedFilterCount" class="adv-count">{{ advancedFilterCount }}</span>
             <el-icon :class="{ 'is-open': advancedOpen }"><ArrowDown /></el-icon>
           </el-button>
         </el-tooltip>
@@ -148,7 +150,13 @@
         </div>
       </template>
       <template v-else>
-      <el-table v-if="!isMobile && !isCompact" :data="cursorMode ? cursorRows : rows" v-loading="loading">
+      <el-table
+        v-if="!isMobile && !isCompact"
+        :data="cursorMode ? cursorRows : rows"
+        v-loading="loading"
+        class="log-table"
+        @row-click="openDetail"
+      >
         <template #empty>
           <EmptyState title="无匹配日志" description="调整时间范围或筛选条件后重试" />
         </template>
@@ -191,6 +199,7 @@
                   转换
                 </el-tag>
               </span>
+              <span v-if="row.error" class="row-error" :title="row.error">{{ row.error }}</span>
             </div>
           </template>
         </el-table-column>
@@ -243,7 +252,7 @@
         </el-table-column>
         <el-table-column label="操作" width="60" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
+            <el-button size="small" link type="primary" @click.stop="openDetail(row)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -251,7 +260,14 @@
       <!-- 窄屏/移动端：日志卡片列表，避免多列表格横向滚动 -->
       <div v-else v-loading="loading" class="log-cards">
         <EmptyState v-if="!displayRows.length" title="无匹配日志" description="调整时间范围或筛选条件后重试" />
-        <article v-for="row in displayRows" :key="row.request_id" class="log-card">
+        <article
+          v-for="row in displayRows"
+          :key="row.request_id"
+          class="log-card"
+          tabindex="0"
+          @click="openDetail(row)"
+          @keydown.enter="openDetail(row)"
+        >
           <div class="log-card-head">
             <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
             <span class="log-card-model">{{ row.model || '-' }}</span>
@@ -275,13 +291,14 @@
               <el-tag v-if="row.degraded" size="small" type="warning" effect="plain">降级</el-tag>
             </div>
           </div>
+          <div v-if="row.error" class="log-card-error" :title="row.error">{{ row.error }}</div>
           <div class="log-card-foot">
             <span class="hint">
               P {{ fmtInt(row.prompt_tokens) }} · C {{ fmtInt(row.completion_tokens) }} · Cache
               {{ fmtInt(row.cache_read_tokens) }}
             </span>
             <div class="spacer" />
-            <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
+            <el-button size="small" link type="primary" @click.stop="openDetail(row)">详情</el-button>
           </div>
         </article>
       </div>
@@ -569,6 +586,11 @@ function hasAdvancedFilter(): boolean {
   )
 }
 
+/** 已启用的高级筛选条件数（按钮上显示，避免收起的条件被遗忘） */
+const advancedFilterCount = computed(
+  () => [keyId.value, upstreamId.value, statusStr.value, streamOpt.value, degradedOpt.value].filter((v) => v !== '').length,
+)
+
 // —— 列表状态 ——
 const rows = ref<LogItem[]>([])
 /** 表格/卡片当前数据：页码模式 rows，游标模式 cursorRows */
@@ -692,6 +714,12 @@ async function loadMoreCursor() {
 }
 
 /** 切换游标浏览 / 页码模式 */
+/** 低频操作菜单：游标浏览 / 分区清理，避免页头按钮过多 */
+function onLogMoreCommand(command: string) {
+  if (command === 'cursor') toggleCursorMode()
+  else if (command === 'cleanup') openCleanup()
+}
+
 function toggleCursorMode() {
   cursorMode.value = !cursorMode.value
   if (cursorMode.value) {
@@ -1215,5 +1243,50 @@ async function confirmCleanup() {
   padding: 10px 12px;
   background: var(--el-fill-color-light);
   border-radius: var(--nx-radius);
+}
+
+/* 日志行/卡片整行进入详情；内部按钮阻止冒泡 */
+.log-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+.row-error {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nx-danger);
+  font-size: var(--nx-font-caption);
+  line-height: 1.5;
+}
+.log-card {
+  cursor: pointer;
+}
+.log-card:focus-visible {
+  outline: 2px solid var(--nx-focus-ring);
+  outline-offset: 2px;
+}
+.log-card-error {
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nx-danger);
+  font-size: var(--nx-font-caption);
+}
+.adv-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: var(--nx-radius-round);
+  background: var(--nx-accent-soft);
+  color: var(--nx-accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
 }
 </style>

@@ -9,12 +9,12 @@ export interface ChartTheme {
 }
 
 const FALLBACK: ChartTheme = {
-  palette: ['#2f6b74', '#7d6238', '#3f704f', '#96424a', '#5c6b73', '#6b5d73', '#4f6b8a', '#8a7a4a'],
-  axis: '#5f6d72',
-  split: '#e2e7e7',
+  palette: ['#2fa45e', '#7d6238', '#4f6b8a', '#96424a', '#6b5d73', '#8a7a4a', '#3e7e83', '#5c6b73'],
+  axis: '#637168',
+  split: '#e1e7e2',
   tooltipBg: '#ffffff',
-  tooltipBorder: '#e2e7e7',
-  tooltipText: '#1b2326',
+  tooltipBorder: '#e1e7e2',
+  tooltipText: '#1b231e',
   loadingMask: 'rgba(255,255,255,.78)',
 }
 

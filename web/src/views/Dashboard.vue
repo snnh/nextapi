@@ -1,7 +1,7 @@
 <template>
   <div class="page">
     <div class="page-head">
-      <p class="page-desc">网关请求、成本与系统状态的实时概览；统计随下方时间范围刷新。</p>
+      <p class="page-desc">网关请求、成本与异常的实时概览；完整系统状态可从顶栏查看。</p>
       <div class="page-head-summary">
         <span v-if="updatedAt">更新于 {{ updatedAt }}</span>
       </div>
@@ -31,149 +31,41 @@
       </div>
     </el-alert>
 
-    <!-- 系统状态 / 待处理事项：仅复用现有 systemApi.status 数据（M13 §4.3 低风险改造，
-         不新增后端接口；拉取失败时仅提示文案，不伪造任何状态） -->
-    <el-card class="status-card section-card" :class="{ 'is-collapsed': !statusOpen }" shadow="never">
-      <template #header>
-        <div class="status-head">
-          <span class="status-title">系统状态</span>
-          <span v-if="systemStatus" class="status-summary">
-            数据库 {{ systemStatus.database.latency_ms }}ms
-            · 熔断 {{ systemStatus.breakers.length }}
-            · 队列 {{ systemStatus.logging.queue_used ?? 0 }}/{{ systemStatus.logging.queue_capacity ?? '同步' }}
-          </span>
-          <span v-if="pendingItems.length" class="status-pending">{{ pendingItems.length }} 项待处理</span>
-          <div class="spacer" />
-          <el-tag v-if="systemStatus" class="status-health" :type="healthTag" size="small" effect="light">{{ healthText }}</el-tag>
-          <el-button class="status-detail" link :icon="statusOpen ? ArrowUp : ArrowDown" @click="statusOpen = !statusOpen">
-            {{ statusOpen ? '收起' : '详情' }}
-          </el-button>
-        </div>
-      </template>
-
-      <div v-if="statusOpen" v-loading="statusLoading" class="status-body">
-        <!-- 拉取失败：保留上次成功结果（若有）并明确提示，不猜测当前状态 -->
-        <el-alert
-          v-if="statusError"
-          :type="systemStatus ? 'warning' : 'info'"
-          show-icon
-          :closable="false"
-          class="status-alert"
-        >
-          <template #title>
-            {{ systemStatus ? '系统状态刷新失败，当前展示为上次成功结果' : `系统状态获取失败：${statusError}` }}
-          </template>
-          <div v-if="!systemStatus" class="status-err-sub">
-            状态与待办摘要暂不可展示，请求日志等统计内容不受影响。
-            <el-button link type="primary" size="small" :loading="statusLoading" @click="loadSystemStatus">重试</el-button>
-          </div>
-        </el-alert>
-
-        <template v-else-if="systemStatus">
-          <!-- 子系统速览 -->
-          <div class="status-kv-grid">
-            <div class="kv-item">
-              <div class="kv-label">数据库</div>
-              <div class="kv-value" :class="{ 'is-warn': !systemStatus.database.ok }">
-                {{ systemStatus.database.ok ? '正常' : '异常' }}
-                <span class="hint">{{ systemStatus.database.latency_ms }}ms</span>
-              </div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">运行时长</div>
-              <div class="kv-value">{{ fmtUptime(systemStatus.uptime_secs) }}</div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">熔断/禁用上游</div>
-              <div class="kv-value" :class="{ 'is-warn': systemStatus.breakers.length > 0 }">
-                {{ systemStatus.breakers.length ? `${systemStatus.breakers.length} 个` : '无' }}
-              </div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">日志队列</div>
-              <div class="kv-value">
-                <template v-if="systemStatus.logging.queue_capacity != null">
-                  {{ systemStatus.logging.queue_used }} / {{ systemStatus.logging.queue_capacity }}
-                </template>
-                <template v-else>同步直写</template>
-                <span v-if="systemStatus.logging.overflow_total > 0" class="kv-note is-warn">
-                  溢出 {{ systemStatus.logging.overflow_total }}
-                </span>
-              </div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">WAL 兜底</div>
-              <div class="kv-value">
-                {{ systemStatus.logging.wal_files }} 文件
-                <span class="hint">{{ fmtBytes(systemStatus.logging.wal_bytes) }}</span>
-              </div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">媒体轮询</div>
-              <div class="kv-value">
-                <template v-if="systemStatus.media_poller.interval_secs > 0">
-                  每 {{ systemStatus.media_poller.interval_secs }}s
-                </template>
-                <template v-else>已停用</template>
-                <span v-if="systemStatus.media_poller.pending_tasks > 0" class="kv-note is-warn">
-                  待回联 {{ systemStatus.media_poller.pending_tasks }}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 待处理事项：完全由 status 数据推导，命中异常才列出 -->
-          <el-divider content-position="left">待处理事项</el-divider>
-          <div v-if="pendingItems.length" class="todo-list">
-            <div v-for="(it, i) in pendingItems" :key="i" class="todo-item">
-              <span class="todo-dot" :class="`dot-${it.level}`" />
-              <span class="todo-text">{{ it.text }}</span>
-              <div class="spacer" />
-              <el-button v-if="it.to" link type="primary" size="small" @click="router.push(it.to)">
-                {{ it.action }}
-              </el-button>
-            </div>
-          </div>
-          <div v-else class="todo-empty">
-            <span class="todo-dot dot-ok" />
-            <span>系统各项状态正常，暂无待处理事项。</span>
-          </div>
-        </template>
+    <!-- 待处理事项：仅异常时出现；完整系统状态统一由顶栏状态入口查看 -->
+    <section
+      v-if="pendingItems.length || (!systemStatus && statusError)"
+      class="pending-panel"
+      aria-label="待处理事项"
+    >
+      <div class="pending-head">
+        <span class="pending-title">待处理事项</span>
+        <span class="hint">{{ pendingItems.length }} 项</span>
+        <span v-if="statusError && systemStatus" class="hint">刷新失败，展示上次结果</span>
+        <div class="spacer" />
+        <el-button link type="primary" size="small" :loading="statusLoading" @click="loadSystemStatus">
+          刷新状态
+        </el-button>
       </div>
-    </el-card>
+      <ul v-if="pendingItems.length" class="pending-list">
+        <li v-for="(it, i) in pendingItems" :key="i" class="pending-item">
+          <span class="pending-dot" :class="`dot-${it.level}`" />
+          <span class="pending-text">{{ it.text }}</span>
+          <div class="spacer" />
+          <el-button v-if="it.to" link type="primary" size="small" @click="router.push(it.to)">
+            {{ it.action }}
+          </el-button>
+        </li>
+      </ul>
+      <div v-else class="pending-error">
+        <span>系统状态获取失败：{{ statusError }}</span>
+        <el-button link type="primary" size="small" :loading="statusLoading" @click="loadSystemStatus">
+          重试
+        </el-button>
+      </div>
+    </section>
 
     <div v-loading="loading">
-      <!-- 统计指标卡：CSS grid 自适应列数（含延迟卡），大数字溢出省略 -->
-      <div class="stat-grid">
-        <el-card v-for="m in metricCards" :key="m.label" class="stat-card" shadow="never">
-          <div class="stat-label">
-            <el-tooltip :content="m.tip" placement="top">
-              <span>{{ m.label }}</span>
-            </el-tooltip>
-          </div>
-          <div class="stat-value">{{ m.value }}</div>
-          <div v-if="m.sub" class="stat-sub hint">{{ m.sub }}</div>
-        </el-card>
-
-        <el-card class="stat-card" shadow="never">
-          <div class="stat-label">
-            <el-tooltip content="响应耗时的分位延迟（P50/P95/P99）" placement="top">
-              <span>延迟</span>
-            </el-tooltip>
-          </div>
-          <div class="stat-value delay">
-            <el-tooltip content="P50 分位延迟：50% 的请求 ≤ 该耗时" placement="top">
-              <span>P50 <b>{{ fmtDur(summary?.p50_ms) }}</b></span>
-            </el-tooltip>
-            <el-tooltip content="P95 分位延迟：95% 的请求 ≤ 该耗时" placement="top">
-              <span>P95 <b>{{ fmtDur(summary?.p95_ms) }}</b></span>
-            </el-tooltip>
-            <el-tooltip content="P99 分位延迟：99% 的请求 ≤ 该耗时" placement="top">
-              <span>P99 <b>{{ fmtDur(summary?.p99_ms) }}</b></span>
-            </el-tooltip>
-          </div>
-        </el-card>
-      </div>
+      <StatCards :summary="summary" :currency="currency" />
 
       <el-card class="chart-card section-card" shadow="never">
         <template #header>请求数 &amp; 成本趋势（{{ rangeLabel }}）</template>
@@ -234,9 +126,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { useRouter } from 'vue-router'
 import { useBreakpoint } from '@/composables/useBreakpoint'
-import { ArrowDown, ArrowUp, Refresh } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import EChart from '@/components/EChart.vue'
+import StatCards from '@/components/stats/StatCards.vue'
 import type { EChartsOption } from 'echarts'
 import { statsApi, systemApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -249,16 +142,13 @@ import type {
   StatsSummary,
   SystemStatusResp,
 } from '@/api/types'
-import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtPct, fmtUptime } from '@/utils/format'
-import { STAT_LABEL_TIPS } from '@/utils/consts'
+import { fmtInt, fmtMoney } from '@/utils/format'
 
 type Range = 'today' | '7d'
 
 const range = ref<Range>('today')
 const currency = ref<StatsCurrency>('CNY')
 const loading = ref(false)
-/** 系统状态默认收起为一条状态摘要，避免压住首屏指标卡 */
-const statusOpen = ref(false)
 
 const summary = ref<StatsSummary | null>(null)
 const totalSeries = ref<SeriesPoint[]>([])
@@ -277,23 +167,6 @@ const systemStatus = ref<SystemStatusResp | null>(null)
 const statusLoading = ref(false)
 // 状态拉取失败文案（成功后清空；已成功过则保留上次数据并提示快照）
 const statusError = ref<string | null>(null)
-
-type Health = 'ok' | 'warn' | 'danger'
-const health = computed<Health>(() => {
-  const s = systemStatus.value
-  if (!s) return 'ok'
-  if (!s.database.ok || s.breakers.length > 0) return 'danger'
-  if (
-    s.logging.overflow_total > 0 ||
-    s.media_poller.pending_tasks > 0 ||
-    s.recent_errors.length > 0
-  ) {
-    return 'warn'
-  }
-  return 'ok'
-})
-const healthText = computed(() => (({ ok: '正常', warn: '需关注', danger: '异常' }) as const)[health.value])
-const healthTag = computed(() => (({ ok: 'success', warn: 'warning', danger: 'danger' }) as const)[health.value])
 
 interface PendingItem {
   level: 'warn' | 'danger'
@@ -375,28 +248,6 @@ function refreshAll() {
 const rangeLabel = computed(() => (range.value === '7d' ? '近 7 天' : '今天'))
 
 const granularity = computed<SeriesGranularity>(() => (range.value === '7d' ? 'day' : 'hour'))
-
-interface MetricCard {
-  label: string
-  value: string
-  sub: string
-  tip: string
-}
-
-const metricCards = computed<MetricCard[]>(() => {
-  const s = summary.value
-  return [
-    { label: '请求数', value: fmtInt(s?.requests), sub: '', tip: STAT_LABEL_TIPS.requests },
-    { label: '成功率', value: fmtPct(s?.success_rate), sub: '', tip: STAT_LABEL_TIPS.success },
-    { label: '总 Token 数（含缓存）', value: fmtInt(s?.total_tokens), sub: '', tip: STAT_LABEL_TIPS.tokens },
-    {
-      label: `成本（${currency.value}）`,
-      value: fmtMoney(s?.cost_display),
-      sub: s && s.cost_na_count > 0 ? `${s.cost_na_count} 条未计价` : '',
-      tip: STAT_LABEL_TIPS.cost,
-    },
-  ]
-})
 
 interface TopRow {
   name: string
@@ -503,152 +354,71 @@ watch([range, currency], () => loadAll())
 </script>
 
 <style scoped>
-/* 统计指标卡：自适应列数网格（含延迟卡），避免 el-col 固定 4 格在宽屏留白 */
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.stat-card {
-  min-width: 0; /* 允许内部省略号收缩 */
-  box-sizing: border-box;
-}
-
 .error-alert {
   margin-bottom: 16px;
 }
 
-/* —— 系统状态 / 待处理事项（M13 §4.3 低风险区块） —— */
-.status-card.is-collapsed :deep(.el-card__body) {
-  display: none;
+/* —— 待处理事项：仅异常时出现，不占用正常首屏 —— */
+.pending-panel {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--nx-warning-border);
+  border-radius: var(--nx-radius-md);
+  background: var(--nx-warning-soft);
 }
-.status-head {
+.pending-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-}
-.status-head .spacer {
-  flex: 1;
-}
-.status-summary {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--el-text-color-secondary);
-  font-size: var(--nx-font-small);
-  font-variant-numeric: tabular-nums;
-}
-.status-pending {
-  color: var(--el-color-warning);
-  font-size: var(--nx-font-small);
-  white-space: nowrap;
-}
-.status-title {
-  font-size: var(--nx-font-body);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-.status-body {
-  min-height: 60px;
-}
-.status-alert {
-  margin-bottom: 0;
-}
-.status-err-sub {
-  margin-top: 4px;
-  font-size: var(--nx-font-small);
-  line-height: 1.7;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
+  margin-bottom: 8px;
 }
-.status-kv-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 14px;
-}
-.kv-item {
-  min-width: 0;
-}
-.kv-label {
-  font-size: var(--nx-font-caption);
-  color: var(--el-text-color-secondary);
-  margin-bottom: 4px;
-}
-.kv-value {
-  font-size: var(--nx-font-title);
+.pending-title {
+  font-size: var(--nx-font-small);
   font-weight: 600;
-  color: var(--el-text-color-primary);
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
+  color: var(--nx-text);
 }
-.kv-value .hint {
-  font-weight: 400;
-  margin-left: 6px;
-}
-.kv-note {
-  display: inline-block;
-  margin-left: 8px;
-  font-weight: 600;
-}
-.is-warn {
-  color: var(--el-color-danger);
-}
-.status-body :deep(.el-divider) {
-  margin: 16px 0 12px;
-}
-.todo-list {
+.pending-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-.todo-item {
+.pending-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  background: var(--el-fill-color-lighter);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--nx-radius);
+  gap: 8px;
+  min-width: 0;
   font-size: var(--nx-font-small);
   line-height: 1.5;
 }
-.todo-item .spacer {
+.pending-item .spacer {
   flex: 1;
 }
-.todo-text {
-  color: var(--el-text-color-regular);
+.pending-text {
+  color: var(--nx-text-2);
   word-break: break-all;
 }
-.todo-empty {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--el-text-color-secondary);
-  font-size: var(--nx-font-small);
-}
-.todo-dot {
-  width: 8px;
-  height: 8px;
+.pending-dot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 .dot-warn {
-  background: var(--el-color-warning);
+  background: var(--nx-warning);
 }
 .dot-danger {
-  background: var(--el-color-danger);
+  background: var(--nx-danger-bright);
 }
-.dot-ok {
-  background: var(--el-color-success);
+.pending-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-small);
 }
 
 .error-body {
@@ -661,68 +431,18 @@ watch([range, currency], () => loadAll())
 }
 
 
-.stat-label {
-  font-size: var(--nx-font-small);
-  color: var(--el-text-color-secondary);
-  margin-bottom: 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stat-value {
-  font-size: var(--nx-font-stat);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap; /* 大数字单行溢出省略，防破卡 */
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stat-value.delay {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  font-size: var(--nx-font-body);
-  font-weight: 400;
-  white-space: normal;
-  overflow: visible;
-}
-
-.stat-value.delay b {
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.stat-sub {
-  margin-top: 6px;
-}
-
-
 .top-row {
   margin-top: 0;
 }
 
 
-/* 移动端：状态条只保留标题 + 健康标记 + 详情；摘要隐藏，避免标题被挤成竖排 */
 @media (max-width: 800px) {
-  .status-summary,
-  .status-pending {
-    display: none;
+  .pending-panel {
+    padding: 10px 12px;
   }
-  .status-head {
-    gap: 8px;
-  }
-  .status-title {
-    font-size: var(--nx-font-small);
-  }
-  .stat-grid .stat-card:last-child {
-    grid-column: 1 / -1;
-  }
-  .stat-grid {
-    gap: 12px;
+  .pending-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 }
 </style>

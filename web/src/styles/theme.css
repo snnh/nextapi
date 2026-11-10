@@ -2,63 +2,66 @@
    NextAPI design tokens
    - 页面/组件只消费 --nx-* 与 --el-*，不写裸色值
    - 浅色为默认；html.dark 覆盖 --nx-*，--el-* 通过 var() 动态继承
-   - 强调色：低饱和蓝绿（teal），种子 #2f6b74
+   - 品牌绿 #46b96e；功能主色 #24834a（浅色）/ #93d4a8（深色文字）
    ========================================================================== */
 
 :root {
   color-scheme: light;
 
   /* ---------- 画布 / 表面 ---------- */
-  --nx-canvas: #f5f7f7;
+  --nx-canvas: #f5f7f5;
+  --nx-brand: #46b96e;
+  --nx-on-brand: #102c1b;
   --nx-surface: #ffffff;
-  --nx-inset: #f0f3f3;
+  --nx-inset: #f0f4f1;
   --nx-floating: #ffffff;
-  --nx-subtle: #f7f9f9;
-  --nx-hover: #eef3f3;
+  --nx-subtle: #f7f9f7;
+  --nx-hover: #edf4ef;
 
   /* ---------- 边框 ---------- */
-  --nx-border: #e2e7e7;
-  --nx-border-subtle: #edf1f1;
-  --nx-border-strong: #cbd4d4;
+  --nx-border: #e1e7e2;
+  --nx-border-subtle: #ecf0ed;
+  --nx-border-strong: #c9d3cc;
 
   /* ---------- 文本 ---------- */
-  --nx-text: #1b2326;
-  --nx-text-2: #556368;
-  --nx-text-3: #5f6d72;
-  --nx-text-placeholder: #7c8a8f;
-  --nx-text-disabled: #a6b2b6;
+  --nx-text: #1b231e;
+  --nx-text-2: #526158;
+  --nx-text-3: #637168;
+  --nx-text-placeholder: #6b796f;
+  --nx-text-disabled: #a4aea7;
 
-  /* ---------- 强调色（蓝绿） ---------- */
-  --nx-accent-50: #f0f6f6;
-  --nx-accent-100: #dfeeef;
-  --nx-accent-200: #c2dfe1;
-  --nx-accent-300: #97c8cb;
-  --nx-accent-400: #6aa9ad;
-  --nx-accent-500: #4a8b91;
-  --nx-accent-600: #2f6b74;
-  --nx-accent-700: #265860;
-  --nx-accent-800: #1f474d;
-  --nx-accent-900: #19383d;
-  --nx-accent-950: #0f2429;
+  /* ---------- 品牌绿 / 功能绿 ---------- */
+  --nx-accent-50: #f0faf3;
+  --nx-accent-100: #ddf3e4;
+  --nx-accent-200: #b9e5c7;
+  --nx-accent-300: #88d3a2;
+  --nx-accent-400: #46b96e;
+  --nx-accent-500: #35a65f;
+  --nx-accent-600: #24834a;
+  --nx-accent-700: #1f7040;
+  --nx-accent-800: #1a5d35;
+  --nx-accent-900: #17492c;
+  --nx-accent-950: #0d2c1b;
 
-  --nx-accent: #2f6b74;
-  --nx-accent-hover: #265860;
-  --nx-accent-active: #1f474d;
-  --nx-accent-solid: #2f6b74;
-  --nx-accent-solid-hover: #265860;
-  --nx-accent-solid-active: #1f474d;
-  --nx-accent-soft: #f0f6f6;
+  --nx-accent: #24834a;
+  --nx-accent-hover: #1f7040;
+  --nx-accent-active: #1a5d35;
+  --nx-accent-solid: #24834a;
+  --nx-accent-solid-hover: #1f7040;
+  --nx-accent-solid-active: #1a5d35;
+  --nx-accent-soft: #eaf7ee;
   --nx-on-accent: #ffffff;
-  --nx-focus-ring: #2f6b74;
-  --nx-focus-ring-soft: rgba(47, 107, 116, 0.18);
+  --nx-focus-ring: #24834a;
+  --nx-focus-ring-soft: rgba(36, 131, 74, 0.18);
 
   /* ---------- 语义状态色（中低饱和） ---------- */
-  --nx-success: #3f704f;
-  --nx-success-strong: #315a40;
-  --nx-success-soft: #edf4ef;
-  --nx-success-border: #c9dccf;
-  --nx-success-solid: #3f704f;
-  --nx-success-solid-hover: #315a40;
+  --nx-success: #237a45;
+  --nx-success-bright: #3dbb6b;
+  --nx-success-strong: #1a5d35;
+  --nx-success-soft: #ecf9f0;
+  --nx-success-border: #bee9cc;
+  --nx-success-solid: #24834a;
+  --nx-success-solid-hover: #1f7040;
 
   --nx-warning: #7d6238;
   --nx-warning-strong: #66502e;
@@ -67,12 +70,13 @@
   --nx-warning-solid: #7d6238;
   --nx-warning-solid-hover: #66502e;
 
-  --nx-danger: #96424a;
-  --nx-danger-strong: #7b353c;
-  --nx-danger-soft: #f7edee;
-  --nx-danger-border: #e5c6c9;
-  --nx-danger-solid: #96424a;
-  --nx-danger-solid-hover: #7b353c;
+  --nx-danger: #b43840;
+  --nx-danger-bright: #d64545;
+  --nx-danger-strong: #a42a32;
+  --nx-danger-soft: #fcecec;
+  --nx-danger-border: #f2bcbc;
+  --nx-danger-solid: #b43840;
+  --nx-danger-solid-hover: #992c34;
 
   --nx-info: #5c6b73;
   --nx-info-strong: #4b575e;
@@ -82,38 +86,38 @@
   --nx-info-solid-hover: #4b575e;
 
   /* ---------- 侧栏 ---------- */
-  --nx-sidebar-bg: #f0f4f4;
-  --nx-sidebar-border: #e2e7e7;
-  --nx-sidebar-text: #556368;
-  --nx-sidebar-strong: #1b2326;
-  --nx-sidebar-muted: #5f6d72;
-  --nx-sidebar-hover: #e6eeee;
-  --nx-sidebar-active-bg: #dfeeef;
-  --nx-sidebar-active-text: #1f474d;
-  --nx-sidebar-accent: #2f6b74;
+  --nx-sidebar-bg: #f0f4f1;
+  --nx-sidebar-border: #e1e7e2;
+  --nx-sidebar-text: #526158;
+  --nx-sidebar-strong: #1b231e;
+  --nx-sidebar-muted: #637168;
+  --nx-sidebar-hover: #e7f0e9;
+  --nx-sidebar-active-bg: #e1eee5;
+  --nx-sidebar-active-text: #1f5d38;
+  --nx-sidebar-accent: #24834a;
 
   /* ---------- 图表 ---------- */
-  --nx-chart-1: #2f6b74;
+  --nx-chart-1: #2fa45e;
   --nx-chart-2: #7d6238;
-  --nx-chart-3: #3f704f;
+  --nx-chart-3: #4f6b8a;
   --nx-chart-4: #96424a;
-  --nx-chart-5: #5c6b73;
-  --nx-chart-6: #6b5d73;
-  --nx-chart-7: #4f6b8a;
-  --nx-chart-8: #8a7a4a;
-  --nx-chart-axis: #5f6d72;
-  --nx-chart-split: #e2e7e7;
+  --nx-chart-5: #6b5d73;
+  --nx-chart-6: #8a7a4a;
+  --nx-chart-7: #3e7e83;
+  --nx-chart-8: #5c6b73;
+  --nx-chart-axis: #637168;
+  --nx-chart-split: #e1e7e2;
   --nx-chart-tooltip-bg: #ffffff;
-  --nx-chart-tooltip-border: #e2e7e7;
-  --nx-chart-tooltip-text: #1b2326;
+  --nx-chart-tooltip-border: #e1e7e2;
+  --nx-chart-tooltip-text: #1b231e;
   --nx-chart-loading-mask: rgba(255, 255, 255, 0.78);
 
   /* ---------- 代码块 ---------- */
-  --nx-code-bg: #1e1e1e;
-  --nx-code-text: #d4d4d4;
+  --nx-code-bg: #1e241f;
+  --nx-code-text: #d8e4db;
 
   /* ---------- 浮层与遮罩 ---------- */
-  --nx-mask: rgba(15, 36, 41, 0.45);
+  --nx-mask: rgba(15, 36, 22, 0.45);
   --nx-loading-mask: rgba(255, 255, 255, 0.78);
   --nx-shadow-pop: 0 8px 24px rgba(15, 36, 41, 0.12), 0 2px 6px rgba(15, 36, 41, 0.06);
   --nx-shadow-dialog: 0 16px 48px rgba(15, 36, 41, 0.18);
@@ -149,28 +153,28 @@
   --nx-dur-slow: 220ms;
 
   /* ---------- Element Plus 映射 ---------- */
-  --el-color-primary-rgb: 47, 107, 116;
-  --el-color-success-rgb: 63, 112, 79;
+  --el-color-primary-rgb: 36, 131, 74;
+  --el-color-success-rgb: 35, 122, 69;
   --el-color-warning-rgb: 125, 98, 56;
-  --el-color-danger-rgb: 150, 66, 74;
-  --el-color-error-rgb: 150, 66, 74;
+  --el-color-danger-rgb: 180, 56, 64;
+  --el-color-error-rgb: 180, 56, 64;
   --el-color-info-rgb: 92, 107, 115;
 
   --el-color-primary: var(--nx-accent);
-  --el-color-primary-light-3: var(--nx-accent-400);
-  --el-color-primary-light-5: var(--nx-accent-300);
-  --el-color-primary-light-7: var(--nx-accent-200);
-  --el-color-primary-light-8: var(--nx-accent-100);
-  --el-color-primary-light-9: var(--nx-accent-50);
-  --el-color-primary-dark-2: var(--nx-accent-700);
+  --el-color-primary-light-3: #6cc98e;
+  --el-color-primary-light-5: #96d9ae;
+  --el-color-primary-light-7: #bee9cc;
+  --el-color-primary-light-8: #d9f2e1;
+  --el-color-primary-light-9: #f0faf3;
+  --el-color-primary-dark-2: #1f7040;
 
   --el-color-success: var(--nx-success);
-  --el-color-success-light-3: #6a9277;
-  --el-color-success-light-5: #8fae9a;
-  --el-color-success-light-7: #b9cbbf;
-  --el-color-success-light-8: var(--nx-success-border);
-  --el-color-success-light-9: var(--nx-success-soft);
-  --el-color-success-dark-2: var(--nx-success-strong);
+  --el-color-success-light-3: #6cc98e;
+  --el-color-success-light-5: #96d9ae;
+  --el-color-success-light-7: #bee9cc;
+  --el-color-success-light-8: #d9f2e1;
+  --el-color-success-light-9: #ecf9f0;
+  --el-color-success-dark-2: #1a5d35;
 
   --el-color-warning: var(--nx-warning);
   --el-color-warning-light-3: #a5875a;
@@ -181,19 +185,19 @@
   --el-color-warning-dark-2: var(--nx-warning-strong);
 
   --el-color-error: var(--nx-danger);
-  --el-color-error-light-3: #b06b72;
-  --el-color-error-light-5: #c89499;
-  --el-color-error-light-7: #dfbdc0;
-  --el-color-error-light-8: var(--nx-danger-border);
-  --el-color-error-light-9: var(--nx-danger-soft);
-  --el-color-error-dark-2: var(--nx-danger-strong);
+  --el-color-error-light-3: #cf7278;
+  --el-color-error-light-5: #dfa0a4;
+  --el-color-error-light-7: #efc6c9;
+  --el-color-error-light-8: #f6d7d9;
+  --el-color-error-light-9: #fcecec;
+  --el-color-error-dark-2: #a42a32;
   --el-color-danger: var(--nx-danger);
-  --el-color-danger-light-3: #b06b72;
-  --el-color-danger-light-5: #c89499;
-  --el-color-danger-light-7: #dfbdc0;
-  --el-color-danger-light-8: var(--nx-danger-border);
-  --el-color-danger-light-9: var(--nx-danger-soft);
-  --el-color-danger-dark-2: var(--nx-danger-strong);
+  --el-color-danger-light-3: #cf7278;
+  --el-color-danger-light-5: #dfa0a4;
+  --el-color-danger-light-7: #efc6c9;
+  --el-color-danger-light-8: #f6d7d9;
+  --el-color-danger-light-9: #fcecec;
+  --el-color-danger-dark-2: #a42a32;
 
   --el-color-info: var(--nx-info);
   --el-color-info-light-3: #7d8a91;
@@ -260,52 +264,55 @@
 html.dark {
   color-scheme: dark;
 
-  --nx-canvas: #0e1416;
-  --nx-surface: #151d20;
-  --nx-inset: #1b2528;
-  --nx-floating: #1f2a2e;
-  --nx-subtle: #182226;
-  --nx-hover: #223034;
+  --nx-canvas: #0f1511;
+  --nx-brand: #7bd894;
+  --nx-on-brand: #102c1b;
+  --nx-surface: #151e18;
+  --nx-inset: #1b2620;
+  --nx-floating: #1e2922;
+  --nx-subtle: #18221c;
+  --nx-hover: #223329;
 
-  --nx-border: #2a363a;
-  --nx-border-subtle: #222d30;
-  --nx-border-strong: #3a484d;
+  --nx-border: #2b382f;
+  --nx-border-subtle: #222e26;
+  --nx-border-strong: #3b4b40;
 
-  --nx-text: #e4ecee;
-  --nx-text-2: #a6b4b8;
-  --nx-text-3: #7f8f94;
-  --nx-text-placeholder: #6f7f84;
-  --nx-text-disabled: #5c6a6f;
+  --nx-text: #e4ece6;
+  --nx-text-2: #a6b5aa;
+  --nx-text-3: #829287;
+  --nx-text-placeholder: #7f9085;
+  --nx-text-disabled: #5b695f;
 
-  --nx-accent-50: rgba(151, 200, 203, 0.06);
-  --nx-accent-100: rgba(151, 200, 203, 0.1);
-  --nx-accent-200: rgba(151, 200, 203, 0.2);
-  --nx-accent-300: #97c8cb;
-  --nx-accent-400: #6aa9ad;
-  --nx-accent-500: #4a8b91;
-  --nx-accent-600: #357a82;
-  --nx-accent-700: #2c6b72;
-  --nx-accent-800: #265860;
-  --nx-accent-900: #1f474d;
-  --nx-accent-950: #0f2429;
+  --nx-accent-50: rgba(123, 216, 148, 0.06);
+  --nx-accent-100: rgba(123, 216, 148, 0.10);
+  --nx-accent-200: rgba(123, 216, 148, 0.20);
+  --nx-accent-300: #9fe0b3;
+  --nx-accent-400: #7bd894;
+  --nx-accent-500: #5cc47b;
+  --nx-accent-600: #3fa963;
+  --nx-accent-700: #348a53;
+  --nx-accent-800: #2a7045;
+  --nx-accent-900: #215a38;
+  --nx-accent-950: #12351f;
 
-  --nx-accent: #97c8cb;
-  --nx-accent-hover: #a6d2d4;
-  --nx-accent-active: #7fb7ba;
-  --nx-accent-solid: #357a82;
-  --nx-accent-solid-hover: #3f8a92;
-  --nx-accent-solid-active: #2c6b72;
-  --nx-accent-soft: rgba(151, 200, 203, 0.14);
+  --nx-accent: #93d4a8;
+  --nx-accent-hover: #a6e2b8;
+  --nx-accent-active: #82c797;
+  --nx-accent-solid: #287a47;
+  --nx-accent-solid-hover: #21693c;
+  --nx-accent-solid-active: #1a5832;
+  --nx-accent-soft: rgba(123, 216, 148, 0.14);
   --nx-on-accent: #ffffff;
-  --nx-focus-ring: #97c8cb;
-  --nx-focus-ring-soft: rgba(151, 200, 203, 0.24);
+  --nx-focus-ring: #93d4a8;
+  --nx-focus-ring-soft: rgba(147, 212, 168, 0.24);
 
-  --nx-success: #8fc9a2;
-  --nx-success-strong: #b7e0c4;
-  --nx-success-soft: rgba(143, 201, 162, 0.12);
-  --nx-success-border: rgba(143, 201, 162, 0.32);
-  --nx-success-solid: #3f704f;
-  --nx-success-solid-hover: #4a7d5b;
+  --nx-success: #a6e7ba;
+  --nx-success-bright: #7bd894;
+  --nx-success-strong: #c4f0d1;
+  --nx-success-soft: rgba(123, 216, 148, 0.14);
+  --nx-success-border: rgba(123, 216, 148, 0.34);
+  --nx-success-solid: #287a47;
+  --nx-success-solid-hover: #21693c;
 
   --nx-warning: #d6b06a;
   --nx-warning-strong: #e7cb95;
@@ -314,69 +321,70 @@ html.dark {
   --nx-warning-solid: #7d6238;
   --nx-warning-solid-hover: #8a6c3d;
 
-  --nx-danger: #d99aa1;
-  --nx-danger-strong: #ecc0c4;
-  --nx-danger-soft: rgba(217, 154, 161, 0.12);
-  --nx-danger-border: rgba(217, 154, 161, 0.32);
-  --nx-danger-solid: #8a3d45;
-  --nx-danger-solid-hover: #9c4a52;
+  --nx-danger: #ffb3b3;
+  --nx-danger-bright: #ff8f8f;
+  --nx-danger-strong: #ffd0d0;
+  --nx-danger-soft: rgba(255, 143, 143, 0.12);
+  --nx-danger-border: rgba(255, 143, 143, 0.32);
+  --nx-danger-solid: #a9353d;
+  --nx-danger-solid-hover: #922d35;
 
   --nx-info: #a6b4b8;
   --nx-info-strong: #c2ced1;
   --nx-info-soft: rgba(166, 180, 184, 0.12);
-  --nx-info-border: rgba(166, 180, 184, 0.3);
+  --nx-info-border: rgba(166, 180, 184, 0.30);
   --nx-info-solid: #4b575e;
   --nx-info-solid-hover: #5c6b73;
 
-  --nx-sidebar-bg: #0b1113;
-  --nx-sidebar-border: #233033;
-  --nx-sidebar-text: #a6b4b8;
-  --nx-sidebar-strong: #e4ecee;
-  --nx-sidebar-muted: #7f8f94;
-  --nx-sidebar-hover: #162124;
-  --nx-sidebar-active-bg: #1b3033;
-  --nx-sidebar-active-text: #c2dfe1;
-  --nx-sidebar-accent: #6aa9ad;
+  --nx-sidebar-bg: #0c120e;
+  --nx-sidebar-border: #233229;
+  --nx-sidebar-text: #a6b5aa;
+  --nx-sidebar-strong: #e4ece6;
+  --nx-sidebar-muted: #829287;
+  --nx-sidebar-hover: #16241b;
+  --nx-sidebar-active-bg: #1b3024;
+  --nx-sidebar-active-text: #b9e5c7;
+  --nx-sidebar-accent: #7bd894;
 
-  --nx-chart-1: #6aa9ad;
-  --nx-chart-2: #b89a63;
-  --nx-chart-3: #7fae8e;
-  --nx-chart-4: #c97f87;
-  --nx-chart-5: #9aa8ae;
-  --nx-chart-6: #a596ab;
-  --nx-chart-7: #8fa8c4;
-  --nx-chart-8: #c4b07a;
-  --nx-chart-axis: #a6b4b8;
-  --nx-chart-split: #2a363a;
-  --nx-chart-tooltip-bg: #1f2a2e;
-  --nx-chart-tooltip-border: #2a363a;
-  --nx-chart-tooltip-text: #e4ecee;
-  --nx-chart-loading-mask: rgba(14, 20, 22, 0.75);
+  --nx-chart-1: #7bd894;
+  --nx-chart-2: #d6b06a;
+  --nx-chart-3: #8fa8c4;
+  --nx-chart-4: #d99aa1;
+  --nx-chart-5: #a596ab;
+  --nx-chart-6: #c4b07a;
+  --nx-chart-7: #79b7ba;
+  --nx-chart-8: #a6b4b8;
+  --nx-chart-axis: #a6b5aa;
+  --nx-chart-split: #2b382f;
+  --nx-chart-tooltip-bg: #1e2922;
+  --nx-chart-tooltip-border: #2b382f;
+  --nx-chart-tooltip-text: #e4ece6;
+  --nx-chart-loading-mask: rgba(15, 21, 17, 0.75);
 
-  --nx-code-bg: #12181a;
-  --nx-code-text: #d8e2e4;
+  --nx-code-bg: #121914;
+  --nx-code-text: #d8e4db;
 
   --nx-mask: rgba(0, 0, 0, 0.65);
-  --nx-loading-mask: rgba(14, 20, 22, 0.75);
+  --nx-loading-mask: rgba(15, 21, 17, 0.75);
   --nx-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
   --nx-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.55);
   --nx-shadow-bar: 0 -4px 12px rgba(0, 0, 0, 0.35);
 
   /* Element Plus 深色下的主色：链接/选中用亮色，实底按钮用深色 */
   --el-color-primary: var(--nx-accent);
-  --el-color-primary-light-3: var(--nx-accent-400);
-  --el-color-primary-light-5: var(--nx-accent-500);
-  --el-color-primary-light-7: var(--nx-accent-600);
-  --el-color-primary-light-8: var(--nx-accent-700);
-  --el-color-primary-light-9: var(--nx-accent-50);
-  --el-color-primary-dark-2: var(--nx-accent-hover);
+  --el-color-primary-light-3: #6cc98e;
+  --el-color-primary-light-5: #3d7a53;
+  --el-color-primary-light-7: #2e5c3e;
+  --el-color-primary-light-8: #274d34;
+  --el-color-primary-light-9: rgba(123, 216, 148, 0.14);
+  --el-color-primary-dark-2: #a6e2b8;
 
-  --el-color-success-light-3: #6a9277;
-  --el-color-success-light-5: #8fae9a;
-  --el-color-success-light-7: #b9cbbf;
-  --el-color-success-light-8: var(--nx-success-border);
-  --el-color-success-light-9: var(--nx-success-soft);
-  --el-color-success-dark-2: var(--nx-success-strong);
+  --el-color-success-light-3: #6cc98e;
+  --el-color-success-light-5: #3d7a53;
+  --el-color-success-light-7: #2e5c3e;
+  --el-color-success-light-8: #274d34;
+  --el-color-success-light-9: rgba(123, 216, 148, 0.14);
+  --el-color-success-dark-2: #c4f0d1;
 
   --el-color-warning-light-3: #a5875a;
   --el-color-warning-light-5: #c0aa86;
@@ -385,18 +393,18 @@ html.dark {
   --el-color-warning-light-9: var(--nx-warning-soft);
   --el-color-warning-dark-2: var(--nx-warning-strong);
 
-  --el-color-error-light-3: #b06b72;
-  --el-color-error-light-5: #c89499;
-  --el-color-error-light-7: #dfbdc0;
-  --el-color-error-light-8: var(--nx-danger-border);
-  --el-color-error-light-9: var(--nx-danger-soft);
-  --el-color-error-dark-2: var(--nx-danger-strong);
-  --el-color-danger-light-3: #b06b72;
-  --el-color-danger-light-5: #c89499;
-  --el-color-danger-light-7: #dfbdc0;
-  --el-color-danger-light-8: var(--nx-danger-border);
-  --el-color-danger-light-9: var(--nx-danger-soft);
-  --el-color-danger-dark-2: var(--nx-danger-strong);
+  --el-color-error-light-3: #b05b60;
+  --el-color-error-light-5: #8f4a4e;
+  --el-color-error-light-7: #6f383b;
+  --el-color-error-light-8: #5f3033;
+  --el-color-error-light-9: rgba(255, 143, 143, 0.12);
+  --el-color-error-dark-2: #ffd0d0;
+  --el-color-danger-light-3: #b05b60;
+  --el-color-danger-light-5: #8f4a4e;
+  --el-color-danger-light-7: #6f383b;
+  --el-color-danger-light-8: #5f3033;
+  --el-color-danger-light-9: rgba(255, 143, 143, 0.12);
+  --el-color-danger-dark-2: #ffd0d0;
 
   --el-color-info-light-3: #7d8a91;
   --el-color-info-light-5: #9da8ad;
@@ -691,6 +699,11 @@ html.dark .el-card {
 }
 
 /* 深色下选中态：主色是亮色，实底控件必须改用 accent-solid，避免白字对比不足 */
+html.dark .el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background-color: var(--nx-accent-solid);
+  border-color: var(--nx-accent-solid);
+  color: var(--nx-on-accent);
+}
 html.dark .el-checkbox__input.is-checked .el-checkbox__inner,
 html.dark .el-radio__input.is-checked .el-radio__inner,
 html.dark .el-switch.is-checked .el-switch__core {
@@ -701,6 +714,17 @@ html.dark .el-checkbox-button.is-checked .el-checkbox-button__inner {
   background-color: var(--nx-accent-solid);
   border-color: var(--nx-accent-solid);
   color: var(--nx-on-accent);
+}
+/* 深色步骤条：图标实底使用深绿/深成功色，避免亮主色配白字 */
+html.dark .el-step__head.is-process .el-step__icon {
+  background-color: var(--nx-accent-solid);
+  border-color: var(--nx-accent-solid);
+  color: var(--nx-on-accent);
+}
+html.dark .el-step__head.is-finish .el-step__icon {
+  background-color: var(--nx-success-solid);
+  border-color: var(--nx-success-solid);
+  color: #fff;
 }
 html.dark .el-date-table td.current:not(.disabled) .el-date-table-cell__text {
   background-color: var(--nx-accent-solid);

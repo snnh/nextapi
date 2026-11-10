@@ -260,11 +260,13 @@
 
       <!-- ===== Tab3 价格试算 ===== -->
       <el-tab-pane label="价格试算" name="preview" lazy>
+        <div class="preview-layout">
         <el-card shadow="never" class="preview-form-card">
           <el-form
             ref="previewFormRef"
             :model="previewForm"
             :rules="previewRules"
+            :label-position="isNarrow ? 'top' : 'right'"
             label-width="150px"
             @submit.prevent
             @keyup.enter="onPreviewEnter"
@@ -306,20 +308,23 @@
               <el-input-number v-model="previewForm.images" :min="0" :controls="false" style="width: 200px" />
             </el-form-item>
 
-            <el-divider content-position="left">媒体参数（文本，可空）</el-divider>
-            <el-form-item label="图片尺寸">
-              <el-input v-model="previewForm.image_size" placeholder="如 1024x1024" clearable style="width: 300px" />
-            </el-form-item>
-            <el-form-item label="视频秒数">
-              <el-input-number v-model="previewForm.video_seconds" :min="0" :max="86400" :precision="3"
-                :controls="false" placeholder="如 10（支持小数）" style="width: 300px" />
-            </el-form-item>
-            <el-form-item label="视频分辨率">
-              <el-input v-model="previewForm.video_resolution" placeholder="如 1080p" clearable style="width: 300px" />
-            </el-form-item>
-            <el-form-item label="视频任务类型">
-              <el-input v-model="previewForm.video_task_type" placeholder="如 text2video" clearable style="width: 300px" />
-            </el-form-item>
+            <el-collapse v-model="mediaOpen" class="preview-advanced">
+              <el-collapse-item name="media" title="媒体参数（图片 / 视频，可选）">
+                <el-form-item label="图片尺寸">
+                  <el-input v-model="previewForm.image_size" placeholder="如 1024x1024" clearable style="width: 300px" />
+                </el-form-item>
+                <el-form-item label="视频秒数">
+                  <el-input-number v-model="previewForm.video_seconds" :min="0" :max="86400" :precision="3"
+                    :controls="false" placeholder="如 10（支持小数）" style="width: 300px" />
+                </el-form-item>
+                <el-form-item label="视频分辨率">
+                  <el-input v-model="previewForm.video_resolution" placeholder="如 1080p" clearable style="width: 300px" />
+                </el-form-item>
+                <el-form-item label="视频任务类型">
+                  <el-input v-model="previewForm.video_task_type" placeholder="如 text2video" clearable style="width: 300px" />
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
 
             <el-form-item>
               <el-button type="primary" :icon="Search" :loading="previewing" @click="runPreview">试算</el-button>
@@ -343,6 +348,7 @@
           />
           <PreviewPanel :resp="previewResp" />
         </el-card>
+        </div>
       </el-tab-pane>
 
       <!-- ===== Tab4 导入/导出 ===== -->
@@ -681,6 +687,8 @@ const previewRules: FormRules = {
   model_id: [{ required: true, message: '请输入模型 ID', trigger: 'blur' }],
 }
 const previewing = ref(false)
+/** 媒体参数默认收起，仅图片/视频计价时展开 */
+const mediaOpen = ref<string[]>([])
 const previewResp = ref<PreviewResp | null>(null)
 // 上次试算后参数又变更过 → 旧结果已过期，置 stale 提示
 const previewStale = ref(false)
@@ -776,6 +784,7 @@ function resetPreview() {
   previewRunKey = ''
   previewStale.value = false
   previewResp.value = null
+  mediaOpen.value = []
 }
 
 // —— Tab4 导出 ——
@@ -823,8 +832,38 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.preview-form-card {
-  max-width: 900px;
+.preview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.preview-form-card :deep(.el-input),
+.preview-form-card :deep(.el-select),
+.preview-form-card :deep(.el-date-editor),
+.preview-form-card :deep(.el-input-number) {
+  max-width: 100%;
+}
+.preview-layout .section-card {
+  position: sticky;
+  top: 16px;
+}
+.preview-advanced {
+  margin: 8px 0 16px;
+  border-top: 1px solid var(--nx-border-subtle);
+  border-bottom: none;
+}
+.preview-advanced :deep(.el-collapse-item__header) {
+  font-size: var(--nx-font-small);
+  color: var(--nx-text-2);
+}
+@media (max-width: 1200px) {
+  .preview-layout {
+    grid-template-columns: 1fr;
+  }
+  .preview-layout .section-card {
+    position: static;
+  }
 }
 .filter-select {
   width: 240px;

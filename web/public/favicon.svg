@@ -1,10 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4f46e5"/>
-      <stop offset="1" stop-color="#7c3aed"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="14" fill="url(#g)"/>
-  <text x="32" y="41" font-family="Inter, system-ui, sans-serif" font-size="22" font-weight="800" fill="#fff" text-anchor="middle" letter-spacing="1">next</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>NextAPI</title>
+  <style>
+    :root { --bg: #f0f5f1; --traces: #e1eae3; --pattern: #a9bbb0; --n: #1b231e; --next: #35a65f; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #262b27; --traces: #313832; --pattern: #5c6760; --n: #f5f5f5; --next: #a1a8a3; } }
+  </style>
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="var(--bg)"/>
+  <path d="M8 12H14L20 6H28M36 58H44L50 52H56" stroke="var(--traces)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M17 19L8 32L17 45M47 19L56 32L47 45" stroke="var(--pattern)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <g stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 44V20M41 44V20" stroke="var(--n)"/>
+    <path d="M23 20L41 44" stroke="var(--next)"/>
+  </g>
 </svg>

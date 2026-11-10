@@ -1,8 +1,9 @@
 <template>
-  <el-dialog
+  <el-drawer
     v-model="visible"
     :title="isEdit ? '编辑价格规则' : '新建价格规则'"
-    class="dlg-wide long-form"
+    size="min(860px, 96vw)"
+    class="drawer-form"
     :close-on-click-modal="false"
     :before-close="handleBeforeClose"
     destroy-on-close
@@ -130,7 +131,7 @@
       <el-button @click="onCancel">取消</el-button>
       <el-button type="primary" :loading="saving" @click="submit">保存</el-button>
     </template>
-  </el-dialog>
+  </el-drawer>
 </template>
 
 <script setup lang="ts">

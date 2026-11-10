@@ -120,7 +120,15 @@
           <el-input v-model="dlg.form.alias" placeholder="客户端请求使用的模型名，如 fast-gpt" />
         </el-form-item>
         <el-form-item label="实际模型" prop="model">
-          <el-input v-model="dlg.form.model" placeholder="路由匹配使用的真实模型 ID，如 gpt-4o-mini" />
+          <el-autocomplete
+            v-model="dlg.form.model"
+            :fetch-suggestions="suggestModels"
+            placeholder="选择已有模型，或直接输入真实模型 ID"
+            clearable
+            style="width: 100%"
+            @focus="loadModelOptions"
+          />
+          <div class="hint" style="width: 100%">建议来自现有路由与别名；未来模型仍可直接手动输入。</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="dlg.form.enabled" />
@@ -142,7 +150,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
-import { aliasApi } from '@/api'
+import { aliasApi, routeApi } from '@/api'
 import { errMsg } from '@/api/http'
 import { confirmDanger } from '@/utils/confirm'
 import CopyText from '@/components/common/CopyText.vue'
@@ -225,6 +233,42 @@ watch(
   },
 )
 
+// —— 实际模型建议：首次打开弹窗时按需拉取一次现成路由，不轮询、不常驻大对象 ——
+const modelOptions = ref<string[]>([])
+let modelOptionsLoaded = false
+
+async function loadModelOptions() {
+  if (modelOptionsLoaded) return
+  modelOptionsLoaded = true
+  try {
+    const routes = await routeApi.list()
+    const names = new Set<string>()
+    for (const r of routes) {
+      if (r.model_pattern && !r.model_pattern.includes('*')) names.add(r.model_pattern)
+      if (r.override_model?.trim()) names.add(r.override_model.trim())
+    }
+    for (const a of items.value) if (a.model) names.add(a.model)
+    modelOptions.value = [...names].sort((a, b) => a.localeCompare(b))
+  } catch {
+    // 建议不可用不影响手动输入；下次打开弹窗可重试
+    modelOptionsLoaded = false
+  }
+}
+
+function suggestModels(
+  query: string,
+  cb: (items: Array<{ value: string }>) => void,
+): void {
+  const q = query.trim().toLowerCase()
+  const pool = new Set<string>([...modelOptions.value, ...items.value.map((i) => i.model)])
+  cb(
+    [...pool]
+      .filter((m) => m && (!q || m.toLowerCase().includes(q)))
+      .slice(0, 20)
+      .map((value) => ({ value })),
+  )
+}
+
 // —— 脏表单守卫：表单值变化需二次确认才关闭 ——
 const dirtyGuard = useDirtyGuard(() => dlg.form)
 
@@ -246,6 +290,7 @@ function openCreate() {
   dlg.id = ''
   dlg.form = { alias: '', model: '', enabled: true }
   dlg.visible = true
+  void loadModelOptions()
   dirtyGuard.snapshot()
   nextTick(() => formRef.value?.clearValidate())
 }
@@ -255,6 +300,7 @@ function openEdit(row: ModelAliasRow) {
   dlg.id = row.id
   dlg.form = { alias: row.alias, model: row.model, enabled: row.enabled }
   dlg.visible = true
+  void loadModelOptions()
   dirtyGuard.snapshot()
   nextTick(() => formRef.value?.clearValidate())
 }

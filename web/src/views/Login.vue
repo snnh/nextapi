@@ -3,7 +3,7 @@
     <div class="login-theme"><ThemeToggle /></div>
     <el-card class="login-card" shadow="never">
       <div class="login-head">
-        <div class="logo">next</div>
+        <AppLogo class="logo" :size="56" />
         <h1 class="title">NextAPI 管理后台</h1>
         <div class="subtitle">自托管 LLM 网关</div>
       </div>
@@ -67,6 +67,7 @@ import { Key, Lock, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { errMsg } from '@/api/http'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import AppLogo from '@/components/common/AppLogo.vue'
 import type { ApiErrorBody } from '@/api/types'
 
 const router = useRouter()
@@ -170,16 +171,8 @@ async function handleLogin() {
 }
 
 .logo {
-  display: inline-grid;
-  place-items: center;
-  height: 42px;
-  padding: 0 16px;
-  border-radius: var(--nx-radius);
-  background: var(--nx-accent-solid);
-  color: var(--nx-on-accent);
-  font-size: var(--nx-font-lg);
-  font-weight: 800;
-  letter-spacing: 1px;
+  display: block;
+  margin: 0 auto;
 }
 
 .title {

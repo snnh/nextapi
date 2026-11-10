@@ -272,42 +272,52 @@
           <el-checkbox v-if="isEdit" v-model="form.expiresClear">清除到期时间（永不过期）</el-checkbox>
         </el-form-item>
 
-        <el-divider content-position="left">透传授权</el-divider>
+        <el-collapse v-model="advancedOpen" class="advanced-collapse">
+          <el-collapse-item name="passthrough">
+            <template #title>
+              <span class="collapse-title">透传授权</span>
+              <span class="collapse-hint">低频：仅在允许 /v1/upstream 透传时配置</span>
+            </template>
+            <el-form-item label="允许上游透传">
+              <el-switch v-model="form.allow_upstream_passthrough" />
+            </el-form-item>
 
-        <el-form-item label="允许上游透传">
-          <el-switch v-model="form.allow_upstream_passthrough" />
-        </el-form-item>
+            <el-form-item label="透传上游">
+              <el-input
+                v-model="form.passthroughText"
+                type="textarea"
+                :rows="3"
+                :disabled="form.passthroughClear"
+                placeholder="每行一个上游名；需网关 Key 显式授权的上游名列表，/v1/upstream/{name} 透传用"
+              />
+              <el-checkbox v-if="isEdit" v-model="form.passthroughClear">清除透传上游</el-checkbox>
+            </el-form-item>
+          </el-collapse-item>
+          <el-collapse-item name="debug">
+            <template #title>
+              <span class="collapse-title">调试记录</span>
+              <span class="collapse-hint">完整记录请求/响应，到期自动关闭</span>
+            </template>
+            <el-form-item label="调试模式">
+              <el-switch v-model="form.debug_enabled" />
+            </el-form-item>
 
-        <el-form-item label="透传上游">
-          <el-input
-            v-model="form.passthroughText"
-            type="textarea"
-            :rows="3"
-            :disabled="form.passthroughClear"
-            placeholder="每行一个上游名；需网关 Key 显式授权的上游名列表，/v1/upstream/{name} 透传用"
-          />
-          <el-checkbox v-if="isEdit" v-model="form.passthroughClear">清除透传上游</el-checkbox>
-        </el-form-item>
+            <el-form-item label="调试到期">
+              <el-date-picker
+                v-model="form.debug_expires_at"
+                type="datetime"
+                value-format="YYYY-MM-DD HH:mm:ss"
+                :disabled-date="disablePastDate"
+                placeholder="可清空；到期自动关闭"
+                style="width: 320px"
+              />
+              <div class="hint" style="width: 100%">
+                调试模式完整记录请求/响应（脱敏后），最长时间受运行参数 log_debug_ttl_minutes 限制，到时自动关闭。
+              </div>
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
 
-        <el-divider content-position="left">调试</el-divider>
-
-        <el-form-item label="调试模式">
-          <el-switch v-model="form.debug_enabled" />
-        </el-form-item>
-
-        <el-form-item label="调试到期">
-          <el-date-picker
-            v-model="form.debug_expires_at"
-            type="datetime"
-            value-format="YYYY-MM-DD HH:mm:ss"
-            :disabled-date="disablePastDate"
-            placeholder="可清空；到期自动关闭"
-            style="width: 320px"
-          />
-          <div class="hint" style="width: 100%">
-            调试模式完整记录请求/响应（脱敏后），最长时间受运行参数 log_debug_ttl_minutes 限制，到时自动关闭。
-          </div>
-        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -422,6 +432,8 @@ watch(filteredKeys, (list) => {
 
 // —— 弹窗状态 ——
 const dialogVisible = ref(false)
+/** 低频分组：透传授权 / 调试记录，默认收起 */
+const advancedOpen = ref<string[]>([])
 const saving = ref(false)
 const isEdit = ref(false)
 const editingRow = ref<ApiKeyRow | null>(null)
@@ -662,6 +674,7 @@ function openCreate() {
   editingRow.value = null
   secretKey.value = ''
   Object.assign(form, defaultForm())
+  advancedOpen.value = []
   dialogVisible.value = true
   snapshot()
 }
@@ -685,6 +698,10 @@ function openEdit(row: ApiKeyRow) {
   base.debug_expires_at = row.debug_expires_at ? dayjs(row.debug_expires_at).format('YYYY-MM-DD HH:mm:ss') : null
   base.expires_at = row.expires_at ? dayjs(row.expires_at).format('YYYY-MM-DD HH:mm:ss') : null
   Object.assign(form, base)
+  advancedOpen.value = [
+    ...(row.allow_upstream_passthrough ? ['passthrough'] : []),
+    ...(row.debug_enabled ? ['debug'] : []),
+  ]
   dialogVisible.value = true
   snapshot()
 }
@@ -903,5 +920,23 @@ function gotoModels() {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.advanced-collapse {
+  margin-top: 16px;
+  border-top: 1px solid var(--nx-border-subtle);
+  border-bottom: none;
+}
+.collapse-title {
+  font-weight: 600;
+  color: var(--nx-text);
+}
+.collapse-hint {
+  margin-left: 8px;
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-caption);
+}
+.advanced-collapse :deep(.el-collapse-item__header) {
+  font-size: var(--nx-font-body);
 }
 </style>

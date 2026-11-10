@@ -21,6 +21,12 @@ npm run typecheck  # vue-tsc
 `web/dist` 由后端 rust-embed 内嵌进单二进制（Docker 多阶段构建），管理后台与 API 同源部署。
 注意：后端的 `cargo build` / `cargo test` 编译期会读 `web/dist`，目录缺失会编译失败。
 
+## 品牌与主题
+
+- 标识由小型几何 `N`、API 尖括号和浅色线路底纹组成；`N` 对应 NextAPI，斜笔表达前进与轻量。
+- `src/components/common/AppLogo.vue` 是页面内联组件，已用于登录页和侧栏；默认浅色主题为深灰 + 品牌绿，深色主题自动切换为分层灰度。
+- `public/logo.svg` 为彩色横版，`public/logo-mono.svg` 为黑白灰横版，`public/favicon.svg` 为独立图标；SVG 均不依赖外部图片或字体文件。
+
 ## 代码结构
 
 ```

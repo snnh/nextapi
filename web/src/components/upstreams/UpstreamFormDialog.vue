@@ -1,8 +1,9 @@
 <template>
-  <el-dialog
+  <el-drawer
     v-model="visible"
     :title="isEdit ? '编辑上游' : '新建上游'"
-    class="dlg-wide long-form"
+    :size="isMobile ? '100%' : 'min(860px, 92vw)'"
+    class="drawer-form"
     :close-on-click-modal="false"
     :before-close="onBeforeClose"
     destroy-on-close
@@ -716,7 +717,7 @@
       <el-button :loading="saving" @click="submit(false)">保存</el-button>
       <el-button type="primary" :loading="saving" @click="submit(true)">保存并测试</el-button>
     </template>
-  </el-dialog>
+  </el-drawer>
 </template>
 
 <script setup lang="ts">

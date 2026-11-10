@@ -17,69 +17,77 @@
       </div>
     </div>
 
-    <div class="page-card tabs-card">
-      <!-- 初始加载失败：错误条 + 重试 -->
-      <el-alert v-if="loadError" class="load-error" type="error" show-icon :closable="false">
-        <div class="load-error-body">
-          <span class="err-text">运行参数加载失败：{{ loadError }}</span>
-          <el-button size="small" type="primary" plain :loading="settingsLoading" @click="loadSettings">
-            重试
-          </el-button>
-        </div>
-      </el-alert>
+    <div class="settings-layout">
+      <nav class="settings-nav" aria-label="设置分类">
+        <button
+          v-for="tab in SETTINGS_TABS"
+          :key="tab.name"
+          type="button"
+          class="nav-item"
+          :class="{ 'is-active': activeTab === tab.name }"
+          :aria-current="activeTab === tab.name ? 'page' : undefined"
+          @click="switchTab(tab.name)"
+        >
+          <el-icon><component :is="tab.icon" /></el-icon>
+          <span>{{ tab.label }}</span>
+          <span
+            v-if="tab.name === 'runtime' && runtimeDirty"
+            class="nav-dirty"
+            :title="`${runtimeDirty} 项未保存`"
+          >{{ runtimeDirty }}</span>
+        </button>
+      </nav>
 
-      <el-tabs v-model="activeTab" :before-leave="onBeforeLeave">
-        <el-tab-pane name="runtime">
-          <template #label>
-            <span class="tab-label">
-              <el-icon><Operation /></el-icon>运行参数
-              <span v-if="runtimeDirty" class="tab-dirty" :title="`${runtimeDirty} 项未保存`">{{ runtimeDirty }}</span>
-            </span>
-          </template>
+      <el-select
+        class="settings-tab-select"
+        :model-value="activeTab"
+        aria-label="设置分类"
+        @change="onMobileTabChange"
+      >
+        <el-option v-for="tab in SETTINGS_TABS" :key="tab.name" :label="tab.label" :value="tab.name" />
+      </el-select>
+
+      <div class="settings-content page-card">
+        <!-- 初始加载失败：错误条 + 重试 -->
+        <el-alert v-if="loadError" class="load-error" type="error" show-icon :closable="false">
+          <div class="load-error-body">
+            <span class="err-text">运行参数加载失败：{{ loadError }}</span>
+            <el-button size="small" type="primary" plain :loading="settingsLoading" @click="loadSettings">
+              重试
+            </el-button>
+          </div>
+        </el-alert>
+
+        <div v-if="visited.has('runtime')" v-show="activeTab === 'runtime'">
           <RuntimeParamsPanel
             ref="runtimePanelRef"
             :settings="settings"
             @saved="loadSettings"
             @dirty-change="runtimeDirty = $event"
           />
-        </el-tab-pane>
-        <el-tab-pane name="proxy" lazy>
-          <template #label>
-            <span class="tab-label"><el-icon><Connection /></el-icon>代理管理</span>
-          </template>
+        </div>
+        <div v-if="visited.has('proxy')" v-show="activeTab === 'proxy'">
           <ProxyPanel :settings="settings" />
-        </el-tab-pane>
-        <el-tab-pane name="update" lazy>
-          <template #label>
-            <span class="tab-label"><el-icon><Refresh /></el-icon>更新检查</span>
-          </template>
+        </div>
+        <div v-if="visited.has('update')" v-show="activeTab === 'update'">
           <UpdateCheckPanel :settings="settings" />
-        </el-tab-pane>
-        <el-tab-pane name="audit" lazy>
-          <template #label>
-            <span class="tab-label"><el-icon><Document /></el-icon>审计日志</span>
-          </template>
+        </div>
+        <div v-if="visited.has('audit')" v-show="activeTab === 'audit'">
           <AuditPanel />
-        </el-tab-pane>
-        <el-tab-pane name="security" lazy>
-          <template #label>
-            <span class="tab-label"><el-icon><Lock /></el-icon>安全</span>
-          </template>
+        </div>
+        <div v-if="visited.has('security')" v-show="activeTab === 'security'">
           <TotpPanel />
-        </el-tab-pane>
-        <el-tab-pane name="system" lazy>
-          <template #label>
-            <span class="tab-label"><el-icon><Monitor /></el-icon>系统</span>
-          </template>
+        </div>
+        <div v-if="visited.has('system')" v-show="activeTab === 'system'">
           <SystemInfoPanel />
-        </el-tab-pane>
-      </el-tabs>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { Connection, Document, Lock, Monitor, Operation, Refresh } from '@element-plus/icons-vue'
@@ -94,16 +102,27 @@ import AuditPanel from '@/components/settings/AuditPanel.vue'
 import SystemInfoPanel from '@/components/settings/SystemInfoPanel.vue'
 import TotpPanel from '@/components/settings/TotpPanel.vue'
 
-/** 页签名（对应 el-tab-pane name），用于 ?tab= 深链恢复 */
+/** 设置分类名，用于左侧导航与 ?tab= 深链恢复 */
 const TAB_NAMES = ['runtime', 'proxy', 'update', 'audit', 'security', 'system'] as const
 type TabName = (typeof TAB_NAMES)[number]
 
 const route = useRoute()
 const router = useRouter()
 
+const SETTINGS_TABS = [
+  { name: 'runtime', label: '运行参数', icon: Operation },
+  { name: 'proxy', label: '代理管理', icon: Connection },
+  { name: 'update', label: '更新检查', icon: Refresh },
+  { name: 'audit', label: '审计日志', icon: Document },
+  { name: 'security', label: '安全', icon: Lock },
+  { name: 'system', label: '系统', icon: Monitor },
+] as const
+
 const runtimePanelRef = ref<InstanceType<typeof RuntimeParamsPanel> | null>(null)
 const runtimeDirty = ref(0)
-const activeTab = ref('runtime')
+const activeTab = ref<TabName>('runtime')
+/** 已访问过的分类才挂载，避免一次性渲染全部设置面板 */
+const visited = reactive(new Set<TabName>(['runtime']))
 const settings = ref<SettingItem[]>([])
 const settingsLoading = ref(false)
 const loadError = ref('')
@@ -181,6 +200,21 @@ async function onBeforeLeave(newName: string | number): Promise<boolean> {
   }
 }
 
+/** 切换设置分类；运行参数有未保存改动时先确认 */
+async function switchTab(name: TabName) {
+  if (name === activeTab.value) return
+  if (!(await onBeforeLeave(name))) return
+  activeTab.value = name
+  visited.add(name)
+}
+
+/** 移动端分类下拉（取消切换时由 model-value 自动回到当前分类） */
+function onMobileTabChange(value: string | number | boolean | undefined) {
+  if (typeof value !== 'string') return
+  if (!(TAB_NAMES as readonly string[]).includes(value)) return
+  void switchTab(value as TabName)
+}
+
 /** 离开设置页时同样保护未保存修改（SPA 路由跳转） */
 onBeforeRouteLeave(async () => {
   if (!runtimePanelRef.value?.isDirty) return true
@@ -212,6 +246,7 @@ onMounted(() => {
     router.replace({ query: q })
   }
   activeTab.value = initial
+  visited.add(initial)
   loadSettings()
 })
 </script>
@@ -223,20 +258,59 @@ onMounted(() => {
 .page-head-summary {
   margin-top: 6px;
 }
-.tab-label {
-  display: inline-flex;
+.settings-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius-lg);
+  background: var(--nx-surface);
+}
+.nav-item {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--nx-radius);
+  background: transparent;
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-small);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--nx-dur-fast) var(--nx-ease),
+    color var(--nx-dur-fast) var(--nx-ease);
 }
-.tab-label .el-icon {
-  font-size: 14px;
+.nav-item:hover {
+  background: var(--nx-hover);
+  color: var(--nx-text);
 }
-.tab-dirty {
+.nav-item.is-active {
+  background: var(--nx-accent-soft);
+  color: var(--nx-accent);
+  font-weight: 600;
+}
+.nav-item:focus-visible {
+  outline: 2px solid var(--nx-focus-ring);
+  outline-offset: -2px;
+}
+.nav-dirty {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 16px;
   height: 16px;
+  margin-left: auto;
   padding: 0 5px;
   border-radius: var(--nx-radius-round);
   background: var(--nx-warning);
@@ -244,6 +318,26 @@ onMounted(() => {
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
+}
+.settings-content {
+  min-width: 0;
+  margin-bottom: 0;
+}
+.settings-tab-select {
+  display: none;
+  width: 100%;
+}
+@media (max-width: 1000px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+  .settings-nav {
+    display: none;
+  }
+  .settings-tab-select {
+    display: block;
+    margin-bottom: 12px;
+  }
 }
 .load-error {
   margin-bottom: 14px;

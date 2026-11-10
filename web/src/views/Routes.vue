@@ -29,6 +29,9 @@
         <div class="hint" v-if="unpricedModelCount > 0">
           有 {{ unpricedModelCount }} 个模型未配置价格（仍可调用，但不计成本）
         </div>
+        <div v-if="diffTotal > 0" class="hint diff-summary">
+          待保存：新增 {{ draftDiff.added }} · 修改 {{ draftDiff.modified }} · 删除 {{ draftDiff.deleted }}
+        </div>
         <template v-if="dirtyCount > 0">
           <div class="hint">有 {{ dirtyCount }} 条修改未保存</div>
           <el-button @click="discardLocal">放弃修改</el-button>
@@ -42,6 +45,9 @@
         <el-button @click="discardLocal">放弃本地修改</el-button>
         <div class="spacer" />
         <div class="hint" v-if="dirtyCount > 0">有 {{ dirtyCount }} 条修改未保存</div>
+        <div v-if="diffTotal > 0" class="hint diff-summary">
+          新增 {{ draftDiff.added }} · 修改 {{ draftDiff.modified }} · 删除 {{ draftDiff.deleted }}
+        </div>
         <el-button type="primary" :loading="saving" @click="saveAll">
           保存全部（{{ drafts.length }} 条）
         </el-button>
@@ -604,6 +610,11 @@ const dialogTitle = computed(() => (isEdit.value ? '编辑规则' : '新增规�
 const dirtyGuard = useDirtyGuard(() => form)
 
 const dirtyCount = computed(() => drafts.value.filter((r) => isRowDirty(r)).length)
+/** 常驻差异摘要：新增 / 修改 / 删除；删除全部路由时也能提前看到影响 */
+const draftDiff = computed(() => computeDiff())
+const diffTotal = computed(
+  () => draftDiff.value.added + draftDiff.value.modified + draftDiff.value.deleted,
+)
 
 // —— 数据加载 ——
 async function loadData() {

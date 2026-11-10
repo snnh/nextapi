@@ -40,6 +40,10 @@ withDefaults(
   background: var(--nx-success-soft);
   border-color: var(--nx-success-border);
 }
+/* 状态点用更亮的绿，文字仍用可读的深绿 */
+.is-success .status-dot {
+  background: var(--nx-success-bright);
+}
 .is-warning {
   color: var(--nx-warning);
   background: var(--nx-warning-soft);
@@ -49,6 +53,10 @@ withDefaults(
   color: var(--nx-danger);
   background: var(--nx-danger-soft);
   border-color: var(--nx-danger-border);
+}
+/* 状态点用更正的红，文字仍用可读的深红 */
+.is-danger .status-dot {
+  background: var(--nx-danger-bright);
 }
 .is-info {
   color: var(--nx-info);

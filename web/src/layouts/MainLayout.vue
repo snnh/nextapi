@@ -22,11 +22,19 @@
           @click="closeNav"
         />
         <div class="brand" :class="{ 'brand-collapsed': collapsed && !isMobile }">
-          <span class="brand-mark">next</span>
+          <AppLogo class="brand-mark" :size="32" />
           <div v-show="!collapsed || isMobile" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
         </div>
-        <el-menu :default-active="active" router :collapse="collapsed && !isMobile" :collapse-transition="false"
-          class="menu" popper-class="aside-menu-popup" @select="onMenuSelect">
+        <el-menu
+          ref="menuRef"
+          :default-active="active"
+          router
+          :collapse="collapsed && !isMobile"
+          :collapse-transition="false"
+          class="menu"
+          popper-class="aside-menu-popup"
+          @select="onMenuSelect"
+        >
           <!-- 菜单按「概览 / 接入 / 监控 / 高级」分组展示（index 仍为路由 path，兼容旧书签） -->
           <el-sub-menu v-for="g in menus" :key="g.label" :index="g.label">
             <template #title>
@@ -90,13 +98,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, type MenuInstance } from 'element-plus'
 import { ArrowDown, Close, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 import SystemStatusBadge from '@/components/common/SystemStatusBadge.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import AppLogo from '@/components/common/AppLogo.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
 const route = useRoute()
@@ -147,6 +156,7 @@ const menus = computed<MenuGroup[]>(() => {
 })
 
 const active = computed(() => route.path)
+const menuRef = ref<MenuInstance | null>(null)
 const NAV_COLLAPSED_KEY = 'nextapi.nav.collapsed'
 const collapsed = ref(readCollapsed())
 const navOpen = ref(false)
@@ -174,9 +184,39 @@ const { isMobile } = useBreakpoint()
 watch(isMobile, (mobile) => {
   if (!mobile) navOpen.value = false
 })
+
+/** 默认展开当前页面所在分组，其余分组收起；用户手动展开状态在当前页面内保持 */
+function syncOpenGroup(path: string) {
+  const menu = menuRef.value
+  // 桌面收起态只显示图标，不在这里触发分组弹层；展开侧栏时再同步
+  if (!menu || (collapsed.value && !isMobile.value)) return
+  const currentGroup = menus.value.find((g) => g.items.some((m) => m.path === path))
+  for (const g of menus.value) {
+    if (g.label === currentGroup?.label) menu.open(g.label)
+    else menu.close(g.label)
+  }
+}
+
+watch(
+  () => route.path,
+  async () => {
+    await nextTick()
+    syncOpenGroup(route.path)
+  },
+)
+
+// 从收起态展开时，重新定位到当前页面所在分组
+watch(collapsed, async (isCollapsed) => {
+  if (isCollapsed) return
+  await nextTick()
+  syncOpenGroup(route.path)
+})
+
 // 侧栏底部版本号（来自后端真实二进制版本，失败静默）
 const version = ref('')
 onMounted(async () => {
+  await nextTick()
+  syncOpenGroup(route.path)
   try {
     version.value = (await systemApi.version()).version
   } catch {
@@ -325,18 +365,8 @@ async function onCommand(cmd: string) {
   padding: 18px 0;
 }
 .brand-mark {
+  display: block;
   flex-shrink: 0;
-  height: 30px;
-  padding: 0 10px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--nx-radius);
-  background: var(--nx-accent-solid);
-  color: var(--nx-on-accent);
-  font-weight: 800;
-  font-size: var(--nx-font-body);
-  letter-spacing: 0.5px;
-  line-height: 1;
 }
 .brand strong {
   display: block;
@@ -466,7 +496,7 @@ async function onCommand(cmd: string) {
   color: var(--nx-text);
 }
 .page-title {
-  font-size: var(--nx-font-title);
+  font-size: 18px;
   font-weight: 600;
   color: var(--nx-text);
   white-space: nowrap;

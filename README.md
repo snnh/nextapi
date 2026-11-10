@@ -1,6 +1,9 @@
 <div align="center">
-  <h1>NextAPI</h1>
-  <p><strong>自托管 LLM 网关：四协议互转 · 多上游聚合 · 成本统计</strong></p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./web/public/logo-mono.svg">
+    <img src="./web/public/logo.svg" alt="NextAPI" width="248">
+  </picture>
+  <p><strong>轻量、快速、适合个人自托管的 LLM 网关：四协议互转 · 多上游聚合 · 成本统计</strong></p>
   <p>
     <a href="https://github.com/snnh/nextapi/releases"><img src="https://img.shields.io/github/v/release/snnh/nextapi" alt="Release"></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
@@ -24,7 +27,7 @@ NextAPI 是一个自托管的 LLM 网关，Rust + axum + PostgreSQL 写就，管
 - Docker：Docker 20.10+ 与 Compose v2。镜像里依赖齐全，启动时自动执行数据库迁移，推荐这种方式；
 - 源码运行：Linux / macOS，Rust stable、Node.js ≥ 20（只用于构建前端）、PostgreSQL 15+。
 
-资源：空载通常几十 MiB；管理后台登录后 glibc 可能保留堆内存，v0.4.0 起会在登录后与周期任务中主动 `malloc_trim`，但仍建议给容器 512 MiB 配额；磁盘预留 500 MiB 以上，之后主要增长的是 PostgreSQL 里的日志。
+资源：本机近期实测空载进程 RSS 约 18.30 MB（仅为单次本机结果，实际随配置与运行历史变化）；管理后台登录后 glibc 可能保留堆内存，v0.4.0 起会在登录后与周期任务中主动 `malloc_trim`，但仍建议给容器 512 MiB 配额；磁盘预留 500 MiB 以上，之后主要增长的是 PostgreSQL 里的日志。
 
 客户端：
 
