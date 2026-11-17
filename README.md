@@ -20,6 +20,28 @@ NextAPI 是一个自托管的 LLM 网关，Rust + axum + PostgreSQL 写就，管
                                         管理后台（内嵌 SPA）+ PostgreSQL（日志 / 计价 / 配额）
 ```
 
+## 界面预览
+
+> 截图以 OPPO Sans 渲染；页面数据均为随机生成的演示数据。点击缩略图可查看原图。
+
+<p align="center">
+  <a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" width="250" alt="仪表盘"></a>
+  <a href="docs/screenshots/upstreams.png"><img src="docs/screenshots/upstreams.png" width="250" alt="上游供应商"></a>
+  <a href="docs/screenshots/request-logs.png"><img src="docs/screenshots/request-logs.png" width="250" alt="请求日志"></a>
+</p>
+<p align="center">
+  <a href="docs/screenshots/pricing.png"><img src="docs/screenshots/pricing.png" width="250" alt="价格管理"></a>
+  <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="250" alt="系统设置"></a>
+</p>
+
+**移动端**
+
+<p align="center">
+  <a href="docs/screenshots/mobile-dashboard.png"><img src="docs/screenshots/mobile-dashboard.png" width="150" alt="移动端仪表盘"></a>
+  <a href="docs/screenshots/mobile-menu.png"><img src="docs/screenshots/mobile-menu.png" width="150" alt="移动端侧栏菜单"></a>
+  <a href="docs/screenshots/mobile-logs.png"><img src="docs/screenshots/mobile-logs.png" width="150" alt="移动端请求日志"></a>
+</p>
+
 ## 配置要求
 
 服务端二选一：
