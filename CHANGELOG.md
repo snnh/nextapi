@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.5.0] - 2026-11-26
+
+### Added
+- **供应商预设按官方文档逐个校准（16 个）**：
+  - 新增协议支持：Kimi 补 OpenAI Responses 与 Anthropic（`/anthropic` 独立根）、百度千帆补 Anthropic
+    （`/anthropic` 独立根，供 Claude Code 直连）、火山方舟补 OpenAI Responses（250615 及之后模型默认支持）、
+    OpenRouter 补 Anthropic（同根 `/api/v1/messages`）、腾讯云 Token Plan 补 OpenAI Responses。
+  - Anthropic 版本头改为可配置：新增 `gateway.anthropic_version`（系统设置可改，热生效）与渠道级
+    `extra.anthropic_version`，兜底值 `2023-06-01`；官方按日期发版时无需升级即可切换。
+  - 预设描述同步官方现役信息（Gemini 4 系 neon/hydrogen/carbon/argon 四档思考、Claude 5 系 adaptive 思考、
+    DeepSeek V4、Kimi K3 等）。
+
+### Fixed
+- **预设接入地址修正**（新建渠道时生效）：
+  - Zenmux：域名由 `api.zenmux.ai/v1` 更正为 `zenmux.ai/api/v1`，并按官方文档为 Anthropic
+    （`/api/anthropic/v1`）与 Gemini（Vertex 形状 `/api/vertex-ai/v1/publishers/google`）配置独立根，
+    此前这两个协议会打到不存在的路径。
+  - 腾讯云 Token Plan：域名由 `api.lkeap.cloud.tencent.com` 更正为 `tokenhub.tencentmaas.com`
+    （OpenAI `/plan/v3`、Anthropic `/plan/anthropic/v1`）。
+
+### Changed
+- **协议矩阵文档**：补充 Gemini 4 系的模型级规则说明（思考档位不做换算、原样透传；采样参数被忽略并剔除；
+  `frequency_penalty`/`presence_penalty`/`candidate_count` 一律 400 故不下发）。
+
 ## [0.4.1] - 2026-11-10
 
 ### Changed
