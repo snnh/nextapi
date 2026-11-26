@@ -1,4 +1,4 @@
-//! 网关 Key 管理 API（/api/keys，PLAN.md §5.2 / §7.2）。
+//! 网关 Key 管理 API（/api/keys）。
 //!
 //! - Key 格式 `sk-nx-{32位随机小写字母数字}`，DB 只存 SHA-256 哈希 + 前 8 位前缀；
 //! - 完整 Key 仅在创建/轮换时展示一次；列表与更新绝不输出 Key/key_hash/prefix 之外的敏感信息；

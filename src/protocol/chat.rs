@@ -7,7 +7,7 @@
 //! （含 cache 字段 prompt_tokens_details）。
 //! 流式：chat.completion.chunk 逐条映射；终止载荷为 "[DONE]"。
 //!
-//! 无法映射能力处理（PLAN.md §4.3）：思考/联网搜索等 OpenRouter / Anthropic 扩展字段（ext）
+//! 无法映射能力处理：思考/联网搜索等 OpenRouter / Anthropic 扩展字段（ext）
 //! 在 OpenAI Chat 无对应字段 → 记录 ctx.degrade。
 
 use serde_json::{Map, Value};

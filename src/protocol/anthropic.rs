@@ -2,7 +2,7 @@
 
 //! Anthropic Messages 适配器（/v1/messages）。
 //!
-//! 要点（PLAN.md §4.2/§4.4）：
+//! 要点：
 //! - system 提示 → 顶层 `system` 字段；`max_tokens` 必填，入口未提供时转换填充默认 65536；
 //! - thinking 扩展块（含 signature 原样携带）、cache_control 透传；
 //! - 流式事件：message_start / content_block_* / message_delta / message_stop；

@@ -1,4 +1,4 @@
-//! 模型路由管理 API（/api/model-routes，PLAN.md §5.3 / §7.2）。
+//! 模型路由管理 API（/api/model-routes）。
 //!
 //! - GET /：全量路由（附 `upstream_name`，JOIN upstreams 或内存合并）；
 //! - PUT /：整体批量替换 —— body 为路由数组，事务内 DELETE 全表 + 逐条 INSERT；

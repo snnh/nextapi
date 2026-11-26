@@ -113,7 +113,7 @@ pub fn parse_auth_json(raw: &str) -> Result<CodexOAuth, String> {
 // 官方客户端指纹模拟（预设默认开启；extra.codex_fingerprint 可覆盖/关闭）
 // ---------------------------------------------------------------------------
 
-/// 预设客户端标识（与 docs/codex-fingerprint.md 采集样本的 codex-tui 一致）。
+/// 预设客户端标识：与官方 CLI 抓包样本一致的 `codex-tui`。
 pub const SIM_ORIGINATOR: &str = "codex-tui";
 /// 预设 User-Agent：官方 codex-tui/Windows 形态
 /// （`{originator}/{版本} ({OS} {OS版本}; {架构}) {终端}[ ({客户端名}; {版本})]`）。

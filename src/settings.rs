@@ -1,4 +1,4 @@
-//! system_settings 持久化与配置优先级引擎（PLAN.md §5.1 / §5.9）。
+//! system_settings 持久化与配置优先级引擎。
 //!
 //! 优先级：
 //! - hot 运行参数：**UI 保存值 > YAML 热加载值**（文件变化只更新 source=file 的键）；

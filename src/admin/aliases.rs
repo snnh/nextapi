@@ -1,4 +1,4 @@
-//! 模型别名管理 API（/api/aliases，M10.1 / PLAN.md §4.1）。
+//! 模型别名管理 API（/api/aliases，M10.1）。
 //!
 //! - GET /：全量别名列表；
 //! - POST /：新建（alias 唯一；与非通配路由 model_pattern 冲突 → 409；禁止链式：model

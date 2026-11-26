@@ -6,7 +6,7 @@
 //!
 //! `require_admin` 由 `main.rs` 通过 `middleware::from_fn_with_state` 挂到 `/api/*`，
 //! 校验通过后把用户名写入请求扩展（`AdminUsername`），供下方 handler 提取。
-//! 明确不做：用户注册、多用户、角色与分组（PLAN.md §1.3）。
+//! 明确不做：用户注册、多用户、角色与分组。
 //!
 //! 全部 SQL 使用运行时校验（sqlx::query），不使用 query! 宏（无编译期数据库）。
 

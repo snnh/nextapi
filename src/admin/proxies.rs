@@ -1,4 +1,4 @@
-//! 代理配置管理 API（/api/proxies，PLAN.md §5.9）。
+//! 代理配置管理 API（/api/proxies）。
 //!
 //! - 类型 http/https/socks5；端口 1..=65535；name/host 非空；
 //! - 密码落库前经 Crypto AES-256-GCM 加密（`password_enc`），响应一律不返回 `password_enc`，

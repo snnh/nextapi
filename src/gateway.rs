@@ -1,4 +1,4 @@
-//! 网关入口与请求主链路（PLAN.md §3.1/§3.2）。
+//! 网关入口与请求主链路。
 //!
 //! 请求 → 鉴权（网关 Key）→ 限流/用量上限 → 模型白名单 → 协议解析 → 路由决策
 //!      → 透传/转换 → 上游调用（重试/熔断/故障转移）→ 响应转换回入口协议 → 客户端。
@@ -718,7 +718,7 @@ fn is_stream(body: &serde_json::Value, gemini_stream: Option<bool>) -> bool {
     }
 }
 
-/// 协议决策（PLAN.md §3.2）：entry ∈ 上游支持 → 透传；否则按优先级取第一个支持的协议转换；
+/// 协议决策：entry ∈ 上游支持 → 透传；否则按优先级取第一个支持的协议转换；
 /// 无任何可服务协议 → None。
 fn decide_mode(entry: Protocol, up: &UpstreamRow) -> Option<Mode> {
     let supported = up.protocol_list();
@@ -3465,7 +3465,7 @@ async fn list_models(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
 
 /// 网关入口路由（无鉴权中间件；Key 鉴权在各 handler 内完成）。
 ///
-/// 路由清单（PLAN.md §7.1）：
+/// 路由清单：
 /// - POST /v1/chat/completions        → OpenAI Chat
 /// - POST /v1/responses               → OpenAI Responses
 /// - POST /v1/responses/compact       → Responses 服务端上下文压缩（直接转发；

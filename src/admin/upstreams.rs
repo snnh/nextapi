@@ -1,4 +1,4 @@
-//! 上游渠道管理 API（/api/upstreams，PLAN.md §5.3 / §7.2）。
+//! 上游渠道管理 API（/api/upstreams）。
 //!
 //! - `api_key_enc` / `api_key_plain`、`balance_key_enc` / `balance_key_plain` 绝不对外输出，
 //!   响应改用 `has_api_key` / `has_balance_key: bool`；

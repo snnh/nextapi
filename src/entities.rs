@@ -1,4 +1,4 @@
-//! 业务实体行结构（对应 migrations/0002_gateway.sql，PLAN.md §6）。
+//! 业务实体行结构（对应 migrations/0002_gateway.sql）。
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;

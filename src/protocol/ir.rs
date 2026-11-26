@@ -1,4 +1,4 @@
-//! 统一内部表示 IR：以 OpenAI Chat Completions 为骨架 + 扩展字段（PLAN.md §4.1）。
+//! 统一内部表示 IR：以 OpenAI Chat Completions 为骨架 + 扩展字段。
 //!
 //! 归一化约定：
 //! - `max_tokens`：OpenAI `max_tokens`/`max_completion_tokens`、Anthropic `max_tokens`、

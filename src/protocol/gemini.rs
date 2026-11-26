@@ -2,7 +2,7 @@
 
 //! Gemini generateContent 适配器（/v1beta/models/{model}:generateContent）。
 //!
-//! 要点（PLAN.md §4.2/§4.4）：
+//! 要点：
 //! - 模型在 URL 路径而非请求体（本适配器只处理 body；model 字段留空由上层从路径提取/注入）；
 //! - 系统提示 → `systemInstruction`；图片 → parts.inline_data（base64 内联）；
 //!   URL 图片需降级或交由上层受控下载（media_download 开关，M3 接线）；

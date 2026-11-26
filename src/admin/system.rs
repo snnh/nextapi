@@ -132,7 +132,7 @@ async fn get_diagnostics(
     })))
 }
 
-/// GET /status：运维状态摘要（M10.4 / PLAN.md §4.4）。
+/// GET /status：运维状态摘要（M10.4）。
 /// 安全边界：不返回 API Key、密码、JWT、加密字段或请求体——错误摘要截断至 120 字符。
 async fn get_status(
     State(state): State<Arc<AppState>>,

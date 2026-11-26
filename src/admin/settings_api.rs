@@ -1,4 +1,4 @@
-//! 系统设置 / 配置视图 API（PLAN.md §5.9 / §7.2）。
+//! 系统设置 / 配置视图 API。
 //!
 //! - `/api/settings`：运行参数键值视图（UI 全配置读写通道，持久化 system_settings）；
 //! - `/api/config`：整文件级 YAML 视图（导出掩码；导入/热加载），

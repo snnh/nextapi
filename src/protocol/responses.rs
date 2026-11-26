@@ -2,7 +2,7 @@
 
 //! OpenAI Responses 适配器（/v1/responses）。
 //!
-//! 要点（PLAN.md §4.2/§4.4）：
+//! 要点：
 //! - 系统提示 → `instructions`；输入为 `input` 数组（message / function_call_output 等 item）；
 //! - 输出 item 类型：message / reasoning / function_call；usage 为 input/output_tokens(+details)；
 //! - 有状态能力（previous_response_id、store 等）转为其他协议时列为降级能力；

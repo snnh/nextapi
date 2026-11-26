@@ -1,6 +1,6 @@
 //! 配置中心：YAML 文件加载 + hot/seed/derived 分类 + 热加载。
 //!
-//! 约定（PLAN.md §5.1）：
+//! 约定：
 //! - `hot`（热加载项）：gateway / fx_auto_fetch / price_import / media_download /
 //!   proxy / update_check / media_poller —— 文件变化即生效；
 //! - `seed`（种子项）：admin / upstreams / model_routes / price_rules / fx_rates /

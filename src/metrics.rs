@@ -1,4 +1,4 @@
-//! Prometheus 指标（/metrics 正式暴露，PLAN.md §5.5）。
+//! Prometheus 指标（/metrics 正式暴露）。
 
 use axum::{extract::State, response::IntoResponse};
 use prometheus_client::{
