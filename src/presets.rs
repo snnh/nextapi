@@ -29,6 +29,9 @@ pub struct Preset {
     /// 模型列表路径覆盖（provision 时写入 upstreams.extra.models_path；默认 /models，
     /// 如千帆 Token Plan 的模型列表在 /v1/models 而 /models 不存在）
     pub models_path: Option<&'static str>,
+    /// 渠道参数整形声明（JSON 字符串，provision 时写入 upstreams.extra.params）：
+    /// 同一协议下各渠道对思考/采样参数的接受形状不同，按官方文档逐渠道声明覆盖。
+    pub params: Option<&'static str>,
     /// 业务空间专属域名（阿里云百炼：{WorkspaceId}.{region}.maas.aliyuncs.com）。
     /// 接入时可传 workspace_id + region 走专属域名；缺省仍用上面的共享域名。
     pub workspace_domain: Option<WorkspaceDomain>,
@@ -94,8 +97,8 @@ pub struct ProvisionTarget {
     pub extra: serde_json::Value,
 }
 
-/// 全部预设（13 个）
-static PRESETS: [Preset; 13] = [
+/// 全部预设（16 个）
+static PRESETS: [Preset; 16] = [
     Preset {
         name: "dashscope",
         display_name: "阿里云百炼 DashScope",
@@ -116,6 +119,8 @@ static PRESETS: [Preset; 13] = [
         // 故覆盖根写到 /v1（endpoint_path 只拼 /messages）
         protocol_base_urls: Some(&[("anthropic", "https://dashscope.aliyuncs.com/apps/anthropic/v1")]),
         models_path: None,
+        // 百炼 Qwen 系用私有开关 enable_thinking，不认 thinking{type}
+        params: Some(r#"{"thinking_style":"enable_thinking"}"#),
         // 业务空间专属域名（推荐）：共享域名 dashscope.aliyuncs.com 自 2026-09-30 起停止新特性
         workspace_domain: Some(WorkspaceDomain {
             base_url: "https://{workspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1",
@@ -176,6 +181,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description: "百度千帆：OpenAI 兼容对话，接入即用。",
@@ -195,6 +201,7 @@ static PRESETS: [Preset; 13] = [
         )]),
         // 模型列表在 /v1/models（/models 不存在，若不覆盖探测与模型拉取会 404）
         models_path: Some("/v1/models"),
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
@@ -210,6 +217,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description: "月之暗面 Kimi：OpenAI 兼容对话，接入即用。",
@@ -225,6 +233,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: Some(&[("anthropic", "https://tokenhub.tencentmaas.com/v1")]),
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
@@ -244,6 +253,7 @@ static PRESETS: [Preset; 13] = [
             "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
         )]),
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
@@ -255,6 +265,8 @@ static PRESETS: [Preset; 13] = [
         kind: "aliyun",
         auth_kind: "api_key",
         base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        // 同百炼：Qwen 系思考开关为 enable_thinking
+        params: Some(r#"{"thinking_style":"enable_thinking"}"#),
         // 官方双根：OpenAI 兼容 /compatible-mode/v1；Anthropic 独立根 /apps/anthropic（+ /v1/messages）
         protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
@@ -274,13 +286,15 @@ static PRESETS: [Preset; 13] = [
         kind: "zhipu",
         auth_kind: "api_key",
         base_url: "https://open.bigmodel.cn/api/paas/v4",
-        protocols: &["openai_chat"],
+        // 官方双协议：OpenAI 兼容 /api/paas/v4 + Anthropic 兼容 /api/anthropic
+        protocols: &["openai_chat", "anthropic"],
         media_base_url: None,
-        protocol_base_urls: None,
+        protocol_base_urls: Some(&[("anthropic", "https://open.bigmodel.cn/api/anthropic/v1")]),
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "智谱 GLM：OpenAI 兼容对话，接入即用。",
+        description: "智谱 GLM：OpenAI 兼容与 Anthropic 兼容双协议（Anthropic 走独立 /api/anthropic 根），接入即用。",
     },
     Preset {
         name: "volcano",
@@ -292,9 +306,60 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description: "字节火山方舟：OpenAI 兼容对话，接入即用。",
+    },
+    Preset {
+        name: "openai",
+        display_name: "OpenAI",
+        kind: "openai",
+        auth_kind: "api_key",
+        base_url: "https://api.openai.com/v1",
+        // 官方双协议：Chat Completions 与 Responses 同根
+        protocols: &["openai_chat", "openai_responses"],
+        media_base_url: None,
+        protocol_base_urls: None,
+        models_path: None,
+        params: None,
+        workspace_domain: None,
+        unified_domain: None,
+        description:
+            "OpenAI 官方：Chat Completions 与 Responses 双协议，reasoning_effort / verbosity 原样透传。",
+    },
+    Preset {
+        name: "anthropic",
+        display_name: "Anthropic Claude",
+        kind: "anthropic",
+        auth_kind: "api_key",
+        base_url: "https://api.anthropic.com/v1",
+        protocols: &["anthropic"],
+        media_base_url: None,
+        protocol_base_urls: None,
+        models_path: None,
+        // thinking{type: adaptive|enabled|disabled} 与 output_config.effort 由客户端形状决定
+        params: None,
+        workspace_domain: None,
+        unified_domain: None,
+        description: "Anthropic Claude 官方：Messages 协议，thinking 与 output_config.effort 原样透传。",
+    },
+    Preset {
+        name: "google",
+        display_name: "Google Gemini",
+        kind: "google",
+        auth_kind: "api_key",
+        base_url: "https://generativelanguage.googleapis.com/v1beta",
+        protocols: &["gemini"],
+        media_base_url: None,
+        protocol_base_urls: None,
+        models_path: None,
+        // thinkingConfig（thinkingLevel/includeThoughts）原样透传；3.6+ 的采样参数由协议层按模型版本剔除
+        params: None,
+        workspace_domain: None,
+        unified_domain: None,
+        description:
+            "Google Gemini 官方：generateContent 协议，thinkingConfig 透传；3.6 起自动剔除已弃用的采样参数。",
     },
     Preset {
         name: "openrouter",
@@ -306,6 +371,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description: "OpenRouter：OpenAI Chat/Responses 兼容聚合站，模型路由 + 联网搜索透传。",
@@ -321,6 +387,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description: "Zenmux：四协议兼容聚合站，zenmux/auto 自动路由、跨协议调用。",
@@ -336,6 +403,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: Some(&[("anthropic", "https://api.deepseek.com/anthropic/v1")]),
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
@@ -353,6 +421,7 @@ static PRESETS: [Preset; 13] = [
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
@@ -450,6 +519,14 @@ pub fn provision_target(
             "models_path".to_string(),
             serde_json::Value::String(mp.to_string()),
         );
+    }
+    if let Some(ps) = preset.params {
+        match serde_json::from_str::<serde_json::Value>(ps) {
+            Ok(v) => {
+                extra.insert("params".to_string(), v);
+            }
+            Err(e) => tracing::warn!("预设 `{}` 的 params 声明非法: {e}", preset.name),
+        }
     }
     Ok(ProvisionTarget {
         base_url,
@@ -714,13 +791,13 @@ mod tests {
     #[test]
     fn presets_complete() {
         let ps = presets();
-        assert_eq!(ps.len(), 13, "应有 13 个预设");
+        assert_eq!(ps.len(), 16, "应有 16 个预设");
 
         // name 唯一
         let mut names: Vec<&str> = ps.iter().map(|p| p.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 13, "预设 name 必须唯一");
+        assert_eq!(names.len(), 16, "预设 name 必须唯一");
 
         // protocols 全在白名单内
         const WHITELIST: &[&str] = &[
@@ -881,8 +958,29 @@ mod tests {
         )];
         assert_eq!(ali_tp.protocol_base_urls, Some(ali_anthropic));
 
+        // 智谱 GLM：OpenAI 兼容 + Anthropic 兼容双协议（Anthropic 走独立 /api/anthropic 根）
+        let zhipu = find("zhipu").unwrap();
+        assert_eq!(zhipu.protocols, &["openai_chat", "anthropic"]);
+        let zhipu_anthropic: &[(&str, &str)] =
+            &[("anthropic", "https://open.bigmodel.cn/api/anthropic/v1")];
+        assert_eq!(zhipu.protocol_base_urls, Some(zhipu_anthropic));
+
+        // 三家官方预设：端点与协议
+        let openai = find("openai").unwrap();
+        assert_eq!(openai.base_url, "https://api.openai.com/v1");
+        assert_eq!(openai.protocols, &["openai_chat", "openai_responses"]);
+        let anthropic = find("anthropic").unwrap();
+        assert_eq!(anthropic.base_url, "https://api.anthropic.com/v1");
+        assert_eq!(anthropic.protocols, &["anthropic"]);
+        let google = find("google").unwrap();
+        assert_eq!(
+            google.base_url,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(google.protocols, &["gemini"]);
+
         // 其余单协议
-        for name in ["qianfan", "kimi", "zhipu", "volcano"] {
+        for name in ["qianfan", "kimi", "volcano"] {
             let p = find(name).unwrap();
             assert_eq!(
                 p.protocols,
@@ -1157,5 +1255,29 @@ mod tests {
 
         // 无统一域名的预设 → 400
         assert!(provision_target(find("kimi").unwrap(), DomainChoice::Unified).is_err());
+    }
+
+    #[test]
+    fn provision_writes_channel_param_style() {
+        // 百炼系（含 Token Plan）声明 enable_thinking 形状，随 extra.params 落库
+        for name in ["dashscope", "dashscope_tokenplan"] {
+            let up = make_upstream(
+                provision_target(find(name).unwrap(), DomainChoice::Default)
+                    .unwrap()
+                    .extra,
+            );
+            assert_eq!(
+                up.param_style().thinking_style.as_deref(),
+                Some("enable_thinking"),
+                "预设 `{name}` 应写入 enable_thinking"
+            );
+        }
+        // 未声明的渠道：空声明（不改写请求体）
+        let up = make_upstream(
+            provision_target(find("openai").unwrap(), DomainChoice::Default)
+                .unwrap()
+                .extra,
+        );
+        assert!(up.param_style().is_noop());
     }
 }

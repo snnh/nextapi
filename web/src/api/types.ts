@@ -250,6 +250,27 @@ export interface UpstreamExtra {
   balance?: BalanceConfig | null
   /** 最近一次额度/余额快照（后端写入 extra.quota） */
   quota?: QuotaSnapshot | null
+  /**
+   * 渠道参数整形声明：同一协议下各渠道对思考/采样参数的接受形状不同，
+   * 由后端按官方文档逐渠道改写请求体（未声明 = 不改写）。
+   */
+  params?: ParamStyle | null
+}
+
+/** 上游渠道参数整形声明（extra.params） */
+export interface ParamStyle {
+  /** 思考参数形状：thinking / enable_thinking / effort_only / fixed / extended / adaptive / none */
+  thinking_style?: string | null
+  /** 思考强度的落点（点路径，缺省按协议规范落点） */
+  effort_field?: string | null
+  /** 需要剔除的字段点路径 */
+  strip?: string[]
+  /** Chat 协议 max_tokens 字段名 */
+  max_tokens_field?: string | null
+  /** thinking_style=extended 的思考预算 */
+  thinking_budget?: number | null
+  /** Gemini thinkingConfig.includeThoughts */
+  include_thoughts?: boolean | null
 }
 
 export type BalanceAdapterId =

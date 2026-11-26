@@ -708,6 +708,66 @@
               标记「不支持」的能力，带该需求的请求路由时自动跳过此上游；最大上下文仅记录展示，暂不参与过滤。
             </div>
           </el-form-item>
+          <el-form-item label="参数整形" label-width="120px">
+            <div class="caps-grid">
+              <span class="caps-label">思考形状</span>
+              <el-select class="w-260" v-model="form.paramThinkingStyle">
+                <el-option label="不声明（按协议规范）" value="" />
+                <el-option label="thinking{type}（默认标准形状）" value="thinking" />
+                <el-option label="enable_thinking（百炼 Qwen 私有开关）" value="enable_thinking" />
+                <el-option label="仅强度 effort（如 Kimi K3）" value="effort_only" />
+                <el-option label="固定开启（如 GLM-5.3）" value="fixed" />
+                <el-option label="budget_tokens（旧版扩展思考）" value="extended" />
+                <el-option label="adaptive（Claude Opus 5.x）" value="adaptive" />
+                <el-option label="全部移除（不支持思考）" value="none" />
+              </el-select>
+              <span class="caps-label">强度字段</span>
+              <el-input
+                class="w-260"
+                v-model="form.paramEffortField"
+                placeholder="（可选）点路径，如 output_config.effort"
+                clearable
+              />
+              <template v-if="form.paramThinkingStyle === 'extended'">
+                <span class="caps-label">思考预算</span>
+                <el-input-number
+                  class="w-200"
+                  v-model="form.paramThinkingBudget"
+                  :min="0"
+                  :step="1024"
+                  placeholder="budget_tokens"
+                />
+              </template>
+              <span class="caps-label">剔除字段</span>
+              <el-select
+                class="w-300"
+                v-model="form.paramStrip"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="（可选）输入点路径后回车，如 generationConfig.temperature"
+              />
+              <span class="caps-label">max_tokens 字段</span>
+              <el-select class="w-260" v-model="form.paramMaxTokensField">
+                <el-option label="不声明（保持入口字段名）" value="" />
+                <el-option label="max_tokens" value="max_tokens" />
+                <el-option label="max_completion_tokens" value="max_completion_tokens" />
+              </el-select>
+              <template v-if="form.protocols.includes('gemini')">
+                <span class="caps-label">回传思考内容</span>
+                <el-select class="w-170" v-model="form.paramIncludeThoughts">
+                  <el-option label="未设置" value="unset" />
+                  <el-option label="开启（includeThoughts）" value="on" />
+                  <el-option label="关闭" value="off" />
+                </el-select>
+              </template>
+            </div>
+            <div class="hint" style="margin-top: 6px">
+              同一协议下各渠道对思考/采样参数的接受形状不同：按上游官方文档声明后，网关在透传与协议转换时统一改写请求体；
+              全部留空表示不改写（保持客户端原样）。
+            </div>
+          </el-form-item>
         </el-collapse-item>
       </el-collapse>
     </el-form>
@@ -745,6 +805,7 @@ import type {
   ModelSyncReport,
   TestResp,
   Overrides,
+  ParamStyle,
   Preset,
   ProtocolName,
   ProxyOut,
@@ -826,6 +887,18 @@ interface FormState {
   capMaxContext: number | undefined
   model_sync: 'manual' | 'auto'
   model_exclude: string[]
+  /** 渠道参数整形（extra.params）：思考参数形状；空串=不声明 */
+  paramThinkingStyle: '' | NonNullable<ParamStyle['thinking_style']>
+  /** 思考强度落点（点路径；空=按协议规范落点） */
+  paramEffortField: string
+  /** 需要剔除的字段点路径 */
+  paramStrip: string[]
+  /** Chat 协议 max_tokens 字段名；空=不声明 */
+  paramMaxTokensField: '' | 'max_tokens' | 'max_completion_tokens'
+  /** thinking_style=extended 的思考预算 */
+  paramThinkingBudget: number | undefined
+  /** Gemini thinkingConfig.includeThoughts */
+  paramIncludeThoughts: 'unset' | 'on' | 'off'
   /** 分协议 base_url 覆盖（proto → url；空串=不覆盖） */
   protocolBaseUrls: Record<string, string>
   /** Codex：auth.json 原文（仅传输用，不展示回读） */
@@ -888,6 +961,12 @@ function defaultForm(): FormState {
     model_sync: 'manual',
     model_exclude: [],
     protocolBaseUrls: {},
+    paramThinkingStyle: '',
+    paramEffortField: '',
+    paramStrip: [],
+    paramMaxTokensField: '',
+    paramThinkingBudget: undefined,
+    paramIncludeThoughts: 'unset',
     auth_json: '',
     balanceAdapter: 'auto',
     balanceUrl: '',
@@ -1443,6 +1522,15 @@ function open(upstream?: UpstreamOut) {
     base.protocolBaseUrls = Object.fromEntries(
       Object.entries(pbu).map(([k, v]) => [k, String(v ?? '')]),
     )
+    // 渠道参数整形（extra.params）
+    const ps = upstream.extra?.params
+    base.paramThinkingStyle = (ps?.thinking_style as '' | NonNullable<ParamStyle['thinking_style']>) ?? ''
+    base.paramEffortField = ps?.effort_field ?? ''
+    base.paramStrip = [...(ps?.strip ?? [])]
+    base.paramMaxTokensField = (ps?.max_tokens_field as '' | 'max_tokens' | 'max_completion_tokens') ?? ''
+    base.paramThinkingBudget = ps?.thinking_budget ?? undefined
+    base.paramIncludeThoughts =
+      ps?.include_thoughts === true ? 'on' : ps?.include_thoughts === false ? 'off' : 'unset'
     base.hasOauth = upstream.has_oauth
     base.oauthAccountId = upstream.oauth_account_id ?? ''
     base.oauthExpiresAt = upstream.oauth_expires_at ?? ''
@@ -1524,6 +1612,31 @@ function buildExtra(): UpstreamExtra {
   } else {
     delete extra.capabilities
   }
+  // 渠道参数整形：以快照为底保留 UI 未管理的键，表单管辖区按表单覆盖/清除；
+  // 全部未声明则不写键（不改写请求体）
+  const ps: ParamStyle = JSON.parse(JSON.stringify(extraSnapshot.value?.params ?? {}))
+  if (form.paramThinkingStyle) ps.thinking_style = form.paramThinkingStyle
+  else delete ps.thinking_style
+  const effortField = form.paramEffortField.trim()
+  if (effortField) ps.effort_field = effortField
+  else delete ps.effort_field
+  const strip = form.paramStrip.map((v) => v.trim()).filter(Boolean)
+  if (strip.length) ps.strip = strip
+  else delete ps.strip
+  if (form.paramMaxTokensField) ps.max_tokens_field = form.paramMaxTokensField
+  else delete ps.max_tokens_field
+  if (form.paramThinkingStyle === 'extended' && form.paramThinkingBudget) {
+    ps.thinking_budget = form.paramThinkingBudget
+  } else {
+    delete ps.thinking_budget
+  }
+  if (form.paramIncludeThoughts !== 'unset') {
+    ps.include_thoughts = form.paramIncludeThoughts === 'on'
+  } else {
+    delete ps.include_thoughts
+  }
+  if (Object.keys(ps).length) extra.params = ps
+  else delete extra.params
   // 渠道自动禁用：开启=默认（不落 extra）；关闭写 false（该渠道永不自动禁用）
   if (form.autoDisable) delete extra.auto_disable
   else extra.auto_disable = false

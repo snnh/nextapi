@@ -788,6 +788,7 @@ async fn build_outbound_any(
         crate::media::resolve::resolve_url_images(state, &mut ir, img_cache, &mut ctx).await;
         let mut out = protocol::request_from_ir(Protocol::Gemini, &ir, &mut ctx)?;
         upstream::rewrite_body(&mut out, None, upstream.overrides().as_ref());
+        upstream::params::apply(&mut out, Protocol::Gemini, &upstream.param_style());
         return Ok(Outbound {
             body: out,
             protocol: Protocol::Gemini,
@@ -827,6 +828,7 @@ fn build_outbound(
         Mode::Passthrough => {
             let mut b = body.clone();
             upstream::rewrite_body(&mut b, Some(upstream_model), upstream.overrides().as_ref());
+            upstream::params::apply(&mut b, entry, &upstream.param_style());
             // PLAN §4.4：OpenAI 系透传流式注入 stream_options.include_usage 用于 usage 采集兜底
             inject_stream_usage_option(&mut b, entry, stream);
             Ok(Outbound {
@@ -849,6 +851,7 @@ fn build_outbound(
             let mut out = protocol::request_from_ir(target, &ir, &mut ctx)?;
             // 转换路径同样应用用户配置的 body 覆盖（发布审阅 L8：此前仅透传生效）
             upstream::rewrite_body(&mut out, None, upstream.overrides().as_ref());
+            upstream::params::apply(&mut out, target, &upstream.param_style());
             Ok(Outbound {
                 body: out,
                 protocol: target,

@@ -9,6 +9,7 @@ pub mod codex;
 pub mod codex_ws;
 pub mod cred;
 pub mod devin;
+pub mod params;
 pub mod quota;
 pub mod usage;
 
