@@ -110,9 +110,9 @@ body {
   margin-bottom: var(--nx-space-4);
 }
 
-/* 标签页卡片（设置/价格等整页 tabs） */
-.tabs-card {
-  padding: 4px 20px 20px;
+/* 页面级页签容器：不做卡片（内容各卡自带边框），只控制 tab 头与内容的间距 */
+.page-tabs .el-tabs__header {
+  margin-bottom: var(--nx-space-4);
 }
 
 .toolbar {
@@ -147,6 +147,56 @@ body {
   font-size: var(--nx-font-caption);
   line-height: 1.5;
   word-break: break-all;
+}
+
+/* 表单控件宽度刻度（替代模板内联 style="width: …"）
+   只用于 el-input / el-select / el-input-number；优先复用语义类
+   （.search-input / .filter-select / .filter-range / .filter-preset）。
+   需要新数值时先讨论是否可并入现有刻度，不要在页面另写内联宽度。 */
+.w-full {
+  width: 100%;
+}
+.w-140 {
+  width: 140px;
+}
+.w-160 {
+  width: 160px;
+}
+.w-170 {
+  width: 170px;
+}
+.w-180 {
+  width: 180px;
+}
+.w-200 {
+  width: 200px;
+}
+.w-220 {
+  width: 220px;
+}
+.w-240 {
+  width: 240px;
+}
+.w-260 {
+  width: 260px;
+}
+.w-300 {
+  width: 300px;
+}
+@media (max-width: 800px) {
+  /* 手机上固定宽度控件让位给整行 */
+  .w-140,
+  .w-160,
+  .w-170,
+  .w-180,
+  .w-200,
+  .w-220,
+  .w-240,
+  .w-260,
+  .w-300 {
+    width: 100%;
+    max-width: 100%;
+  }
 }
 
 /* 工具栏搜索框统一宽度，页面只按需加修饰类覆盖 */
@@ -229,6 +279,24 @@ body {
   word-break: break-all;
 }
 
+/* 卡片 / 弹窗内的小节标题：标题 + 右侧说明或操作（替代各面板自建的 .card-head） */
+.card-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--nx-space-2);
+  min-width: 0;
+  color: var(--nx-text);
+  font-size: var(--nx-font-body);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* 单个标签跟在文字后面时的左间距（多标签请用 .tag-group 包裹） */
+.tag-gap {
+  margin-left: var(--nx-space-1);
+}
+
 /* 表格内状态标签组间距 */
 .tag-group {
   display: inline-flex;
@@ -277,6 +345,20 @@ body {
 @media (max-width: 800px) {
   .el-dialog {
     --el-dialog-width: 94vw;
+  }
+  /* 手机：表单标签顶置，控件占满整行（130px 左标签在 350px 屏上挤压控件） */
+  .el-dialog .el-form-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .el-dialog .el-form-item__label {
+    width: auto !important;
+    justify-content: flex-start;
+    padding: 0 0 4px;
+    line-height: 1.4;
+  }
+  .el-dialog .el-form-item__content {
+    margin-left: 0 !important;
   }
 }
 .el-dialog.long-form .el-dialog__body {
@@ -478,6 +560,46 @@ body {
 }
 .filter-caret.is-open {
   transform: rotate(180deg);
+}
+
+/* 快捷筛选 chip：与状态下拉等价，但带计数、一眼看到分布 */
+.view-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.view-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--el-component-size);
+  padding: 0 10px;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius-md);
+  background: var(--nx-surface);
+  color: var(--nx-text-2);
+  font-size: var(--nx-font-small);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--nx-dur-fast) var(--nx-ease), border-color var(--nx-dur-fast) var(--nx-ease);
+}
+.view-chip:hover:not(:disabled) {
+  background: var(--nx-hover);
+  color: var(--nx-text);
+}
+.view-chip.is-active {
+  border-color: var(--nx-accent);
+  background: var(--nx-accent-soft);
+  color: var(--nx-accent);
+}
+.view-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chip-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
 }
 
 /* 结果统计等只读信息：贴在筛选行左侧，不与操作按钮抢位 */

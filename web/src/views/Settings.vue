@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="settingsLoading">
+  <div class="page set-page" v-loading="settingsLoading">
     <div class="page-head">
       <div class="page-head-copy">
         <p class="page-desc">
@@ -18,36 +18,14 @@
     </div>
 
     <div class="settings-layout">
-      <nav class="settings-nav" aria-label="设置分类">
-        <button
-          v-for="tab in SETTINGS_TABS"
-          :key="tab.name"
-          type="button"
-          class="nav-item"
-          :class="{ 'is-active': activeTab === tab.name }"
-          :aria-current="activeTab === tab.name ? 'page' : undefined"
-          @click="switchTab(tab.name)"
-        >
-          <el-icon><component :is="tab.icon" /></el-icon>
-          <span>{{ tab.label }}</span>
-          <span
-            v-if="tab.name === 'runtime' && runtimeDirty"
-            class="nav-dirty"
-            :title="`${runtimeDirty} 项未保存`"
-          >{{ runtimeDirty }}</span>
-        </button>
-      </nav>
+      <SectionNav
+        v-model:list-open="navListOpen"
+        :items="navItems"
+        :active="activeTab"
+        @select="onNavSelect"
+      />
 
-      <el-select
-        class="settings-tab-select"
-        :model-value="activeTab"
-        aria-label="设置分类"
-        @change="onMobileTabChange"
-      >
-        <el-option v-for="tab in SETTINGS_TABS" :key="tab.name" :label="tab.label" :value="tab.name" />
-      </el-select>
-
-      <div class="settings-content page-card">
+      <div v-if="!isCompact || !navListOpen" class="settings-content page-card">
         <!-- 初始加载失败：错误条 + 重试 -->
         <el-alert v-if="loadError" class="load-error" type="error" show-icon :closable="false">
           <div class="load-error-body">
@@ -87,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { Connection, Document, Lock, Monitor, Operation, Refresh } from '@element-plus/icons-vue'
@@ -95,6 +73,8 @@ import { settingsApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type { SettingItem } from '@/api/types'
 import { STARTUP_ONLY_KEYS } from '@/components/settings/fields'
+import { useBreakpoint } from '@/composables/useBreakpoint'
+import SectionNav, { type SectionNavItem } from '@/components/common/SectionNav.vue'
 import RuntimeParamsPanel from '@/components/settings/RuntimeParamsPanel.vue'
 import ProxyPanel from '@/components/settings/ProxyPanel.vue'
 import UpdateCheckPanel from '@/components/settings/UpdateCheckPanel.vue'
@@ -110,17 +90,32 @@ const route = useRoute()
 const router = useRouter()
 
 const SETTINGS_TABS = [
-  { name: 'runtime', label: '运行参数', icon: Operation },
-  { name: 'proxy', label: '代理管理', icon: Connection },
-  { name: 'update', label: '更新检查', icon: Refresh },
-  { name: 'audit', label: '审计日志', icon: Document },
-  { name: 'security', label: '安全', icon: Lock },
-  { name: 'system', label: '系统', icon: Monitor },
+  { name: 'runtime', label: '运行参数', icon: Operation, group: 'config', summary: '网关、日志、计费等运行项' },
+  { name: 'proxy', label: '代理管理', icon: Connection, group: 'config', summary: '出站代理与场景开关' },
+  { name: 'update', label: '更新检查', icon: Refresh, group: 'ops', summary: '版本检查频率与来源' },
+  { name: 'audit', label: '审计日志', icon: Document, group: 'ops', summary: '管理操作记录' },
+  { name: 'security', label: '安全', icon: Lock, group: 'system', summary: '两步验证与登录保护' },
+  { name: 'system', label: '系统', icon: Monitor, group: 'system', summary: '版本与运行环境' },
 ] as const
 
 const runtimePanelRef = ref<InstanceType<typeof RuntimeParamsPanel> | null>(null)
 const runtimeDirty = ref(0)
 const activeTab = ref<TabName>('runtime')
+/** 窄屏：是否停在分类列表（false 时显示当前分类详情） */
+const navListOpen = ref(true)
+const { isCompact } = useBreakpoint()
+/** 二级导航数据（桌面竖列 / 窄屏卡片共用；运行参数带未保存计数徽标） */
+const navItems = computed<SectionNavItem[]>(() =>
+  SETTINGS_TABS.map((t) => ({
+    key: t.name,
+    label: t.label,
+    icon: t.icon,
+    desc: t.summary,
+    group: t.group,
+    badge: t.name === 'runtime' && runtimeDirty.value > 0 ? runtimeDirty.value : undefined,
+    badgeTitle: `${runtimeDirty.value} 项未保存`,
+  })),
+)
 /** 已访问过的分类才挂载，避免一次性渲染全部设置面板 */
 const visited = reactive(new Set<TabName>(['runtime']))
 const settings = ref<SettingItem[]>([])
@@ -200,19 +195,21 @@ async function onBeforeLeave(newName: string | number): Promise<boolean> {
   }
 }
 
-/** 切换设置分类；运行参数有未保存改动时先确认 */
-async function switchTab(name: TabName) {
-  if (name === activeTab.value) return
-  if (!(await onBeforeLeave(name))) return
+/** 切换设置分类；运行参数有未保存改动时先确认。返回是否切换成功 */
+async function switchTab(name: TabName): Promise<boolean> {
+  if (name === activeTab.value) return true
+  if (!(await onBeforeLeave(name))) return false
   activeTab.value = name
   visited.add(name)
+  return true
 }
 
-/** 移动端分类下拉（取消切换时由 model-value 自动回到当前分类） */
-function onMobileTabChange(value: string | number | boolean | undefined) {
-  if (typeof value !== 'string') return
-  if (!(TAB_NAMES as readonly string[]).includes(value)) return
-  void switchTab(value as TabName)
+/** 窄屏点分类卡片：切换成功才收起列表进入详情（未保存确认可拦下） */
+async function onNavSelect(name: string) {
+  if (!(await switchTab(name as TabName))) return
+  navListOpen.value = false
+  // 列表可能已经滚动过，进入详情回到顶部
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
 }
 
 /** 离开设置页时同样保护未保存修改（SPA 路由跳转） */
@@ -247,6 +244,8 @@ onMounted(() => {
   }
   activeTab.value = initial
   visited.add(initial)
+  // 窄屏从深链（合法 tab）进入时，直接展示详情而不是分类列表
+  if (isCompact.value && raw === initial) navListOpen.value = false
   loadSettings()
 })
 </script>
@@ -264,79 +263,21 @@ onMounted(() => {
   gap: 16px;
   align-items: start;
 }
-.settings-nav {
-  position: sticky;
-  top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  border: 1px solid var(--nx-border);
-  border-radius: var(--nx-radius-lg);
-  background: var(--nx-surface);
-}
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: var(--nx-radius);
-  background: transparent;
-  color: var(--nx-text-2);
-  font-size: var(--nx-font-small);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--nx-dur-fast) var(--nx-ease),
-    color var(--nx-dur-fast) var(--nx-ease);
-}
-.nav-item:hover {
-  background: var(--nx-hover);
-  color: var(--nx-text);
-}
-.nav-item.is-active {
-  background: var(--nx-accent-soft);
-  color: var(--nx-accent);
-  font-weight: 600;
-}
-.nav-item:focus-visible {
-  outline: 2px solid var(--nx-focus-ring);
-  outline-offset: -2px;
-}
-.nav-dirty {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  margin-left: auto;
-  padding: 0 5px;
-  border-radius: var(--nx-radius-round);
-  background: var(--nx-warning);
-  color: var(--nx-on-accent);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-}
 .settings-content {
   min-width: 0;
   margin-bottom: 0;
 }
-.settings-tab-select {
-  display: none;
-  width: 100%;
-}
+
 @media (max-width: 1000px) {
   .settings-layout {
     grid-template-columns: 1fr;
   }
-  .settings-nav {
+  /* 手机：页头说明可省，卡片内边距收紧 */
+  .set-page :deep(.page-desc) {
     display: none;
   }
-  .settings-tab-select {
-    display: block;
-    margin-bottom: 12px;
+  .settings-content {
+    padding: var(--nx-space-4);
   }
 }
 .load-error {
