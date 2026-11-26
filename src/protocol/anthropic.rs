@@ -23,7 +23,7 @@ use super::{ConvCtx, ConvertError};
 pub const DEFAULT_MAX_TOKENS: u64 = 65536;
 
 /// 请求体中被本适配器识别并映射的顶层字段；其余进 `extra`。
-const KNOWN_REQUEST_FIELDS: [&str; 13] = [
+const KNOWN_REQUEST_FIELDS: [&str; 14] = [
     "model",
     "system",
     "messages",
@@ -37,6 +37,7 @@ const KNOWN_REQUEST_FIELDS: [&str; 13] = [
     "stream",
     "metadata",
     "thinking",
+    "output_config",
 ];
 
 /// 响应体顶层规范字段；其余进 `extra`。
@@ -218,6 +219,8 @@ fn parse_anth_message(
                     id: block["id"].as_str().unwrap_or_default().to_string(),
                     name: block["name"].as_str().unwrap_or_default().to_string(),
                     arguments: input_to_arguments(&block["input"]),
+                    // Anthropic 没有工具调用签名槽位（thinking signature 属于思考块）
+                    signature: None,
                 }),
                 "tool_result" => {
                     // is_error 与非 text 内容（如 image 块）无 IR 槽位（review P5：此前静默丢弃）
@@ -388,9 +391,27 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
         }
     }
 
-    // thinking 请求参数 → ext.thinking（如 {type:"enabled",budget_tokens:N}）
+    // thinking 请求参数 → ext.thinking（如 {type:"enabled",budget_tokens:N} 或 {type:"adaptive"}）
     if let Some(t) = v.get("thinking") {
         req.ext.thinking = Some(t.clone());
+    }
+
+    // output_config.effort → ext.effort（原值，不做档位换算）；其余子字段无 IR 槽位
+    if let Some(oc) = v.get("output_config") {
+        match oc.as_object() {
+            Some(o) => {
+                req.ext.effort = o["effort"].as_str().map(String::from);
+                for k in o.keys() {
+                    if k != "effort" {
+                        ctx.degrade(
+                            format!("output_config.{k}"),
+                            "output_config 子字段无 IR 槽位，丢弃",
+                        );
+                    }
+                }
+            }
+            None => ctx.degrade("output_config", "output_config 非对象，忽略"),
+        }
     }
 
     // 未知字段进 extra
@@ -399,6 +420,7 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
             req.extra.insert(k.clone(), val.clone());
         }
     }
+    req.extra_proto = Some(Protocol::Anthropic);
 
     Ok(req)
 }
@@ -574,9 +596,23 @@ fn message_to_anthropic(m: &IrMessage, req: &IrRequest, _ctx: &mut ConvCtx) -> V
         blocks.extend(content_to_anthropic_blocks(content, _ctx));
     }
     for tc in &m.tool_calls {
+        if tc.signature.is_some() {
+            _ctx.degrade(
+                "tool_call.signature",
+                "Anthropic tool_use 无签名槽位，供应商工具签名丢失",
+            );
+        }
         blocks.push(tool_use_block(tc));
     }
     serde_json::json!({"role": "assistant", "content": blocks})
+}
+
+/// 是否 Anthropic 形态的 thinking 配置（`type` 为已知枚举值）。
+fn is_anthropic_thinking(v: &Value) -> bool {
+    matches!(
+        v["type"].as_str(),
+        Some("enabled" | "disabled" | "adaptive" | "between_tools")
+    )
 }
 
 /// 记录在 Anthropic 无对应能力的字段 → 降级。
@@ -595,6 +631,9 @@ fn degrade_request_ext(req: &IrRequest, ctx: &mut ConvCtx) {
     }
     if req.ext.service_tier.is_some() {
         ctx.degrade("ext.service_tier", "Anthropic 无对应字段");
+    }
+    if req.ext.verbosity.is_some() {
+        ctx.degrade("ext.verbosity", "Anthropic 无 verbosity 字段");
     }
     for k in req.ext.extra.keys() {
         // thinking_signature 为跨协议携带的扩展思考签名，用于重建 thinking block，不算降级。
@@ -630,8 +669,8 @@ fn tool_choice_to_anthropic(tc: &Value) -> Value {
 
 /// IR → 请求 JSON。max_tokens 缺失时填充 DEFAULT_MAX_TOKENS 并记录降级。
 pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, ConvertError> {
-    // 未知主体字段先铺底，规范字段再覆盖（保留入口未知字段）。
-    let mut body = req.extra.clone();
+    // 入口未知字段先铺底（仅同源协议），规范字段再覆盖。
+    let mut body = super::request_body_extras(req, Protocol::Anthropic, ctx);
     degrade_request_ext(req, ctx);
 
     let max_tokens = req.max_tokens.unwrap_or_else(|| {
@@ -675,7 +714,19 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
         body.insert("metadata".into(), serde_json::json!({"user_id": u}));
     }
     if let Some(t) = &req.ext.thinking {
-        body.insert("thinking".into(), t.clone());
+        // ext.thinking 由各协议共用：只有 Anthropic 形状才能下发，
+        // 其它协议（如 Gemini thinkingConfig）原样写入会被上游拒绝
+        if is_anthropic_thinking(t) {
+            body.insert("thinking".into(), t.clone());
+        } else {
+            ctx.degrade(
+                "ext.thinking",
+                "非 Anthropic thinking 形状（来自其它协议），丢弃",
+            );
+        }
+    }
+    if let Some(e) = &req.ext.effort {
+        body.insert("output_config".into(), serde_json::json!({ "effort": e }));
     }
 
     Ok(Value::Object(body))
@@ -765,6 +816,7 @@ fn parse_response_content(
                 id: block["id"].as_str().unwrap_or_default().to_string(),
                 name: block["name"].as_str().unwrap_or_default().to_string(),
                 arguments: input_to_arguments(&block["input"]),
+                signature: None,
             }),
             "thinking" => {
                 reasoning = Some(block["thinking"].as_str().unwrap_or_default().to_string());
@@ -880,6 +932,12 @@ fn response_blocks(msg: &IrMessage, resp: &IrResponse, ctx: &mut ConvCtx) -> Vec
         blocks.extend(content_to_anthropic_blocks(content, ctx));
     }
     for tc in &msg.tool_calls {
+        if tc.signature.is_some() {
+            ctx.degrade(
+                "tool_call.signature",
+                "Anthropic tool_use 无签名槽位，供应商工具签名丢失",
+            );
+        }
         blocks.push(tool_use_block(tc));
     }
     blocks
@@ -1054,6 +1112,7 @@ pub fn chunk_to_ir(
                             id: v["content_block"]["id"].as_str().map(String::from),
                             name: v["content_block"]["name"].as_str().map(String::from),
                             arguments: None,
+                            signature: None,
                         }],
                         ..Default::default()
                     };
@@ -1104,6 +1163,7 @@ pub fn chunk_to_ir(
                         index: tool_idx,
                         id: None,
                         name: None,
+                        signature: None,
                         arguments: Some(
                             v["delta"]["partial_json"]
                                 .as_str()
@@ -1399,6 +1459,8 @@ pub fn chunk_from_ir(
                         .clone()
                         .or_else(|| if name.is_empty() { None } else { Some(name) }),
                     arguments: tc.arguments.clone(),
+                    // Anthropic tool_use 无签名槽位（ThinkingBlock 的 signature 语义不同）
+                    signature: None,
                 };
                 events.push(event_str(content_block_start_tool_use(b, &tc_full))?);
                 b
@@ -1978,6 +2040,7 @@ mod tests {
                             id: Some("toolu_s1".into()),
                             name: Some("get_weather".into()),
                             arguments: Some("{\"city\":".into()),
+                            signature: None,
                         }],
                         ..Default::default()
                     },
@@ -2222,6 +2285,7 @@ mod tests {
                         id: Some("toolu_1".into()),
                         name: Some("f".into()),
                         arguments: Some("{".into()),
+                        signature: None,
                     }],
                     ..Default::default()
                 },
@@ -2286,6 +2350,92 @@ mod tests {
         for ts in tool_starts {
             assert_eq!(ts["content_block"]["id"], "toolu_1");
             assert_eq!(ts["content_block"]["name"], "f");
+        }
+    }
+}
+
+#[cfg(test)]
+mod modern_field_tests {
+    use super::*;
+    use crate::protocol::chat;
+    use serde_json::json;
+
+    #[test]
+    fn output_config_effort_roundtrip() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "claude-opus-5-5",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "medium"},
+        });
+        let req = request_to_ir(&v, &mut ctx).unwrap();
+        assert_eq!(req.ext.effort.as_deref(), Some("medium"));
+        assert_eq!(req.ext.thinking, Some(json!({"type": "adaptive"})));
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert_eq!(back["output_config"]["effort"], json!("medium"));
+        assert_eq!(back["thinking"]["type"], json!("adaptive"));
+    }
+
+    #[test]
+    fn chat_effort_converts_to_anthropic_output_config() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "high",
+        });
+        let ir = chat::request_to_ir(&v, &mut ctx).unwrap();
+        let out = request_from_ir(&ir, &mut ctx).unwrap();
+        // 值原样搬运，字段名换成本协议形状
+        assert_eq!(out["output_config"]["effort"], json!("high"));
+        assert!(out.get("reasoning_effort").is_none());
+    }
+}
+
+#[cfg(test)]
+mod thinking_shape_tests {
+    use super::*;
+    use crate::protocol::gemini;
+    use serde_json::json;
+
+    #[test]
+    fn gemini_thinking_config_not_sent_to_anthropic() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {"thinkingConfig": {"thinkingLevel": "high"}},
+        });
+        let ir = gemini::request_to_ir(&v, &mut ctx).unwrap();
+        let out = request_from_ir(&ir, &mut ctx).unwrap();
+        // thinkingConfig 不是 Anthropic thinking 形状：丢弃并记降级
+        assert!(out.get("thinking").is_none());
+        // 思考强度仍然按协议字段名搬运
+        assert_eq!(out["output_config"]["effort"], json!("high"));
+        assert!(ctx
+            .degraded_header()
+            .unwrap_or_default()
+            .contains("ext.thinking"));
+    }
+
+    #[test]
+    fn anthropic_thinking_variants_pass_through() {
+        for t in [
+            json!({"type": "enabled", "budget_tokens": 2048}),
+            json!({"type": "adaptive"}),
+            json!({"type": "disabled"}),
+        ] {
+            let mut ctx = ConvCtx::new();
+            let v = json!({
+                "model": "m",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+                "thinking": t,
+            });
+            let ir = request_to_ir(&v, &mut ctx).unwrap();
+            let out = request_from_ir(&ir, &mut ctx).unwrap();
+            assert_eq!(out["thinking"], t);
         }
     }
 }

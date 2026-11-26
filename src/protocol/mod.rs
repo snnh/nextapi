@@ -93,6 +93,32 @@ pub fn request_from_ir(
     }
 }
 
+/// 入口协议未知顶层字段的铺底集合：仅目标协议与字段来源一致时回写。
+///
+/// 各协议对未知顶层字段的容忍度不同（Anthropic/Gemini 直接 400，OpenAI 容忍），
+/// 跨协议原样铺底会把入口专有字段（如 `reasoning_effort`、`output_config`）
+/// 塞进不认识它们的上游，故跨协议一律丢弃并记降级。
+pub fn request_body_extras(
+    req: &IrRequest,
+    target: Protocol,
+    ctx: &mut ConvCtx,
+) -> serde_json::Map<String, serde_json::Value> {
+    if req.extra.is_empty() {
+        return serde_json::Map::new();
+    }
+    if req.extra_proto == Some(target) {
+        return req.extra.clone();
+    }
+    let from = req.extra_proto.map(|p| p.as_str()).unwrap_or("未知协议");
+    for k in req.extra.keys() {
+        ctx.degrade(
+            k.clone(),
+            format!("{from} 专有字段，{} 无对应字段，丢弃", target.as_str()),
+        );
+    }
+    serde_json::Map::new()
+}
+
 /// 非流式响应：协议 JSON → IR。
 pub fn response_to_ir(
     p: Protocol,
@@ -317,5 +343,44 @@ mod cross_protocol_tests {
             out["messages"].as_array().is_some_and(|a| !a.is_empty()),
             "messages 应有内容: {out}"
         );
+    }
+}
+
+#[cfg(test)]
+mod cross_protocol_extra_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn entry_only_field_not_leaked_to_other_protocol() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "logit_bias": {"1": 2},
+        });
+        let req = request_to_ir(Protocol::OpenaiChat, &v, &mut ctx).unwrap();
+        assert!(req.extra.contains_key("logit_bias"));
+
+        let out = request_from_ir(Protocol::Anthropic, &req, &mut ctx).unwrap();
+        // Anthropic 对未知顶层字段直接 400，跨协议必须丢弃并记降级
+        assert!(out.get("logit_bias").is_none());
+        assert!(ctx
+            .degraded_header()
+            .unwrap_or_default()
+            .contains("logit_bias"));
+    }
+
+    #[test]
+    fn same_protocol_keeps_unknown_fields() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "logit_bias": {"1": 2},
+        });
+        let req = request_to_ir(Protocol::OpenaiChat, &v, &mut ctx).unwrap();
+        let out = request_from_ir(Protocol::OpenaiChat, &req, &mut ctx).unwrap();
+        assert_eq!(out["logit_bias"], json!({"1": 2}));
     }
 }

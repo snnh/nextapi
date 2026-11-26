@@ -95,6 +95,12 @@ fn parse_generation_config(gc: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) {
     if let Some(s) = gc["seed"].as_i64() {
         req.seed = Some(s);
     }
+    // thinkingConfig 原样保留到 ext.thinking（同协议回写保真），
+    // 其中 thinkingLevel 同时提取为 ext.effort 供跨协议按目标字段名回写。
+    if let Some(tc) = gc.get("thinkingConfig") {
+        req.ext.thinking = Some(tc.clone());
+        req.ext.effort = tc["thinkingLevel"].as_str().map(String::from);
+    }
     // 其余已知但无 IR 槽位的 generationConfig 字段记降级（此前静默丢弃）
     for k in [
         "presencePenalty",
@@ -102,7 +108,6 @@ fn parse_generation_config(gc: &Value, req: &mut IrRequest, ctx: &mut ConvCtx) {
         "responseLogprobs",
         "logprobs",
         "topLogprobs",
-        "thinkingConfig",
         "mediaResolution",
     ] {
         if gc.get(k).is_some() {
@@ -251,6 +256,8 @@ fn parse_content(
                     id,
                     name,
                     arguments,
+                    // Gemini 3+ 要求工具调用签名在后续请求中原样回传，否则多轮工具循环 400
+                    signature: p["thoughtSignature"].as_str().map(String::from),
                 });
             } else if let Some(fr) = p.get("functionResponse") {
                 let name = fr["name"].as_str().unwrap_or_default().to_string();
@@ -314,6 +321,16 @@ fn parse_content(
     }
 
     Ok(())
+}
+
+/// 构造 Gemini functionCall part；`signature` 为 Gemini 3+ 的 thoughtSignature
+/// （调用方下一轮必须原样回传，否则多轮工具循环报错）。
+fn function_call_part(name: &str, args: Value, signature: Option<&String>) -> Value {
+    let mut part = serde_json::json!({"functionCall": {"name": name, "args": args}});
+    if let Some(sig) = signature {
+        part["thoughtSignature"] = Value::String(sig.clone());
+    }
+    part
 }
 
 /// 将 Gemini args/response 值序列化为 JSON 字符串（对象/数字/布尔均可；null → 空串）。
@@ -403,6 +420,7 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
             req.extra.insert(k.clone(), val.clone());
         }
     }
+    req.extra_proto = Some(Protocol::Gemini);
 
     Ok(req)
 }
@@ -501,7 +519,7 @@ fn message_to_content(m: &IrMessage, ctx: &mut ConvCtx) -> Option<Value> {
         // 工具调用 → functionCall parts
         for tc in &m.tool_calls {
             let args = args_string_to_value(&tc.arguments, "tool_call.arguments", ctx);
-            parts.push(serde_json::json!({"functionCall": {"name": tc.name, "args": args}}));
+            parts.push(function_call_part(&tc.name, args, tc.signature.as_ref()));
         }
     }
 
@@ -565,9 +583,50 @@ fn system_msg_to_instruction_parts(m: &IrMessage, ctx: &mut ConvCtx) -> Vec<Valu
     parts
 }
 
+/// Gemini 3.6 起的严格参数规则：禁止末轮 model 预填（400），
+/// 且 `temperature/top_p/top_k`/`candidateCount` 已弃用（先被忽略、后续版本报错）。
+///
+/// 只影响新代模型：旧模型仍支持预填与采样参数。
+fn gemini_strict_params(model: &str) -> bool {
+    let m = model.strip_prefix("models/").unwrap_or(model);
+    let Some(rest) = m.strip_prefix("gemini-") else {
+        return false;
+    };
+    let mut it = rest.split('.');
+    let major = it
+        .next()
+        .and_then(|s| s.split('-').next())
+        .and_then(|s| s.parse::<u32>().ok());
+    let minor = it
+        .next()
+        .and_then(|s| s.split('-').next())
+        .and_then(|s| s.parse::<u32>().ok());
+    match (major, minor) {
+        (Some(4), _) => true,
+        (Some(3), Some(n)) => n >= 6,
+        _ => false,
+    }
+}
+
+/// 丢弃末尾的 model 轮（仅当它确实带内容），返回是否发生丢弃。
+fn drop_trailing_model_turn(contents: &mut Vec<Value>) -> bool {
+    let Some(last) = contents.last() else {
+        return false;
+    };
+    if last["role"].as_str() != Some("model") {
+        return false;
+    }
+    let has_parts = last["parts"].as_array().is_some_and(|p| !p.is_empty());
+    if has_parts {
+        contents.pop();
+        return true;
+    }
+    false
+}
+
 /// IR → 请求 JSON。model 不写入 body（在 URL 路径中）。
 pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, ConvertError> {
-    let mut body = req.extra.clone();
+    let mut body = super::request_body_extras(req, Protocol::Gemini, ctx);
     // Gemni 无对应字段 → 降级
     if req.tool_choice.is_some() {
         ctx.degrade("tool_choice", "Gemini 无 tool_choice 字段，忽略");
@@ -586,6 +645,9 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
             "stream",
             "Gemini 流式经独立端点（streamGenerateContent），body 不含 stream",
         );
+    }
+    if req.ext.verbosity.is_some() {
+        ctx.degrade("ext.verbosity", "Gemini 无 verbosity 字段");
     }
     if !req.ext.extra.is_empty() {
         for k in req.ext.extra.keys() {
@@ -621,6 +683,13 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
             contents.push(c);
         }
     }
+    // 新代 Gemini 禁止末轮 model 预填：保留必然 400，改为丢弃并记降级
+    if gemini_strict_params(&req.model) && drop_trailing_model_turn(&mut contents) {
+        ctx.degrade(
+            "messages.assistant_prefill",
+            "Gemini 3.6+ 不接受末轮 model 预填，已丢弃该轮",
+        );
+    }
     if !contents.is_empty() {
         body.insert("contents".into(), Value::Array(contents));
     }
@@ -630,7 +699,15 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     if let Some(mt) = req.max_tokens {
         gc.insert("maxOutputTokens".into(), Value::from(mt));
     }
-    if let Some(t) = req.temperature {
+    // Gemini 3.6+ 已弃用采样参数（当前被忽略，后续版本报错）：新代模型不写入并记降级
+    let strict = gemini_strict_params(&req.model);
+    if strict && (req.temperature.is_some() || req.top_p.is_some() || req.ext.top_k.is_some()) {
+        ctx.degrade(
+            "generationConfig.sampling",
+            "Gemini 3.6+ 已弃用 temperature/top_p/top_k，未下发",
+        );
+    }
+    if let Some(t) = req.temperature.filter(|_| !strict) {
         gc.insert(
             "temperature".into(),
             serde_json::Number::from_f64(t)
@@ -638,7 +715,7 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
                 .unwrap_or(Value::Null),
         );
     }
-    if let Some(tp) = req.top_p {
+    if let Some(tp) = req.top_p.filter(|_| !strict) {
         gc.insert(
             "topP".into(),
             serde_json::Number::from_f64(tp)
@@ -646,7 +723,7 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
                 .unwrap_or(Value::Null),
         );
     }
-    if let Some(k) = req.ext.top_k {
+    if let Some(k) = req.ext.top_k.filter(|_| !strict) {
         gc.insert("topK".into(), Value::from(k));
     }
     if let Some(stop) = &req.stop {
@@ -654,6 +731,29 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
             "stopSequences".into(),
             Value::Array(stop.iter().map(|s| Value::String(s.clone())).collect()),
         );
+    }
+    // 思考配置：Gemini 形状的 ext.thinking 原样回写；effort 落到 thinkingLevel。
+    let mut thinking_cfg = Map::new();
+    if let Some(t) = &req.ext.thinking {
+        let is_gemini_shape = t.as_object().is_some_and(|o| {
+            o.contains_key("thinkingLevel")
+                || o.contains_key("thinkingBudget")
+                || o.contains_key("includeThoughts")
+        });
+        match (is_gemini_shape, t) {
+            (true, Value::Object(o)) => {
+                for (k, v) in o {
+                    thinking_cfg.insert(k.clone(), v.clone());
+                }
+            }
+            _ => ctx.degrade("ext.thinking", "非 Gemini thinkingConfig 形状，丢弃"),
+        }
+    }
+    if let Some(e) = &req.ext.effort {
+        thinking_cfg.insert("thinkingLevel".into(), Value::String(e.clone()));
+    }
+    if !thinking_cfg.is_empty() {
+        gc.insert("thinkingConfig".into(), Value::Object(thinking_cfg));
     }
     if let Some(rf) = &req.response_format {
         match rf["type"].as_str() {
@@ -782,6 +882,7 @@ fn parse_response_content(content: &Value, ctx: &mut ConvCtx) -> IrMessage {
                     id,
                     name,
                     arguments,
+                    signature: p["thoughtSignature"].as_str().map(String::from),
                 });
             } else {
                 ctx.degrade("response.content.part", "未知响应 part 结构，丢弃");
@@ -938,7 +1039,7 @@ fn message_to_response_parts(m: &IrMessage, ctx: &mut ConvCtx) -> Vec<Value> {
     }
     for tc in &m.tool_calls {
         let args = args_string_to_value(&tc.arguments, "tool_call.arguments", ctx);
-        parts.push(serde_json::json!({"functionCall": {"name": tc.name, "args": args}}));
+        parts.push(function_call_part(&tc.name, args, tc.signature.as_ref()));
     }
     parts
 }
@@ -995,6 +1096,8 @@ pub struct StreamState {
     pub tool_names: HashMap<u32, String>,
     pub tool_args: HashMap<u32, String>,
     pub tool_ids: HashMap<u32, String>,
+    /// 出站：IR 工具序号 → 供应商签名（thoughtSignature），随 functionCall 一起发出
+    pub tool_signatures: HashMap<u32, String>,
     pub emitted_tools: HashSet<u32>,
 }
 
@@ -1052,6 +1155,7 @@ pub fn chunk_to_ir(
                                 id: Some(format!("{name}_{idx}")),
                                 name: Some(name),
                                 arguments: Some(arguments),
+                                signature: p["thoughtSignature"].as_str().map(String::from),
                             });
                         } else {
                             ctx.degrade("stream.content.part", "未知流式 part 结构，丢弃");
@@ -1114,7 +1218,8 @@ fn flush_unfinished_tools(st: &mut StreamState, parts: &mut Vec<Value>) {
                 .get(&i)
                 .and_then(|s| serde_json::from_str::<Value>(s).ok())
                 .unwrap_or_else(json_object);
-            parts.push(serde_json::json!({"functionCall": {"name": name, "args": args_val}}));
+            let sig = st.tool_signatures.get(&i);
+            parts.push(function_call_part(name, args_val, sig));
             st.emitted_tools.insert(i);
         }
     }
@@ -1157,12 +1262,14 @@ pub fn chunk_from_ir(
         if let Some(id) = &tc.id {
             st.tool_ids.entry(i).or_insert_with(|| id.clone());
         }
+        if let Some(sig) = &tc.signature {
+            st.tool_signatures.insert(i, sig.clone());
+        }
         if !st.emitted_tools.contains(&i) {
             if let (Some(name), Some(args_str)) = (st.tool_names.get(&i), st.tool_args.get(&i)) {
                 if let Ok(args_val) = serde_json::from_str::<Value>(args_str) {
-                    parts.push(
-                        serde_json::json!({"functionCall": {"name": name, "args": args_val}}),
-                    );
+                    let sig = st.tool_signatures.get(&i);
+                    parts.push(function_call_part(name, args_val, sig));
                     st.emitted_tools.insert(i);
                 }
             }
@@ -1624,5 +1731,123 @@ mod tests {
         );
         // 记录降级
         assert!(c.degraded.iter().any(|d| d.field == "image_url"));
+    }
+}
+
+#[cfg(test)]
+mod modern_field_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn thought_signature_roundtrip() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({"contents": [
+            {"role": "user", "parts": [{"text": "weather?"}]},
+            {"role": "model", "parts": [{
+                "functionCall": {"name": "get_weather", "args": {"city": "bj"}},
+                "thoughtSignature": "sig_abc",
+            }]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "get_weather", "response": {"t": 25}}}]}
+        ]});
+        let req = request_to_ir(&v, &mut ctx).unwrap();
+        assert_eq!(
+            req.messages[1].tool_calls[0].signature.as_deref(),
+            Some("sig_abc")
+        );
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert_eq!(
+            back["contents"][1]["parts"][0]["thoughtSignature"],
+            json!("sig_abc")
+        );
+    }
+
+    #[test]
+    fn thinking_config_roundtrip_and_effort_extraction() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {"thinkingConfig": {"thinkingLevel": "high", "includeThoughts": true}},
+        });
+        let req = request_to_ir(&v, &mut ctx).unwrap();
+        assert_eq!(req.ext.effort.as_deref(), Some("high"));
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert_eq!(
+            back["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            json!("high")
+        );
+        assert_eq!(
+            back["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn chat_effort_converts_to_thinking_level() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "low",
+        });
+        let ir = crate::protocol::chat::request_to_ir(&v, &mut ctx).unwrap();
+        let out = request_from_ir(&ir, &mut ctx).unwrap();
+        assert_eq!(
+            out["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            json!("low")
+        );
+    }
+}
+
+#[cfg(test)]
+mod prefill_tests {
+    use super::*;
+    use crate::protocol::chat;
+    use serde_json::json;
+
+    #[test]
+    fn model_version_gate() {
+        assert!(gemini_strict_params("gemini-3.6-flash"));
+        assert!(gemini_strict_params("models/gemini-3.8-flash"));
+        assert!(gemini_strict_params("gemini-4-hydrogen"));
+        assert!(!gemini_strict_params("gemini-3.5-flash"));
+        assert!(!gemini_strict_params("gemini-2.5-pro"));
+        assert!(!gemini_strict_params("deepseek-v4"));
+    }
+
+    #[test]
+    fn trailing_assistant_dropped_for_new_gemini() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "gemini-3.6-flash",
+            "messages": [
+                {"role": "user", "content": "把这句话翻译成英文：你好"},
+                {"role": "assistant", "content": "Translation:"},
+            ],
+        });
+        let ir = chat::request_to_ir(&v, &mut ctx).unwrap();
+        let out = request_from_ir(&ir, &mut ctx).unwrap();
+        let contents = out["contents"].as_array().expect("contents 缺失");
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0]["role"], json!("user"));
+        assert!(ctx
+            .degraded_header()
+            .unwrap_or_default()
+            .contains("assistant_prefill"));
+    }
+
+    #[test]
+    fn trailing_assistant_kept_for_old_gemini() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "gemini-3.5-flash",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "Translation:"},
+            ],
+        });
+        let ir = chat::request_to_ir(&v, &mut ctx).unwrap();
+        let out = request_from_ir(&ir, &mut ctx).unwrap();
+        assert_eq!(out["contents"].as_array().unwrap().len(), 2);
     }
 }

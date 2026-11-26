@@ -102,6 +102,10 @@ pub struct IrToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+    /// 供应商侧工具调用签名（当前仅 Gemini `thoughtSignature` 使用）。
+    /// 目标协议同名回写保真；无对应槽位的协议记降级。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// 工具定义（归一化为 OpenAI function 形态；parameters 为 JSON Schema）。
@@ -134,6 +138,14 @@ pub struct IrMessage {
 pub struct IrExt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<serde_json::Value>,
+    /// 思考强度原值，不做档位换算：入口写什么就按目标协议的字段名回写什么。
+    /// 来源：Chat `reasoning_effort`、Responses `reasoning.effort`、
+    /// Anthropic `output_config.effort`、Gemini `thinkingConfig.thinkingLevel`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// 输出详略（OpenAI 系专有）：Chat `verbosity`、Responses `text.verbosity`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,6 +161,8 @@ pub struct IrExt {
 impl IrExt {
     pub fn is_empty(&self) -> bool {
         self.thinking.is_none()
+            && self.effort.is_none()
+            && self.verbosity.is_none()
             && self.web_search.is_none()
             && self.cache_control.is_none()
             && self.top_k.is_none()
@@ -204,9 +218,13 @@ pub struct IrRequest {
     pub n: Option<u32>,
     #[serde(default, skip_serializing_if = "IrExt::is_empty")]
     pub ext: IrExt,
-    /// 入口协议的未知字段原样保留
+    /// 入口协议的未知顶层字段原样保留
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
+    /// `extra` 的来源协议：只有目标协议与之相同才回写，跨协议一律记降级。
+    /// 各协议对未知字段的容忍度不同（Anthropic/Gemini 直接 400），原样铺底会污染请求。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_proto: Option<Protocol>,
 }
 
 /// token 用量（cache 读/写单列；total 可选）。
@@ -316,6 +334,9 @@ pub struct IrToolCallDelta {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
+    /// 见 `IrToolCall::signature`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 /// 工具调用流式聚合器：测试辅助（校验各协议增量工具调用按 index 拼接的正确性）。
@@ -386,18 +407,21 @@ mod tests {
             id: Some("call_1".into()),
             name: Some("get_".into()),
             arguments: Some("{\"ci".into()),
+            signature: None,
         });
         agg.feed(&IrToolCallDelta {
             index: 1,
             id: Some("call_2".into()),
             name: Some("other".into()),
             arguments: None,
+            signature: None,
         });
         agg.feed(&IrToolCallDelta {
             index: 0,
             id: None,
             name: Some("weather".into()),
             arguments: Some("ty\":\"bj\"}".into()),
+            signature: None,
         });
         let calls = agg.finish();
         assert_eq!(calls.len(), 2);

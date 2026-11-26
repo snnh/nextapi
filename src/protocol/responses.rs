@@ -21,7 +21,7 @@ use super::ir::*;
 use super::{ConvCtx, ConvertError};
 
 /// 请求体中被本适配器识别并映射的顶层字段；其余进 `extra`。
-const KNOWN_REQUEST_FIELDS: [&str; 10] = [
+const KNOWN_REQUEST_FIELDS: [&str; 11] = [
     "model",
     "instructions",
     "input",
@@ -32,6 +32,7 @@ const KNOWN_REQUEST_FIELDS: [&str; 10] = [
     "tools",
     "tool_choice",
     "stream",
+    "reasoning",
 ];
 
 /// 响应体顶层规范字段；其余进 `extra`。
@@ -231,6 +232,7 @@ fn parse_input_item(item: &Value, ctx: &mut ConvCtx) -> Result<Option<IrMessage>
                 id,
                 name,
                 arguments,
+                signature: item["thought_signature"].as_str().map(String::from),
             });
             Ok(Some(msg))
         }
@@ -416,13 +418,26 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
     req.temperature = v["temperature"].as_f64();
     req.top_p = v["top_p"].as_f64();
 
-    // text.format → response_format；text.verbosity 为 Responses 专属 → 降级
+    // text.format → response_format；text.verbosity 原值保留（OpenAI 系互通）
     if let Some(text) = v.get("text").and_then(|t| t.as_object()) {
         if let Some(fmt) = text.get("format") {
             req.response_format = Some(fmt.clone());
         }
-        if text.get("verbosity").is_some() {
-            ctx.degrade("text.verbosity", "Responses 专属字段，无法映射");
+        req.ext.verbosity = text["verbosity"].as_str().map(String::from);
+    }
+
+    // reasoning.effort → ext.effort（原值，不做档位换算）；其余子字段无 IR 槽位
+    if let Some(r) = v.get("reasoning") {
+        match r.as_object() {
+            Some(o) => {
+                req.ext.effort = o["effort"].as_str().map(String::from);
+                for k in o.keys() {
+                    if k != "effort" {
+                        ctx.degrade(format!("reasoning.{k}"), "reasoning 子字段无 IR 槽位，丢弃");
+                    }
+                }
+            }
+            None => ctx.degrade("reasoning", "reasoning 非对象，忽略"),
         }
     }
 
@@ -447,6 +462,7 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
             req.extra.insert(k.clone(), val.clone());
         }
     }
+    req.extra_proto = Some(Protocol::OpenaiResponses);
 
     Ok(req)
 }
@@ -546,6 +562,9 @@ fn function_call_input_item(tc: &IrToolCall) -> Value {
     o.insert("call_id".into(), Value::String(tc.id.clone()));
     o.insert("name".into(), Value::String(tc.name.clone()));
     o.insert("arguments".into(), Value::String(tc.arguments.clone()));
+    if let Some(sig) = &tc.signature {
+        o.insert("thought_signature".into(), Value::String(sig.clone()));
+    }
     Value::Object(o)
 }
 
@@ -583,9 +602,9 @@ fn degrade_ext(req: &IrRequest, ctx: &mut ConvCtx) {
     }
 }
 
-/// IR → 请求 JSON。extra 先铺底，再写规范字段（规范字段覆盖 extra 同名字段）。
+/// IR → 请求 JSON。入口未知字段先铺底（仅同源协议），再写规范字段。
 pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, ConvertError> {
-    let mut body = req.extra.clone();
+    let mut body = super::request_body_extras(req, Protocol::OpenaiResponses, ctx);
     degrade_ext(req, ctx);
 
     body.insert("model".into(), Value::String(req.model.clone()));
@@ -679,11 +698,19 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     if req.n.is_some() {
         ctx.degrade("n", "Responses 不支持 n，忽略");
     }
-    // response_format → text.format
-    if let Some(rf) = &req.response_format {
+    // response_format → text.format；verbosity 同属 text 块
+    if req.response_format.is_some() || req.ext.verbosity.is_some() {
         let mut text = Map::new();
-        text.insert("format".into(), rf.clone());
+        if let Some(rf) = &req.response_format {
+            text.insert("format".into(), rf.clone());
+        }
+        if let Some(vb) = &req.ext.verbosity {
+            text.insert("verbosity".into(), Value::String(vb.clone()));
+        }
         body.insert("text".into(), Value::Object(text));
+    }
+    if let Some(e) = &req.ext.effort {
+        body.insert("reasoning".into(), serde_json::json!({ "effort": e }));
     }
 
     body.insert("stream".into(), Value::Bool(req.stream));
@@ -825,6 +852,8 @@ pub fn response_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrResponse, Conver
                         id,
                         name,
                         arguments,
+                        // 工具签名随 output item 的扩展字段跨协议携带
+                        signature: item["thought_signature"].as_str().map(String::from),
                     });
                 }
                 "reasoning" => {
@@ -1009,6 +1038,9 @@ fn output_function_call_item(tc: &IrToolCall) -> Value {
     o.insert("call_id".into(), Value::String(tc.id.clone()));
     o.insert("name".into(), Value::String(tc.name.clone()));
     o.insert("arguments".into(), Value::String(tc.arguments.clone()));
+    if let Some(sig) = &tc.signature {
+        o.insert("thought_signature".into(), Value::String(sig.clone()));
+    }
     Value::Object(o)
 }
 
@@ -1296,6 +1328,7 @@ pub fn chunk_to_ir(
                         },
                         name: if name.is_empty() { None } else { Some(name) },
                         arguments: Some(text.to_string()),
+                        signature: None,
                     }],
                     ..Default::default()
                 },
@@ -2245,6 +2278,7 @@ mod tests {
                         id: Some("call_1".into()),
                         name: Some("get_weather".into()),
                         arguments: Some("{\"city\"".into()),
+                        signature: None,
                     }],
                     ..Default::default()
                 },

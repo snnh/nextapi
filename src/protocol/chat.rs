@@ -16,7 +16,7 @@ use super::ir::*;
 use super::{ConvCtx, ConvertError};
 
 /// 请求体中被本适配器识别并映射的顶层字段；其余进 `extra`。
-const KNOWN_REQUEST_FIELDS: [&str; 15] = [
+const KNOWN_REQUEST_FIELDS: [&str; 18] = [
     "model",
     "messages",
     "tools",
@@ -32,6 +32,9 @@ const KNOWN_REQUEST_FIELDS: [&str; 15] = [
     "seed",
     "user",
     "n",
+    "reasoning_effort",
+    "verbosity",
+    "thinking",
 ];
 
 /// 响应体顶层规范字段；其余进 `extra`。
@@ -56,6 +59,7 @@ fn parse_role(role: Option<&str>, ctx: &mut ConvCtx) -> IrRole {
     match role {
         // developer 为 o 系/gpt-5 的系统消息角色（review P5：此前按 user 降级）
         Some("system") | Some("developer") => IrRole::System,
+        Some("user") => IrRole::User,
         Some("assistant") => IrRole::Assistant,
         Some("tool") => IrRole::Tool,
         Some(other) => {
@@ -221,6 +225,7 @@ fn parse_tool_call(tc: &Value, ctx: &mut ConvCtx) -> Option<IrToolCall> {
         id,
         name,
         arguments,
+        signature: tc["thought_signature"].as_str().map(String::from),
     })
 }
 
@@ -366,6 +371,11 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
     req.seed = v["seed"].as_i64();
     req.user = v["user"].as_str().map(String::from);
     req.n = v["n"].as_u64().and_then(|n| u32::try_from(n).ok());
+    // 思考强度与输出详略原值保留，不做档位换算（目标协议按自己的字段名回写）
+    req.ext.effort = v["reasoning_effort"].as_str().map(String::from);
+    req.ext.verbosity = v["verbosity"].as_str().map(String::from);
+    // `thinking{type}` 是 OpenAI 兼容渠道的常见私有开关（如 DeepSeek），原样保留
+    req.ext.thinking = v.get("thinking").cloned();
 
     // 未知字段进 extra
     for (k, val) in obj {
@@ -373,6 +383,7 @@ pub fn request_to_ir(v: &Value, ctx: &mut ConvCtx) -> Result<IrRequest, ConvertE
             req.extra.insert(k.clone(), val.clone());
         }
     }
+    req.extra_proto = Some(Protocol::OpenaiChat);
 
     Ok(req)
 }
@@ -415,6 +426,10 @@ fn tool_call_to_json(tc: &IrToolCall) -> Value {
     let mut c = Map::new();
     c.insert("id".into(), Value::String(tc.id.clone()));
     c.insert("function".into(), Value::Object(f));
+    // 供应商签名的跨协议落点（OpenAI 客户端原样回传即可续接 Gemini 工具循环）
+    if let Some(sig) = &tc.signature {
+        c.insert("thought_signature".into(), Value::String(sig.clone()));
+    }
     json_object_with("type", "function", c)
 }
 
@@ -498,10 +513,18 @@ fn message_to_json(msg: &IrMessage) -> Value {
     Value::Object(m)
 }
 
+/// 是否 Chat 兼容渠道常见的 `thinking{type}` 形态（enabled/disabled）。
+fn is_chat_thinking(v: &Value) -> bool {
+    matches!(v["type"].as_str(), Some("enabled" | "disabled"))
+}
+
 /// 记录 ext 字段在 OpenAI Chat 无对应 → 降级。
 fn degrade_ext(req: &IrRequest, ctx: &mut ConvCtx) {
-    if req.ext.thinking.is_some() {
-        ctx.degrade("ext.thinking", "OpenAI Chat 无对应字段");
+    if req.ext.thinking.is_some() && !is_chat_thinking(req.ext.thinking.as_ref().unwrap()) {
+        ctx.degrade(
+            "ext.thinking",
+            "非 Chat thinking{type: enabled|disabled} 形状（来自其它协议），丢弃",
+        );
     }
     if req.ext.web_search.is_some() {
         ctx.degrade("ext.web_search", "OpenAI Chat 无对应字段");
@@ -520,9 +543,9 @@ fn degrade_ext(req: &IrRequest, ctx: &mut ConvCtx) {
     }
 }
 
-/// IR → 请求 JSON。extra 先铺底，再写规范字段（规范字段覆盖 extra 同名字段）。
+/// IR → 请求 JSON。入口未知字段先铺底（仅同源协议），再写规范字段。
 pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, ConvertError> {
-    let mut body = req.extra.clone();
+    let mut body = super::request_body_extras(req, Protocol::OpenaiChat, ctx);
     degrade_ext(req, ctx);
 
     body.insert("model".into(), Value::String(req.model.clone()));
@@ -597,6 +620,17 @@ pub fn request_from_ir(req: &IrRequest, ctx: &mut ConvCtx) -> Result<Value, Conv
     }
     if let Some(n) = req.n {
         body.insert("n".into(), Value::from(n));
+    }
+    if let Some(e) = &req.ext.effort {
+        body.insert("reasoning_effort".into(), Value::String(e.clone()));
+    }
+    if let Some(vb) = &req.ext.verbosity {
+        body.insert("verbosity".into(), Value::String(vb.clone()));
+    }
+    if let Some(t) = &req.ext.thinking {
+        if is_chat_thinking(t) {
+            body.insert("thinking".into(), t.clone());
+        }
     }
 
     Ok(Value::Object(body))
@@ -833,6 +867,7 @@ fn parse_tool_call_delta(tc: &Value, ctx: &mut ConvCtx) -> Option<IrToolCallDelt
     let f = &tc["function"];
     d.name = f["name"].as_str().map(String::from);
     d.arguments = f["arguments"].as_str().map(String::from);
+    d.signature = tc["thought_signature"].as_str().map(String::from);
     Some(d)
 }
 
@@ -907,6 +942,9 @@ fn tool_call_delta_to_json(t: &IrToolCallDelta) -> Value {
         c.insert("id".into(), Value::String(id.clone()));
     }
     c.insert("function".into(), Value::Object(f));
+    if let Some(sig) = &t.signature {
+        c.insert("thought_signature".into(), Value::String(sig.clone()));
+    }
     json_object_with("type", "function", c)
 }
 
@@ -1473,5 +1511,94 @@ mod tests {
         assert!(c2.degraded.iter().any(|d| d.field == "max_tokens"));
         let back = request_from_ir(&req, &mut c2).unwrap();
         assert_eq!(back["max_completion_tokens"], 200);
+    }
+}
+
+#[cfg(test)]
+mod modern_field_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reasoning_effort_and_verbosity_roundtrip() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "gpt-5.2",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "xhigh",
+            "verbosity": "low",
+        });
+        let req = request_to_ir(&v, &mut ctx).unwrap();
+        assert_eq!(req.ext.effort.as_deref(), Some("xhigh"));
+        assert_eq!(req.ext.verbosity.as_deref(), Some("low"));
+        // 已识别字段不再落进 extra（否则跨协议会被当未知字段）
+        assert!(req.extra.is_empty(), "extra: {:?}", req.extra);
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert_eq!(back["reasoning_effort"], json!("xhigh"));
+        assert_eq!(back["verbosity"], json!("low"));
+    }
+
+    #[test]
+    fn tool_call_signature_carried_as_extension_field() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "m",
+            "messages": [{"role": "assistant", "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "f", "arguments": "{}"},
+                "thought_signature": "sig_1",
+            }]}],
+        });
+        let req = request_to_ir(&v, &mut ctx).unwrap();
+        assert_eq!(
+            req.messages[0].tool_calls[0].signature.as_deref(),
+            Some("sig_1")
+        );
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert_eq!(
+            back["messages"][0]["tool_calls"][0]["thought_signature"],
+            json!("sig_1")
+        );
+    }
+}
+
+#[cfg(test)]
+mod chat_thinking_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn thinking_block_passthrough() {
+        let mut ctx = ConvCtx::new();
+        let v = json!({
+            "model": "deepseek-v4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "disabled"},
+        });
+        let req = request_to_ir(&v, &mut ctx).unwrap();
+        assert_eq!(req.ext.thinking, Some(json!({"type": "disabled"})));
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert_eq!(back["thinking"], json!({"type": "disabled"}));
+        // 同协议形状不再记降级
+        assert!(ctx.degraded_header().is_none(), "{:?}", ctx.degraded);
+    }
+
+    #[test]
+    fn foreign_thinking_shape_dropped() {
+        let mut ctx = ConvCtx::new();
+        let mut req = request_to_ir(
+            &json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+            &mut ctx,
+        )
+        .unwrap();
+        // 模拟从其它协议带来的 thinking 形状（如 Anthropic adaptive）
+        req.ext.thinking = Some(json!({"type": "adaptive"}));
+        let back = request_from_ir(&req, &mut ctx).unwrap();
+        assert!(back.get("thinking").is_none());
+        assert!(ctx
+            .degraded_header()
+            .unwrap_or_default()
+            .contains("ext.thinking"));
     }
 }
