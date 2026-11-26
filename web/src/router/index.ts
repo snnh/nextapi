@@ -14,55 +14,25 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
-    redirect: '/dashboard',
+    redirect: '/usage',
     children: [
       {
-        path: 'dashboard',
-        name: 'dashboard',
-        component: () => import('@/views/Dashboard.vue'),
-        meta: { title: '仪表盘', icon: 'Monitor' },
+        path: 'usage',
+        name: 'usage',
+        component: () => import('@/views/UsageView.vue'),
+        meta: { title: '用量与日志', icon: 'DataAnalysis' },
+      },
+      {
+        path: 'models',
+        name: 'models',
+        component: () => import('@/views/ModelsView.vue'),
+        meta: { title: '模型接入', icon: 'Connection' },
       },
       {
         path: 'keys',
         name: 'keys',
         component: () => import('@/views/Keys.vue'),
-        meta: { title: 'API 密钥', icon: 'Key' },
-      },
-      {
-        path: 'upstreams',
-        name: 'upstreams',
-        component: () => import('@/views/Upstreams.vue'),
-        meta: { title: '上游供应商', icon: 'Connection' },
-      },
-      {
-        path: 'routes',
-        name: 'routes',
-        component: () => import('@/views/Routes.vue'),
-        meta: { title: '模型路由', icon: 'Operation' },
-      },
-      {
-        path: 'aliases',
-        name: 'aliases',
-        component: () => import('@/views/Aliases.vue'),
-        meta: { title: '模型别名', icon: 'Switch' },
-      },
-      {
-        path: 'pricing',
-        name: 'pricing',
-        component: () => import('@/views/Pricing.vue'),
-        meta: { title: '价格管理', icon: 'Coin' },
-      },
-      {
-        path: 'logs',
-        name: 'logs',
-        component: () => import('@/views/Logs.vue'),
-        meta: { title: '请求日志', icon: 'Document' },
-      },
-      {
-        path: 'stats',
-        name: 'stats',
-        component: () => import('@/views/Stats.vue'),
-        meta: { title: '统计报表', icon: 'DataAnalysis' },
+        meta: { title: '密钥', icon: 'Key' },
       },
       {
         path: 'settings',
@@ -72,7 +42,8 @@ const routes: RouteRecordRaw[] = [
       },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
+  // M20：旧路径不再单独成页，统一兜底到 /usage（不做 redirect 映射表）
+  { path: '/:pathMatch(.*)*', redirect: '/usage' },
 ]
 
 const router = createRouter({
@@ -86,7 +57,7 @@ router.beforeEach((to) => {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
   if (to.path === '/login' && auth.loggedIn) {
-    return { path: '/dashboard' }
+    return { path: '/usage' }
   }
   return true
 })

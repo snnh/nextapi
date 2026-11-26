@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="pageLoading">
+  <div class="section-body" v-loading="pageLoading">
     <div class="page-head">
       <p class="page-desc">客户端可用别名请求模型，网关按实际模型路由、计费。白名单按实际模型判定；日志保留入口别名与实际模型。</p>
       <div class="page-head-actions">

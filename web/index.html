@@ -15,6 +15,9 @@
           root.classList.toggle('dark', !!dark);
           root.dataset.theme = dark ? 'dark' : 'light';
           root.dataset.themeMode = mode;
+          // 界面密度：同样在首屏前应用，避免布局跳动
+          var density = localStorage.getItem('nextapi.density') || 'compact';
+          if (density !== 'standard') root.setAttribute('data-density', density);
         } catch (e) {}
       })();
     </script>

@@ -18,6 +18,10 @@
   --nx-subtle: #f7f9f7;
   --nx-hover: #edf4ef;
 
+  /* ---------- 骨架屏 ---------- */
+  --nx-skeleton-base: #e7ece8;
+  --nx-skeleton-highlight: #f4f8f5;
+
   /* ---------- 边框 ---------- */
   --nx-border: #e1e7e2;
   --nx-border-subtle: #ecf0ed;
@@ -272,6 +276,10 @@ html.dark {
   --nx-floating: #1e2922;
   --nx-subtle: #18221c;
   --nx-hover: #223329;
+
+  /* ---------- 骨架屏 ---------- */
+  --nx-skeleton-base: #212c25;
+  --nx-skeleton-highlight: #2e3b32;
 
   --nx-border: #2b382f;
   --nx-border-subtle: #222e26;
@@ -787,6 +795,60 @@ button:focus-visible,
 .el-radio__input:focus-visible .el-radio__inner {
   outline: 2px solid var(--nx-focus-ring);
   outline-offset: 2px;
+}
+
+/* ==========================================================================
+   界面密度（html[data-density]）
+   - 只缩放间距/字号/控件高度，不动颜色与圆角
+   - 默认（无属性）= 标准；紧凑为首次访问默认值，由 index.html 引导脚本设置
+   - 移动端 40px 触控高度优先级更高（见下方 @media）
+   ========================================================================== */
+
+html[data-density='compact'] {
+  --nx-font-caption: 11px;
+  --nx-font-small: 12px;
+  --nx-font-body: 13px;
+  --nx-font-title: 15px;
+  --nx-font-lg: 19px;
+  --nx-font-stat: 22px;
+  --nx-space-1: 3px;
+  --nx-space-2: 6px;
+  --nx-space-3: 10px;
+  --nx-space-4: 13px;
+  --nx-space-5: 16px;
+  --nx-space-6: 20px;
+  --el-component-size: 28px;
+  --el-component-size-small: 22px;
+  --el-component-size-large: 36px;
+}
+
+html[data-density='relaxed'] {
+  --nx-font-caption: 13px;
+  --nx-font-small: 14px;
+  --nx-font-body: 15px;
+  --nx-font-title: 17px;
+  --nx-font-lg: 21px;
+  --nx-font-stat: 26px;
+  --nx-space-1: 5px;
+  --nx-space-2: 10px;
+  --nx-space-3: 14px;
+  --nx-space-4: 18px;
+  --nx-space-5: 24px;
+  --nx-space-6: 28px;
+  --el-component-size: 34px;
+  --el-component-size-small: 26px;
+  --el-component-size-large: 42px;
+}
+
+/* 表格行高跟随密度：日志表一屏能多放 3-4 行 */
+html[data-density='compact'] .el-table td.el-table__cell,
+html[data-density='compact'] .el-table th.el-table__cell {
+  padding: 6px 0;
+}
+
+html[data-density='relaxed'] .el-table td.el-table__cell,
+html[data-density='relaxed'] .el-table th.el-table__cell {
+  padding: 12px 0;
 }
 
 /* 移动端：默认控件提升到 40px；small/large 保持语义 */

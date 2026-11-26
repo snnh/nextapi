@@ -339,3 +339,201 @@ body {
     white-space: normal;
   }
 }
+/* 纵向流页面（/usage）：段头、段容器 */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--nx-space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--nx-space-4);
+}
+
+.section-head-main {
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.section-title {
+  margin: 0;
+  font-size: var(--nx-font-title);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--nx-text);
+  white-space: nowrap;
+}
+
+.section-range {
+  width: 360px;
+  max-width: 100%;
+}
+
+.section-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 800px) {
+  .section-head {
+    flex-direction: column;
+    gap: var(--nx-space-2);
+  }
+  .section-head-main,
+  .section-head-actions {
+    width: 100%;
+  }
+  .section-range {
+    width: 100%;
+  }
+}
+
+/* 筛选/设置区：浅底紧凑卡，与内容卡区分层级（纵向流页面共用） */
+.filter-card {
+  background: var(--nx-subtle);
+  border-color: var(--nx-border-subtle);
+}
+.filter-card .el-card__body {
+  padding: var(--nx-space-3) var(--nx-space-4);
+}
+
+/* 筛选条：第一行时间（预设 + 区间），第二行其余条件 */
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-2);
+  flex-wrap: wrap;
+}
+.filter-row + .filter-row {
+  margin-top: var(--nx-space-2);
+}
+
+/* 高级筛选等附加行 */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-2);
+  flex-wrap: wrap;
+}
+/* 弹性字段：按可用宽度自动伸展（最多 200/420px），宽屏铺满、窄屏自然折行 */
+.filter-select,
+.filter-input {
+  flex: 1 1 9rem;
+  min-width: 0;
+  max-width: 200px;
+}
+.filter-range {
+  flex: 1 1 17rem;
+  width: auto;
+  min-width: 0;
+  max-width: 420px;
+}
+.filter-preset {
+  flex: 0 0 auto;
+  width: 124px;
+}
+.filter-currency {
+  flex: 0 0 auto;
+  width: 84px;
+}
+/* 移动端筛选摘要条：收起时只占一行，条件收进下方可展开区 */
+.filter-mobile-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--nx-space-2);
+  min-width: 0;
+}
+.filter-mobile-bar .filter-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-mobile-bar .spacer {
+  flex: 1;
+  min-width: 0;
+}
+.filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--nx-accent-soft);
+  color: var(--nx-accent);
+  font-size: var(--nx-font-caption);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-caret {
+  margin-left: 4px;
+  transition: transform var(--nx-dur-fast) var(--nx-ease);
+}
+.filter-caret.is-open {
+  transform: rotate(180deg);
+}
+
+/* 结果统计等只读信息：贴在筛选行左侧，不与操作按钮抢位 */
+.filter-meta {
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.filter-bar .spacer {
+  flex: 1;
+  min-width: 0;
+}
+.advanced-bar {
+  margin-top: var(--nx-space-2);
+  padding-top: var(--nx-space-2);
+  border-top: 1px dashed var(--nx-border-subtle);
+}
+
+@media (max-width: 800px) {
+  .filter-range,
+  .filter-preset,
+  .filter-select,
+  .filter-input,
+  .filter-currency {
+    width: 100%;
+    max-width: none;
+  }
+  .filter-bar .spacer {
+    display: none;
+  }
+  /* 主条件两列：下拉左、币种右；再次排两列放下一个下拉 */
+  .filter-row.is-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 88px;
+    gap: var(--nx-space-2);
+  }
+  .filter-row.is-main > .spacer {
+    display: none;
+  }
+  /* 两个等宽控件的行（结果 + 模型），不套用币种的窄列 */
+  .filter-row.is-main-2col {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .filter-adv-line {
+    margin-top: var(--nx-space-1);
+  }
+  /* 移动端操作行：重置 + 查询 各占一半 */
+  .filter-actions-mobile {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--nx-space-2);
+    margin-top: var(--nx-space-3);
+  }
+  .filter-actions-mobile .el-button {
+    width: 100%;
+    margin-left: 0;
+  }
+}

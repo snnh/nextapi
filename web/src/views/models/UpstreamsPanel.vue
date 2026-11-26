@@ -1,8 +1,8 @@
 <template>
-  <div class="page" v-loading="pageLoading">
+  <div class="section-body" v-loading="pageLoading">
     <!-- 页面说明与页级操作：标题由顶栏统一负责 -->
     <div class="page-head">
-      <p class="page-desc">接入并管理实际提供模型的供应商（上游）。接入完成后，到「模型路由」页把这些上游绑定给对外模型。</p>
+      <p class="hint">管理实际提供模型的上游。接入后到「模型路由」把上游绑定给对外模型。</p>
       <div class="page-head-actions">
         <el-dropdown trigger="click" @command="onAddCommand">
           <el-button type="primary" :icon="Plus">
@@ -54,7 +54,7 @@
           <EmptyState
             v-if="hasFilter"
             title="没有匹配的上游"
-            description="试试清空搜索或切换状态筛选。"
+            description="清空搜索或切换状态再试。"
             :icon="Search"
           >
             <template #actions>
@@ -64,7 +64,7 @@
           <EmptyState
             v-else
             title="还没有接入任何上游"
-            description="接入上游后，才能在「模型路由」页把模型请求转发到对应的上游。"
+            description="接入后才能在「模型路由」绑定到对外模型。"
             :icon="Connection"
           >
             <template #actions>
@@ -187,7 +187,7 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
-                  <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 Key</el-dropdown-item>
+                  <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 API Key</el-dropdown-item>
                   <el-dropdown-item command="test">连通测试</el-dropdown-item>
                   <el-dropdown-item v-if="quotaSupported(row)" command="quota">余额/额度</el-dropdown-item>
                   <el-dropdown-item v-if="isDevin(row)" command="reauth">重新授权</el-dropdown-item>
@@ -203,7 +203,7 @@
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 Key</el-dropdown-item>
+                    <el-dropdown-item v-if="row.has_api_key" command="reveal">查看 API Key</el-dropdown-item>
                     <el-dropdown-item command="test">连通测试</el-dropdown-item>
                     <el-dropdown-item v-if="quotaSupported(row)" command="quota">余额/额度</el-dropdown-item>
                     <el-dropdown-item v-if="isDevin(row)" command="reauth">重新授权</el-dropdown-item>
@@ -220,11 +220,11 @@
     <!-- 使用说明：从页尾技术说明移入弹窗 -->
     <el-dialog v-model="helpVisible" title="上游配置与凭证说明" class="dlg">
       <div class="help-body">
-        <p>API Key 采用掩码存储，列表仅显示「已设置 / 未设置」；编辑时输入框「留空保持不变」，点「清除 Key」可移除。完整 Key 默认不可再次查看；如需查看，点行内「查看 Key」并输入管理员密码二次验证（已启用 TOTP 时还需动态码），验证通过后明文仅在弹窗内本次展示。</p>
-        <p>默认值：<span class="mono">timeout_ms = 300000</span>、<span class="mono">breaker_threshold = 5</span>；图片媒体地址留空时回退 <span class="mono">base_url</span>。启用/禁用直接切换行内开关（禁用后 <span class="mono">disabled_by = manual</span>）。</p>
-        <p>自动禁用（熔断）默认关闭（系统设置 <span class="mono">gateway.auto_disable_upstreams</span>）：打开后连续失败达阈值即自动禁用并冷却，成功后自动恢复；在渠道表单关闭「自动禁用」的渠道永不参与（标记「不自动禁用」）。</p>
-        <p>凭证失效（如 Devin session token 过期）由网关自动识别：命中后临时跳过该上游 5 分钟并标注「凭证失效」，点「重新授权」用 Devin 账号换取新 token 即可恢复（无需手动冷却）。</p>
-        <p>余额/额度为上游供应商侧只读监控，不涉及网关用户余额或扣费。DeepSeek/Kimi 可直接复用推理 Key；OpenRouter/Zenmux 需在渠道表单另填 Management Key。自定义端点支持同源相对路径或公网 HTTPS，凭证加密保存、不回传明文。</p>
+        <p><b>凭证。</b>密钥掩码存储，列表只显示「已设置 / 未设置」。编辑时留空即保持不变；要看明文，点行内「查看密钥」并通过管理员密码二次验证（启用 TOTP 时还需动态码），明文只在本次弹窗展示。</p>
+        <p><b>默认值。</b><span class="mono">timeout_ms = 300000</span>、<span class="mono">breaker_threshold = 5</span>；图片媒体地址留空时回退 <span class="mono">base_url</span>。启用状态直接切行内开关。</p>
+        <p><b>自动禁用（熔断）。</b>默认关闭，需在系统设置打开 <span class="mono">gateway.auto_disable_upstreams</span>。打开后连续失败达阈值即自动禁用并冷却，恢复后自动启用；表单里关掉「自动禁用」的上游永不参与。</p>
+        <p><b>凭证失效。</b>如 Devin token 过期，网关会自动识别并临时跳过该上游 5 分钟，同时标注「凭证失效」。点「重新授权」换新 token 即可恢复。</p>
+        <p><b>余额 / 额度。</b>上游侧只读监控，与网关侧余额无关。DeepSeek / Kimi 可直接复用推理密钥；OpenRouter / Zenmux 需另填 Management Key。自定义端点支持同源相对路径或公网 HTTPS，凭证加密保存、不回传明文。</p>
       </div>
       <template #footer>
         <el-button type="primary" @click="helpVisible = false">知道了</el-button>
@@ -275,7 +275,7 @@
       <!-- 安全验证表单 -->
       <el-form v-else label-width="110px" @submit.prevent @keyup.enter="submitReveal">
         <div class="hint" style="margin-bottom: 14px">
-          查看上游「{{ revealRow?.name }}」的完整 API Key 属于敏感操作，需要管理员二次验证；验证通过后明文仅本次展示。
+          查看「{{ revealRow?.name }}」的完整 API Key 属于敏感操作，需管理员二次验证；明文仅本次展示。
         </div>
         <el-form-item label="管理员密码">
           <el-input
@@ -568,7 +568,7 @@ async function removeUpstream(row: UpstreamOut) {
   if (deletingSet.has(row.id)) return
   const ok = await confirmDanger({
     title: '删除上游',
-    message: `将删除上游「${row.name}」及其凭证配置。指向该上游的模型路由会失去可用上游（请求失败），该操作不可恢复。`,
+    message: `绑定「${row.name}」的模型路由会失去可用上游，请求将失败且无法恢复。`,
   })
   if (!ok) return
   deletingSet.add(row.id)

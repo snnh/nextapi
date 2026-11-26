@@ -1,73 +1,101 @@
 <template>
-  <div class="page">
-    <!-- 页面说明 + 导出（只读操作独立于筛选控件） -->
-    <div class="page-head">
-      <p class="page-desc">按时间范围 / 维度 / 币种 / Key / 上游查询统计；粒度由后端自动选择。</p>
-      <div class="page-head-actions">
+  <div class="section-body">
+    <!-- 段头：只放段名与段级操作；时间范围等设置留在筛选卡里 -->
+    <div class="section-head">
+      <div class="section-head-main">
+        <h2 class="section-title">用量统计</h2>
+        <span class="hint">{{ granularityHint }}</span>
+      </div>
+      <div class="section-head-actions">
+        <el-button :icon="Refresh" :loading="loading" title="刷新统计" aria-label="刷新统计" @click="onQuery">
+          <span v-if="!isMobile">刷新</span>
+        </el-button>
         <el-button
           type="primary"
           plain
           :icon="Download"
           :loading="exporting"
           :disabled="!hasData"
+          title="导出 CSV"
+          aria-label="导出 CSV"
           @click="exportCsv"
         >
-          导出 CSV
+          <span v-if="!isMobile">导出 CSV</span>
         </el-button>
       </div>
     </div>
 
-    <!-- 筛选工具栏 -->
-    <el-card shadow="never" class="section-card">
-      <div class="filter-grid">
-        <div class="f-item f-item-wide">
-          <span class="f-label">时间范围</span>
+    <!-- 筛选：一行紧凑工具栏（自动查询 + 手动刷新 / 重置） -->
+    <el-card shadow="never" class="section-card filter-card">
+      <!-- 移动端：默认收起，只留「预设 · 结果数」与筛选/查询，把半屏还给数据 -->
+      <div v-if="isMobile" class="filter-mobile-bar">
+        <span class="filter-meta">{{ presetLabel }} · 共 {{ fmtInt(summary?.requests) }} 次请求</span>
+        <span class="spacer" />
+        <el-button class="filter-toggle" @click="mobileFilterOpen = !mobileFilterOpen">
+          筛选
+          <span v-if="activeFilterCount" class="filter-count">{{ activeFilterCount }}</span>
+          <el-icon class="filter-caret" :class="{ 'is-open': mobileFilterOpen }"><ArrowDown /></el-icon>
+        </el-button>
+        <el-button v-if="!mobileFilterOpen" type="primary" :loading="loading" @click="onQuery">查询</el-button>
+      </div>
+
+      <div v-show="!isMobile || mobileFilterOpen">
+        <!-- 时间：预设 + 实际区间 -->
+        <div class="filter-row">
+          <el-select v-model="rangePreset" class="filter-preset" aria-label="时间范围" @change="applyPreset">
+            <el-option label="今日" value="today" />
+            <el-option label="近 7 天" value="7d" />
+            <el-option label="近 30 天" value="30d" />
+            <el-option label="近 90 天" value="90d" />
+            <el-option label="全部时间" value="all" />
+            <el-option label="自定义" value="custom" />
+          </el-select>
           <el-date-picker
             v-model="range"
+            class="filter-range"
             type="datetimerange"
             :shortcuts="timeShortcuts"
-            :format="isMobile ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm:ss'"
-            range-separator="至"
+            format="MM-DD HH:mm"
+            range-separator="~"
             start-placeholder="开始时间"
             end-placeholder="结束时间"
             clearable
           />
         </div>
-        <div class="f-item">
-          <span class="f-label">Key</span>
-          <el-select v-model="keyId" filterable clearable placeholder="全部 Key">
-            <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
-          </el-select>
-        </div>
-        <div class="f-item">
-          <span class="f-label">上游</span>
-          <el-select v-model="upstreamId" filterable clearable placeholder="全部上游">
-            <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
-          </el-select>
-        </div>
-        <div class="f-item">
-          <span class="f-label">维度</span>
-          <el-select v-model="dimension">
+
+        <!-- 维度与范围条件：移动端两列，桌面一行 -->
+        <div class="filter-row is-main">
+          <span v-if="!isMobile" class="filter-meta">共 {{ fmtInt(summary?.requests) }} 次请求</span>
+          <el-select v-model="dimension" class="filter-select" placeholder="不分组（总量）" aria-label="分组维度">
             <el-option v-for="o in DIMENSION_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
-        </div>
-        <div class="f-item">
-          <span class="f-label">币种</span>
-          <el-select v-model="currency">
+          <el-select v-model="currency" class="filter-currency" aria-label="币种">
             <el-option v-for="c in CURRENCIES" :key="c" :label="c" :value="c" />
           </el-select>
+          <el-select v-model="keyId" class="filter-select" filterable clearable placeholder="全部密钥" aria-label="密钥">
+            <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
+          </el-select>
+          <el-select v-model="upstreamId" class="filter-select" filterable clearable placeholder="全部上游" aria-label="上游">
+            <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
+          </el-select>
+          <span class="spacer" />
+          <template v-if="!isMobile">
+            <el-button type="primary" :loading="loading" @click="onQuery">查询</el-button>
+            <el-button :disabled="!hasActiveFilters" @click="onReset">重置</el-button>
+          </template>
         </div>
-        <div class="filter-actions">
-          <el-button type="primary" :icon="Search" :loading="loading" @click="onQuery">查询</el-button>
-          <el-button :icon="Refresh" @click="onReset">重置</el-button>
+
+        <!-- 移动端：操作放展开区底部，改完条件就地执行 -->
+        <div v-if="isMobile" class="filter-actions-mobile">
+          <el-button :disabled="!hasActiveFilters" @click="onReset">重置</el-button>
+          <el-button type="primary" :loading="loading" @click="onQuery">查询</el-button>
         </div>
       </div>
-      <div class="hint granularity-hint">{{ granularityHint }}</div>
     </el-card>
 
-    <div v-loading="loading">
-      <!-- 汇总卡 -->
-      <StatCards :summary="summary" :currency="currency" />
+    <div>
+      <!-- 汇总卡（跟着筛选范围走，不再单独成「梗概」段）；刷新时不遮罩，只补骨架 -->
+      <StatCards :summary="summary" :currency="currency" :points="points" :loading="loading" />
 
       <!-- 趋势图 -->
       <el-card shadow="never" class="section-card">
@@ -85,18 +113,25 @@
             </div>
           </div>
         </template>
-        <EChart v-if="hasData" :option="chartOption" height="360px" />
+        <SkeletonBlock v-if="chartSkeleton" height="320px" radius="10px" />
+        <EChart v-else-if="hasData" :option="chartOption" height="320px" />
         <el-empty v-else :description="emptyText" :image-size="90" />
         <div class="hint metric-note">
-          Token 口径：输入（未缓存）+ 输出 + 缓存读 + 缓存写；命中率仅统计输入侧。
+          Token = 输入 + 输出 + 缓存读 + 缓存写；命中率只统计输入侧。
         </div>
       </el-card>
 
+      <div class="stats-split" :class="{ 'is-single': !dimension }">
       <!-- 维度明细表 -->
       <el-card v-if="dimension" shadow="never" class="section-card">
-        <template #header>维度明细</template>
+        <template #header>
+          <div class="card-head-line">
+            <span>维度明细</span>
+            <span class="hint">{{ dimLabelText }}</span>
+          </div>
+        </template>
         <el-table :data="detailRows" max-height="420">
-          <el-table-column v-if="!isMobile && !isCompact" label="时间" width="140">
+          <el-table-column v-if="!isMobile && !isCompact" label="时间" :width="splitLayout ? 116 : 140">
             <template #default="{ row }">{{ row.bucketText }}</template>
           </el-table-column>
           <el-table-column label="维度" :min-width="isMobile ? 118 : isCompact ? 126 : 140" show-overflow-tooltip>
@@ -105,25 +140,29 @@
               <span v-if="isMobile || isCompact" class="hint dim-time">{{ row.bucketText }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="请求数" :width="isMobile ? 72 : isCompact ? 78 : 104" align="right">
+          <el-table-column label="请求数" :width="splitLayout ? 84 : isMobile ? 72 : isCompact ? 78 : 104" align="right">
             <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="错误" width="88" align="right">
+          <el-table-column v-if="!isTablet" label="错误" :width="splitLayout ? 68 : 88" align="right">
             <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isMobile && !isCompact" label="Token 数（含缓存）" width="148" align="right">
-            <template #default="{ row }">{{ fmtInt(totalTokensOf(row)) }}</template>
+          <el-table-column v-if="!isMobile && !isCompact" label="Token（含缓存）" :width="splitLayout ? 120 : 148" align="right">
+            <template #default="{ row }">{{ fmtTokens(totalTokensOf(row)) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="缓存命中" width="116" align="right">
-            <template #default="{ row }">{{ fmtInt(row.cache_read_tokens ?? 0) }}</template>
+          <el-table-column v-if="!isTablet" label="缓存命中" :width="splitLayout ? 100 : 116" align="right">
+            <template #default="{ row }">{{ fmtTokens(row.cache_read_tokens ?? 0) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="命中率" width="96" align="right">
+          <el-table-column v-if="!isTablet" label="命中率" :width="splitLayout ? 80 : 96" align="right">
             <template #default="{ row }">{{ fmtPctOrNull(hitRateOf(row)) }}</template>
           </el-table-column>
           <el-table-column label="成本" :width="isMobile ? 96 : isCompact ? 108 : 128" align="right">
             <template #default="{ row }">{{ fmtMoney(row.cost_display) }}</template>
           </el-table-column>
         </el-table>
+        <div class="table-foot">
+          <span class="hint">共 {{ detailRows.length }} 行</span>
+          <span class="hint">时间桶 {{ hourMode ? '按小时' : '按天' }}</span>
+        </div>
       </el-card>
 
       <!-- 模型排行（P5-a 高级统计）：区间内 Top-N 模型，点击模型名钻取到日志页 -->
@@ -132,32 +171,32 @@
           <div class="rank-header">
             <span>模型排行 · Top {{ rankLimit }}</span>
             <div class="rank-actions">
-              <span class="hint">排序：</span>
-              <el-select v-model="rankOrder" size="small" style="width: 132px">
+              <el-select v-model="rankOrder" size="small" class="rank-sort" aria-label="排行排序">
                 <el-option label="总 Token" value="total_tokens" />
                 <el-option label="请求数" value="requests" />
                 <el-option label="成本" value="cost" />
                 <el-option label="缓存命中" value="cache_read" />
                 <el-option label="错误数" value="errors" />
               </el-select>
-              <el-select v-model="rankLimit" size="small" style="width: 88px">
+              <el-select v-model="rankLimit" size="small" class="rank-limit" aria-label="排行条数">
                 <el-option v-for="n in [10, 20, 50, 100]" :key="n" :label="`Top ${n}`" :value="n" />
               </el-select>
-              <el-button
-                size="small"
-                plain
-                :icon="Download"
-                :loading="exportingRank"
-                :disabled="!rankRows.length"
-                @click="exportRankCsv"
-              >
-                CSV
-              </el-button>
+              <el-tooltip content="导出排行 CSV" placement="top">
+                <el-button
+                  size="small"
+                  plain
+                  :icon="Download"
+                  :loading="exportingRank"
+                  :disabled="!rankRows.length"
+                  aria-label="导出排行 CSV"
+                  @click="exportRankCsv"
+                />
+              </el-tooltip>
             </div>
           </div>
         </template>
-        <el-table v-if="rankRows.length" :data="rankRows" max-height="460">
-          <el-table-column label="模型" :min-width="isMobile ? 118 : isCompact ? 140 : 180" show-overflow-tooltip>
+        <el-table v-if="rankRows.length" :data="rankRows" max-height="420">
+          <el-table-column label="模型" :min-width="isMobile ? 118 : isCompact ? 140 : splitLayout ? 130 : 180" show-overflow-tooltip>
             <template #default="{ row }">
               <el-link type="primary" :underline="false" @click="drillToLogs(row.model)">
                 {{ row.model || '—' }}
@@ -167,19 +206,19 @@
           <el-table-column label="请求数" :width="isMobile ? 72 : isCompact ? 78 : 100" align="right">
             <template #default="{ row }">{{ fmtInt(row.requests) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="错误" width="84" align="right">
+          <el-table-column v-if="!isTablet && !splitLayout" label="错误" width="84" align="right">
             <template #default="{ row }">{{ fmtInt(row.errors) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isMobile && !isCompact" label="Token 数（含缓存）" width="150" align="right">
-            <template #default="{ row }">{{ fmtInt(row.total_tokens) }}</template>
+          <el-table-column v-if="!isMobile && !isCompact" label="Token（含缓存）" :width="splitLayout ? 112 : 150" align="right">
+            <template #default="{ row }">{{ fmtTokens(row.total_tokens) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="缓存命中" width="116" align="right">
-            <template #default="{ row }">{{ fmtInt(row.cache_read_tokens) }}</template>
+          <el-table-column v-if="!isTablet && !splitLayout" label="缓存命中" width="116" align="right">
+            <template #default="{ row }">{{ fmtTokens(row.cache_read_tokens) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="命中率" width="96" align="right">
+          <el-table-column v-if="!isTablet && !splitLayout" label="命中率" width="96" align="right">
             <template #default="{ row }">{{ fmtPctOrNull(row.cache_hit_rate) }}</template>
           </el-table-column>
-          <el-table-column v-if="!isTablet" label="平均延迟" width="104" align="right">
+          <el-table-column v-if="!isTablet && !splitLayout" label="平均延迟" width="104" align="right">
             <template #default="{ row }">{{ fmtDur(row.avg_latency_ms) }}</template>
           </el-table-column>
           <el-table-column label="成本" :width="isMobile ? 96 : isCompact ? 108 : 128" align="right">
@@ -197,19 +236,21 @@
         />
         <EmptyState v-else title="当前条件下暂无模型数据" />
       </el-card>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 // 统计报表页（M8 §4.8）：汇总卡 + 趋势图 + 维度明细 + CSV 导出
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
-import { Download, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowDown, Download, Refresh } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import StatCards from '@/components/stats/StatCards.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { EChartsOption } from 'echarts'
@@ -226,9 +267,9 @@ import type {
   StatsSummary,
   UpstreamOut,
 } from '@/api/types'
-import { CURRENCIES, DIMENSION_OPTIONS, PROTOCOL_IN_LABELS } from '@/utils/consts'
+import { CURRENCIES, DIMENSION_OPTIONS, PROTOCOL_IN_LABELS, RANGE_PRESET_LABELS } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
-import { fmtDur, fmtInt, fmtMoney, fmtPct } from '@/utils/format'
+import { fmtDur, fmtInt, fmtMoney, fmtPct, fmtTokens } from '@/utils/format'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
 /** 趋势图指标：请求数 / 总 Token（含缓存）/ 缓存命中 Token / 缓存命中率 / 成本 */
@@ -241,12 +282,36 @@ const range = ref<[Date, Date] | null>([
 ])
 const dimension = ref<SeriesDimension>('')
 const currency = ref<StatsCurrency>('CNY')
+
+/** 时间范围预设（比 datetimerange 控件窄一半，保证筛选条一横条不折行） */
+type RangePreset = 'today' | '7d' | '30d' | '90d' | 'all' | 'custom'
+const rangePreset = ref<RangePreset>('7d')
+let programmaticRange = false
+
+function applyPreset(v: string | number | boolean | undefined) {
+  const preset = typeof v === 'string' ? (v as RangePreset) : '7d'
+  rangePreset.value = preset
+  if (preset === 'custom') return
+  programmaticRange = true
+  if (preset === 'all') range.value = null
+  else if (preset === 'today') range.value = [dayjs().startOf('day').toDate(), dayjs().toDate()]
+  else {
+    const days = preset === '7d' ? 7 : preset === '30d' ? 30 : 90
+    range.value = [dayjs().subtract(days, 'day').toDate(), dayjs().toDate()]
+  }
+  void nextTick(() => {
+    programmaticRange = false
+  })
+}
 const keyId = ref('')
 const upstreamId = ref('')
 const keys = ref<ApiKeyRow[]>([])
 const upstreams = ref<UpstreamOut[]>([])
 const metric = ref<Metric>('requests')
 const { isMobile, isCompact, isTablet } = useBreakpoint()
+
+/** 并排布局：>1400 且有维度明细（与 CSS 的 min-width: 1401px 对齐） */
+const splitLayout = computed(() => !!dimension.value && !isTablet.value)
 
 // —— 模型排行（P5-a）——
 const route = useRoute()
@@ -323,30 +388,20 @@ const timeShortcuts = [
 ]
 
 // —— 粒度/数据源自动推断（仅用于前端 UI 提示与 x 轴格式，不随请求发送） ——
+/** 明细卡头显示当前维度（总览时留空，避免重复「总览」） */
+const dimLabelText = computed(() => {
+  if (!dimension.value) return ''
+  return DIMENSION_OPTIONS.find((o) => o.value === dimension.value)?.label ?? ''
+})
+
 const spanHours = computed(() => {
   if (!range.value) return 7 * 24
   return dayjs(range.value[1]).diff(dayjs(range.value[0]), 'hour')
 })
-const spanDays = computed(() => Math.round(spanHours.value / 24))
 const hourMode = computed(() => spanHours.value <= 48)
-/** 是否带 Key/上游筛选（usage_hourly 预聚合表无这些列，命中即强制明细源） */
-const hasKeyUpstreamFilter = computed(() => !!keyId.value || !!upstreamId.value)
-/** 后端 series 可能走预聚合小时表的条件：按天粒度 + 无 Key/上游筛选 + 仅总量/model 维度 */
-const mayUseHourly = computed(
-  () => !hasKeyUpstreamFilter.value && (dimension.value === '' || dimension.value === 'model'),
-)
 
-const granularityHint = computed(() => {
-  if (hourMode.value) {
-    // 自动 hour 粒度仅出现在 ≤2 天区间，且 pick_source 恒回退明细源（无 span>7 命中）。
-    return '区间 ≤2 天：自动按小时粒度（回退明细聚合）。'
-  }
-  const base = spanDays.value > 7 ? '区间 >7 天：自动按天粒度。' : '区间 2~7 天：自动按天粒度。'
-  if (mayUseHourly.value) {
-    return `${base} 未筛选 Key/上游，后端读取每小时预聚合表。`
-  }
-  return `${base} 已筛选 Key/上游或按 Key/上游/协议分组，后端回退明细聚合。`
-})
+/** 段头粒度提示：只讲用户关心的汇总粒度，后端实现不暴露 */
+const granularityHint = computed(() => (hourMode.value ? '按小时汇总' : '按天汇总'))
 
 /** 最近一次加载失败的原因（从未成功加载时用于空态提示） */
 const loadError = ref('')
@@ -443,6 +498,28 @@ const sortedPoints = computed<SeriesPoint[]>(() =>
   [...points.value].sort((a, b) => a.bucket.localeCompare(b.bucket)),
 )
 const hasData = computed(() => sortedPoints.value.length > 0)
+/** 首次加载（尚无任何桶）时用骨架占位，刷新时保留旧图不闪白 */
+const chartSkeleton = computed(() => loading.value && !hasData.value)
+/** 是否存在非默认筛选：默认值时「重置」无意义，置灰避免误点 */
+/** 移动端筛选区展开状态（默认收起，一次只看数据） */
+const mobileFilterOpen = ref(false)
+/** 生效的筛选条件数：移动端收起时也要能看到「有几条生效」 */
+const activeFilterCount = computed(
+  () =>
+    [dimension.value, keyId.value, upstreamId.value].filter((v) => v !== '').length +
+    (currency.value !== 'CNY' ? 1 : 0) +
+    (rangePreset.value !== '7d' ? 1 : 0),
+)
+const presetLabel = computed(() => RANGE_PRESET_LABELS[rangePreset.value] ?? '自定义区间')
+
+const hasActiveFilters = computed(
+  () =>
+    dimension.value !== '' ||
+    keyId.value !== '' ||
+    upstreamId.value !== '' ||
+    currency.value !== 'CNY' ||
+    rangePreset.value !== '7d',
+)
 
 function buildBaseQuery(): StatsQuery {
   const q: StatsQuery = { currency: currency.value }
@@ -542,7 +619,7 @@ function onQuery() {
 function onReset() {
   if (autoTimer) clearTimeout(autoTimer)
   if (rankTimer) clearTimeout(rankTimer)
-  range.value = [dayjs().subtract(7, 'day').toDate(), dayjs().toDate()]
+  applyPreset('7d')
   dimension.value = ''
   currency.value = 'CNY'
   keyId.value = ''
@@ -553,6 +630,14 @@ function onReset() {
 }
 
 // 时间/币种/维度/Key/上游 变化 → 主查询 + 排行都刷新：300ms 防抖
+watch(
+  range,
+  () => {
+    if (!programmaticRange) rangePreset.value = 'custom'
+  },
+  { deep: true },
+)
+
 watch([range, currency, dimension, keyId, upstreamId], () => {
   if (autoTimer) clearTimeout(autoTimer)
   autoTimer = setTimeout(loadData, 300)
@@ -649,16 +734,17 @@ function fmtMetricValue(v: unknown): string {
   const n = Number(v)
   if (!Number.isFinite(n)) return String(v)
   if (metric.value === 'hit') return fmtPct(n)
-  return metric.value === 'cost' ? fmtMoney(n) : fmtInt(n)
+  if (metric.value === 'cost') return fmtMoney(n)
+  // Token 类指标统一 M/T 单位，与表格/KPI 卡同口径
+  if (metric.value === 'tokens' || metric.value === 'cache') return fmtTokens(n)
+  return fmtInt(n)
 }
 
 /** 坐标轴数字：命中率百分比、成本货币格式，其余大数缩写 + 千分位 */
 function fmtAxisValue(n: number): string {
   if (metric.value === 'hit') return `${(n * 100).toFixed(0)}%`
   if (metric.value === 'cost') return fmtMoney(n)
-  const abs = Math.abs(n)
-  if (abs >= 1e8) return `${(n / 1e8).toFixed(1)}亿`
-  if (abs >= 1e4) return `${(n / 1e4).toFixed(1)}万`
+  if (metric.value === 'tokens' || metric.value === 'cache') return fmtTokens(n)
   return n.toLocaleString('zh-CN')
 }
 
@@ -896,6 +982,8 @@ async function exportRankCsv() {
     exportingRank.value = false
   }
 }
+// 供 /usage 页头「刷新全部」调用
+defineExpose({ refresh: onQuery })
 </script>
 
 <style scoped>
@@ -922,19 +1010,7 @@ async function exportRankCsv() {
   margin-top: 10px;
 }
 
-@media (max-width: 800px) {
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-  .f-item-wide {
-    grid-column: auto;
-  }
-  .f-item {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-  }
-}
+
 
 .dim-time {
   display: block;
@@ -961,4 +1037,74 @@ async function exportRankCsv() {
     padding: 5px 8px;
   }
 }
+
+/* ---------- 排版：设置区降级 + 明细/排行并排 ---------- */
+.card-head-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--nx-space-2);
+  flex-wrap: wrap;
+}
+
+.stats-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--nx-space-4);
+  margin-bottom: var(--nx-space-4);
+}
+.stats-split > .section-card {
+  margin-bottom: 0;
+  min-width: 0;
+}
+/* 宽屏才并排：明细 2/3 + 排行 1/3，窄屏保持纵向 */
+@media (min-width: 1401px) {
+  .stats-split {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+
+/* 并排容器：无维度明细时单列 */
+.stats-split.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 排行卡头：并排后宽度有限，控件收紧 */
+.rank-header {
+  flex-wrap: wrap;
+  gap: var(--nx-space-2);
+}
+.rank-actions {
+  gap: var(--nx-space-1);
+}
+.rank-sort {
+  width: 116px;
+}
+.rank-limit {
+  width: 84px;
+}
+
+/* 表尾：行数与口径 */
+.table-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nx-space-2);
+  margin-top: var(--nx-space-2);
+  padding-top: var(--nx-space-2);
+  border-top: 1px solid var(--nx-border-subtle);
+}
+
+/* 指标切换：窄屏横向滚动，不换行挤压图高 */
+.metric-switch {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.metric-switch::-webkit-scrollbar {
+  display: none;
+}
+
+
 </style>

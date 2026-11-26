@@ -8,10 +8,12 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import App from './App.vue'
 import router from './router'
 import { initTheme } from './composables/useTheme'
+import { initDensity } from './composables/useDensity'
 import './styles/index.css'
 import './styles/theme.css'
 
 initTheme()
+initDensity()
 
 const app = createApp(App)
 app.use(createPinia())

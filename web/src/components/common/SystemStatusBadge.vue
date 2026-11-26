@@ -305,6 +305,10 @@ onBeforeUnmount(() => {
   .status-badge {
     padding: 3px 8px;
   }
+  /* 窄屏只留状态点，把宽度让给密度/主题/用户菜单 */
+  .status-badge .label {
+    display: none;
+  }
 }
 </style>
 

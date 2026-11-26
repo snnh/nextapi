@@ -28,6 +28,24 @@ export function fmtInt(v?: number | null): string {
   return v.toLocaleString('zh-CN')
 }
 
+/**
+ * Token 数量展示（M20）：
+ * - < 1M：完整数字 + 千分位（999,999）
+ * - ≥ 1M：`X.XXX M`（严格保留 3 位小数，1,000,000 → 1.000 M）
+ * - ≥ 1T：`X.XXX T`
+ * 只用于展示；CSV 导出必须用原始整数。
+ */
+export function fmtTokens(v?: number | null): string {
+  if (v === null || v === undefined) return '-'
+  const n = typeof v === 'number' ? v : Number(v)
+  if (Number.isNaN(n)) return String(v)
+  const abs = Math.abs(n)
+  if (abs < 1e6) return n.toLocaleString('zh-CN')
+  const unit = abs >= 1e12 ? 'T' : 'M'
+  const div = unit === 'T' ? 1e12 : 1e6
+  return `${(n / div).toFixed(3)} ${unit}`
+}
+
 /** 字节人性化 */
 export function fmtBytes(b?: number | null): string {
   if (b === null || b === undefined) return '-'

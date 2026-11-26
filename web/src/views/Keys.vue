@@ -2,7 +2,7 @@
   <div class="page" v-loading="pageLoading">
     <div class="page-head">
       <p class="page-desc">
-        网关 Key 格式为 <span class="mono">sk-nx-...</span>。完整 Key 仅在创建/轮换时展示一次，请立即保存；数据库只存储哈希，之后任何页面均无法再次查看明文。
+        密钥格式为 <span class="mono">sk-nx-…</span>。完整值只在创建或轮换时显示一次，之后无法再查看。
       </p>
       <div class="page-head-actions">
         <el-button type="primary" :icon="Plus" @click="openCreate">新建密钥</el-button>
@@ -34,7 +34,7 @@
             <EmptyState
               v-if="hasFilter"
               title="没有匹配的密钥"
-              description="试试清空搜索或切换状态筛选。"
+              description="清空搜索或切换状态再试。"
               :icon="Search"
             >
               <template #actions>
@@ -44,7 +44,7 @@
             <EmptyState
               v-else
               title="还没有创建密钥"
-              description="创建后即可用 sk-nx-... 调用网关；完整 Key 只展示一次，请及时保存。"
+              description="创建后即可调用网关；完整密钥只显示一次。"
               :icon="Key"
             >
               <template #actions>
@@ -175,8 +175,8 @@
             type="error"
             :closable="false"
             show-icon
-            title="请立即保存完整 Key"
-            description="关闭后将无法再次查看完整 Key；数据库仅存储哈希，页面与后端均无法再次取得明文。"
+            title="请保存完整密钥"
+            description="关闭后无法再次查看，请先复制保存。"
           />
           <div class="secret-key mono">{{ secretKey }}</div>
           <div class="secret-actions">
@@ -195,7 +195,7 @@
           </el-descriptions>
           <pre class="code">{{ curlExample }}</pre>
           <div class="hint">
-            兼容 OpenAI / Anthropic / Gemini 官方 SDK：把 SDK 的 base_url 指向网关地址、api_key 填入本密钥即可。
+            兼容 OpenAI / Anthropic / Gemini 官方 SDK：base_url 填网关地址，api_key 填本密钥。
           </div>
         </div>
       </template>
@@ -205,7 +205,7 @@
         <el-divider content-position="left">基本信息</el-divider>
 
         <el-form-item label="名称">
-          <el-input v-model="form.name" placeholder="密钥名称（可为空，空名显示「(未命名)」）" clearable />
+          <el-input v-model="form.name" placeholder="名称（可留空）" clearable />
         </el-form-item>
 
         <el-form-item v-if="isEdit" label="启用">
@@ -222,8 +222,8 @@
             :disabled="form.modelsClear"
             :placeholder="
               isEdit
-                ? '每行一个模型，支持 * 通配；留空 = 保持现有白名单；勾选下方复选框 = 清除'
-                : '每行一个模型，支持 * 通配；留空 = 全部模型'
+                ? '每行一个模型，支持 * 通配；留空则保持原有白名单'
+                : '每行一个模型，支持 * 通配；留空表示不限制'
             "
           />
           <el-checkbox v-if="isEdit" v-model="form.modelsClear">清除模型白名单（恢复全部模型）</el-checkbox>
@@ -254,7 +254,7 @@
                 <el-option v-for="o in QUOTA_WINDOW_OPTIONS" :key="o.value" :value="o.value" :label="o.label" />
               </el-select>
             </div>
-            <div class="hint">设定了用量上限时必须同时选择单位与窗口；清空上限 = 不限。</div>
+            <div class="hint">设置上限时需同时选择单位和窗口；清空上限即不限。</div>
           </template>
           <el-checkbox v-if="isEdit" v-model="form.quotaClear">清除配额（不限）</el-checkbox>
         </el-form-item>
@@ -288,7 +288,7 @@
                 type="textarea"
                 :rows="3"
                 :disabled="form.passthroughClear"
-                placeholder="每行一个上游名；需网关 Key 显式授权的上游名列表，/v1/upstream/{name} 透传用"
+                placeholder="每行一个上游名，用于 /v1/upstream/{name} 透传"
               />
               <el-checkbox v-if="isEdit" v-model="form.passthroughClear">清除透传上游</el-checkbox>
             </el-form-item>
@@ -312,7 +312,7 @@
                 style="width: 320px"
               />
               <div class="hint" style="width: 100%">
-                调试模式完整记录请求/响应（脱敏后），最长时间受运行参数 log_debug_ttl_minutes 限制，到时自动关闭。
+                完整记录请求与响应（已脱敏），到期自动关闭。
               </div>
             </el-form-item>
           </el-collapse-item>
@@ -347,7 +347,7 @@ import { confirmDanger } from '@/utils/confirm'
 import { copyText } from '@/utils/clipboard'
 import { QUOTA_UNIT_LABELS, QUOTA_WINDOW_LABELS } from '@/utils/consts'
 import { gatewayBase } from '@/utils/base'
-import { fmtInt, fmtTime } from '@/utils/format'
+import { fmtInt, fmtMoney, fmtTime, fmtTokens } from '@/utils/format'
 import CopyText from '@/components/common/CopyText.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -589,14 +589,17 @@ function disablePastDate(date: Date): boolean {
 function rateText(row: ApiKeyRow): string {
   const parts: string[] = []
   if (row.rpm != null) parts.push(`RPM ${fmtInt(row.rpm)}`)
-  if (row.tpm != null) parts.push(`TPM ${fmtInt(row.tpm)}`)
+  if (row.tpm != null) parts.push(`TPM ${fmtTokens(row.tpm)}`)
   return parts.length ? parts.join(' · ') : '—'
 }
 
 function quotaText(row: ApiKeyRow): string {
   const unit = row.quota_unit ? QUOTA_UNIT_LABELS[row.quota_unit] : ''
   const win = row.quota_window ? QUOTA_WINDOW_LABELS[row.quota_window] : ''
-  return `${fmtInt(row.quota_limit)} ${unit} / ${win}`
+  // Token 上限用 M/T 单位；成本上限按货币格式
+  const value =
+    row.quota_unit === 'tokens' ? fmtTokens(Number(row.quota_limit)) : fmtMoney(row.quota_limit)
+  return `${value} ${unit} / ${win}`
 }
 
 // —— 行操作 ——
@@ -630,7 +633,7 @@ async function removeKey(row: ApiKeyRow) {
   if (deletingSet.has(row.id)) return
   const ok = await confirmDanger({
     title: '删除密钥',
-    message: `将删除密钥「${rowName(row)}」。删除后使用该 Key 的客户端请求会立即全部失败，且不可恢复（需重新创建 Key）。`,
+    message: `使用「${rowName(row)}」的请求会立刻全部失败，且无法恢复。`,
   })
   if (!ok) return
   deletingSet.add(row.id)
@@ -648,7 +651,7 @@ async function removeKey(row: ApiKeyRow) {
 async function rotateKey(row: ApiKeyRow) {
   const ok = await confirmDanger({
     title: '轮换密钥',
-    message: `将为密钥「${rowName(row)}」生成新 Key，旧 Key 立即失效；请同步更新所有使用该 Key 的客户端。`,
+    message: `将为「${rowName(row)}」生成新密钥，旧密钥立刻失效，需同步更新所有客户端。`,
     confirmText: '确认轮换',
   })
   if (!ok) return
@@ -827,7 +830,7 @@ async function submit() {
 }
 
 function copySecret() {
-  copyText(secretKey.value, '已复制完整 Key')
+  copyText(secretKey.value, '已复制完整密钥')
 }
 
 // —— 一次性调用向导（创建/轮换成功后展示） ——

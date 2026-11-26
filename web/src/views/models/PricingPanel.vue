@@ -1,5 +1,5 @@
 <template>
-  <div class="page" v-loading="pageLoading">
+  <div class="section-body" v-loading="pageLoading">
     <div class="page-head">
       <p class="page-desc">维护每个上游模型的输入、输出、缓存读写单价（按每百万 tokens）；支持分段、分时与图片/视频维度规则。</p>
     </div>

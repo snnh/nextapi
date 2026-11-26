@@ -1,14 +1,25 @@
 <template>
-  <div class="page">
-    <div class="page-head">
-      <p class="page-desc">时间默认「今天 00:00 ~ 现在」，清空即按服务端默认；筛选与 CSV 导出共用并同步地址栏。</p>
-      <div class="page-head-actions">
+  <div class="section-body">
+    <div class="section-head">
+      <div class="section-head-main">
+        <h2 class="section-title">请求日志</h2>
+        <span class="hint">默认今天；筛选条件会写入网址，可直接分享。</span>
+      </div>
+      <div class="section-head-actions">
         <el-tooltip
-          content="按当前筛选导出；上限 10 万行，超出将截断并追加注释行"
+          content="按当前筛选导出，最多 10 万行"
           placement="top"
         >
-          <el-button type="primary" plain :icon="Download" :loading="exporting" @click="exportCsv">
-            CSV 导出
+          <el-button
+            type="primary"
+            plain
+            :icon="Download"
+            :loading="exporting"
+            title="CSV 导出"
+            aria-label="CSV 导出"
+            @click="exportCsv"
+          >
+            <span v-if="!isMobile">CSV 导出</span>
           </el-button>
         </el-tooltip>
         <el-dropdown trigger="click" @command="onLogMoreCommand">
@@ -18,10 +29,10 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="cursor" :icon="Sort">
-                {{ cursorMode ? '退出游标浏览' : '游标浏览（连续排查）' }}
+                {{ cursorMode ? '退出连续浏览' : '连续浏览' }}
               </el-dropdown-item>
               <el-dropdown-item command="cleanup" :icon="Delete" divided>
-                分区清理
+                清理旧日志
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -30,104 +41,108 @@
     </div>
 
     <!-- 筛选工具栏：默认保留 时间/模型/request_id，Key/上游/状态码/流式/降级 归入「高级筛选」（默认折叠） -->
-    <el-card shadow="never" class="section-card">
-      <div class="filter-grid">
-        <div class="f-item f-item-wide">
-          <span class="f-label">时间范围</span>
-          <el-date-picker
-            v-model="range"
-            type="datetimerange"
-            :shortcuts="timeShortcuts"
-            :format="isMobile ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm:ss'"
-            range-separator="至"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
-            clearable
-          />
-        </div>
-        <div class="f-item">
-          <span class="f-label">结果</span>
-          <el-select v-model="statusGroup" clearable placeholder="全部结果" @change="onQuery">
-            <el-option label="成功" value="success" />
-            <el-option label="客户端错误" value="4xx" />
-            <el-option label="服务端错误" value="5xx" />
-            <el-option label="限流（429）" value="429" />
-            <el-option label="已降级" value="degraded" />
-          </el-select>
-        </div>
-        <div class="f-item">
-          <span class="f-label">模型</span>
-          <el-input v-model="model" placeholder="模型" clearable @keyup.enter="onQuery" />
-        </div>
-        <div class="f-item">
-          <span class="f-label">request_id</span>
-          <el-input
-            v-model="requestId"
-            placeholder="request_id"
-            clearable
-            @keyup.enter="onQuery"
-          />
-        </div>
+    <el-card shadow="never" class="section-card filter-card">
+      <!-- 移动端：默认收起，只留「预设 · 结果数」与筛选/查询 -->
+      <div v-if="isMobile" class="filter-mobile-bar">
+        <span class="filter-meta">{{ presetLabel }} · {{ resultCountLabel }}</span>
+        <span class="spacer" />
+        <el-button class="filter-toggle" @click="mobileFilterOpen = !mobileFilterOpen">
+          筛选
+          <span v-if="activeFilterCount" class="filter-count">{{ activeFilterCount }}</span>
+          <el-icon class="filter-caret" :class="{ 'is-open': mobileFilterOpen }"><ArrowDown /></el-icon>
+        </el-button>
+        <el-button v-if="!mobileFilterOpen" type="primary" :loading="loading" @click="onQuery">查询</el-button>
       </div>
 
-      <!-- 高级筛选（Key/上游/状态码/流式/降级）：可折叠，避免默认平铺 -->
-      <el-collapse-transition>
-        <div v-show="advancedOpen" class="filter-grid advanced-grid">
-          <div class="f-item">
-            <span class="f-label">Key</span>
-            <el-select v-model="keyId" filterable clearable placeholder="全部 Key">
-              <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
-            </el-select>
-          </div>
-          <div class="f-item">
-            <span class="f-label">上游</span>
-            <el-select v-model="upstreamId" filterable clearable placeholder="全部上游">
-              <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
-            </el-select>
-          </div>
-          <div class="f-item">
-            <span class="f-label">状态码</span>
-            <el-input
-              v-model="statusStr"
-              type="number"
-              placeholder="如 429"
-              clearable
-              @keyup.enter="onQuery"
-            />
-          </div>
-          <div class="f-item">
-            <span class="f-label">流式</span>
-            <el-select v-model="streamOpt">
-              <el-option label="全部" value="" />
-              <el-option label="是" value="true" />
-              <el-option label="否" value="false" />
-            </el-select>
-          </div>
-          <div class="f-item">
-            <span class="f-label">降级</span>
-            <el-select v-model="degradedOpt">
-              <el-option label="全部" value="" />
-              <el-option label="是" value="true" />
-              <el-option label="否" value="false" />
-            </el-select>
-          </div>
-        </div>
-      </el-collapse-transition>
+      <div v-show="!isMobile || mobileFilterOpen">
+      <!-- 时间：预设 + 实际区间 -->
+      <div class="filter-row">
+        <el-select v-model="rangePreset" class="filter-preset" aria-label="时间范围" @change="applyPreset">
+          <el-option label="今日" value="today" />
+          <el-option label="近 7 天" value="7d" />
+          <el-option label="近 30 天" value="30d" />
+          <el-option label="近 90 天" value="90d" />
+          <el-option label="全部时间" value="all" />
+          <el-option label="自定义" value="custom" />
+        </el-select>
+        <el-date-picker
+          v-model="range"
+          class="filter-range"
+          type="datetimerange"
+          :shortcuts="timeShortcuts"
+          :format="isMobile ? 'MM-DD HH:mm' : 'MM-DD HH:mm'"
+          range-separator="~"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
+          clearable
+        />
+      </div>
 
-      <div class="filter-actions">
-        <el-button type="primary" :icon="Search" @click="onQuery">查询</el-button>
-        <el-button :icon="Refresh" @click="onReset">重置</el-button>
-        <div class="spacer" />
-        <el-tooltip
-          content="Key、上游、精确状态码、流式、降级等诊断条件"
-          placement="top"
-        >
-          <el-button link class="adv-toggle" :type="hasAdvancedFilter() ? 'primary' : 'info'" @click="advancedOpen = !advancedOpen">
+      <!-- 结果 / 模型 + 操作：移动端两列，底部只留重置 -->
+      <div class="filter-row is-main is-main-2col">
+        <span v-if="!isMobile" class="filter-meta">{{ resultCountLabel }}</span>
+        <el-select v-model="statusGroup" class="filter-select" clearable placeholder="全部结果" aria-label="结果" @change="onQuery">
+          <el-option label="成功" value="success" />
+          <el-option label="客户端错误" value="4xx" />
+          <el-option label="服务端错误" value="5xx" />
+          <el-option label="限流 429" value="429" />
+          <el-option label="已降级" value="degraded" />
+        </el-select>
+        <el-input v-model="model" class="filter-input" placeholder="模型" clearable @keyup.enter="onQuery" />
+        <span class="spacer" />
+        <template v-if="!isMobile">
+          <el-button type="primary" :loading="loading" @click="onQuery">查询</el-button>
+          <el-button :disabled="!hasAnyFilter" @click="onReset">重置</el-button>
+        </template>
+        <el-tooltip v-if="!isMobile" content="请求 ID、密钥、上游、状态码、流式、降级" placement="top">
+          <el-button
+            link
+            class="adv-toggle"
+            :type="hasAdvancedFilter() ? 'primary' : 'info'"
+            @click="advancedOpen = !advancedOpen"
+          >
             高级筛选
             <span v-if="advancedFilterCount" class="adv-count">{{ advancedFilterCount }}</span>
             <el-icon :class="{ 'is-open': advancedOpen }"><ArrowDown /></el-icon>
           </el-button>
         </el-tooltip>
+      </div>
+
+      <el-collapse-transition>
+        <div v-show="advancedOpen" class="filter-bar advanced-bar">
+          <el-input v-model="requestId" class="filter-input" placeholder="request_id" clearable @keyup.enter="onQuery" />
+          <el-select v-model="keyId" class="filter-select" filterable clearable placeholder="全部密钥" aria-label="密钥">
+            <el-option v-for="k in keys" :key="k.id" :label="keyLabel(k)" :value="k.id" />
+          </el-select>
+          <el-select v-model="upstreamId" class="filter-select" filterable clearable placeholder="全部上游" aria-label="上游">
+            <el-option v-for="u in upstreams" :key="u.id" :label="u.name" :value="u.id" />
+          </el-select>
+          <el-input v-model="statusStr" class="filter-input" type="number" placeholder="精确状态码" clearable @keyup.enter="onQuery" />
+          <el-select v-model="streamOpt" class="filter-select" aria-label="流式">
+            <el-option label="流式：全部" value="" />
+            <el-option label="流式：是" value="true" />
+            <el-option label="流式：否" value="false" />
+          </el-select>
+          <el-select v-model="degradedOpt" class="filter-select" aria-label="降级">
+            <el-option label="降级：全部" value="" />
+            <el-option label="降级：是" value="true" />
+            <el-option label="降级：否" value="false" />
+          </el-select>
+        </div>
+      </el-collapse-transition>
+
+      <!-- 移动端：高级筛选入口 + 操作行，都在展开区底部 -->
+      <div v-if="isMobile" class="filter-row filter-adv-line">
+        <el-button link class="adv-toggle" :type="hasAdvancedFilter() ? 'primary' : 'info'" @click="advancedOpen = !advancedOpen">
+          高级筛选
+          <span v-if="advancedFilterCount" class="filter-count">{{ advancedFilterCount }}</span>
+          <el-icon :class="{ 'is-open': advancedOpen }"><ArrowDown /></el-icon>
+        </el-button>
+      </div>
+      <div v-if="isMobile" class="filter-actions-mobile">
+        <el-button :disabled="!hasAnyFilter" @click="onReset">重置</el-button>
+        <el-button type="primary" :loading="loading" @click="onQuery">查询</el-button>
+      </div>
       </div>
     </el-card>
 
@@ -138,7 +153,7 @@
         <div class="spacer" />
         <span v-if="lastLoadedAt" class="hint">更新于 {{ fmtTime(lastLoadedAt) }}</span>
         <el-tooltip
-          content="日志异步写入，最近几秒的请求可能尚未入库；Tokens 列 P=未缓存输入、C=输出、Cache=缓存命中"
+          content="日志异步写入，最近几秒可能尚未入库。Token 列：P 输入、C 输出、Cache 缓存读"
           placement="top"
         >
           <el-icon class="help-icon"><QuestionFilled /></el-icon>
@@ -158,7 +173,16 @@
         @row-click="openDetail"
       >
         <template #empty>
-          <EmptyState title="无匹配日志" description="调整时间范围或筛选条件后重试" />
+          <div v-if="loading" class="log-skeleton" aria-busy="true" aria-label="日志加载中">
+            <div v-for="i in 6" :key="i" class="log-skeleton-row">
+              <SkeletonBlock width="88px" height="13" />
+              <SkeletonBlock width="34px" height="13" />
+              <SkeletonBlock width="96px" height="13" />
+              <SkeletonBlock :width="i % 2 ? '44%' : '62%'" height="13" />
+              <SkeletonBlock width="68px" height="13" />
+            </div>
+          </div>
+          <EmptyState v-else title="没有匹配的日志" description="换个时间范围或筛选条件再试" />
         </template>
         <el-table-column label="时间" width="125">
           <template #default="{ row }">
@@ -213,7 +237,7 @@
               </el-tooltip>
               <el-tooltip
                 v-if="row.degraded"
-                content="该请求发生了降级，可在详情查看具体环节"
+                content="该请求被降级，详情可看具体环节"
                 placement="top"
               >
                 <el-tag size="small" type="warning" effect="plain">降级</el-tag>
@@ -226,22 +250,22 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isTablet" label="延迟" width="96">
+        <el-table-column v-if="!isTablet" label="延迟" width="96" align="right">
           <template #default="{ row }">
             <div>{{ fmtDur(row.latency_ms) }}</div>
             <div v-if="row.ttfb_ms != null" class="hint">TTFB {{ fmtDur(row.ttfb_ms) }}</div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isTablet" label="Tokens" min-width="135">
+        <el-table-column v-if="!isTablet" label="Token" min-width="135" align="right">
           <template #default="{ row }">
             <div class="token-cell">
-              <span>P {{ fmtInt(row.prompt_tokens) }}</span>
-              <span>C {{ fmtInt(row.completion_tokens) }}</span>
-              <span>Cache {{ fmtInt(row.cache_read_tokens) }}</span>
+              <span>P {{ fmtTokens(row.prompt_tokens) }}</span>
+              <span>C {{ fmtTokens(row.completion_tokens) }}</span>
+              <span>Cache {{ fmtTokens(row.cache_read_tokens) }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="成本" width="110">
+        <el-table-column label="成本" width="110" align="right">
           <template #default="{ row }">
             <div v-if="row.cost_cny != null || row.cost_usd != null" class="cost-cell">
               <div>¥ {{ fmtMoney(row.cost_cny) }}</div>
@@ -258,8 +282,15 @@
       </el-table>
 
       <!-- 窄屏/移动端：日志卡片列表，避免多列表格横向滚动 -->
-      <div v-else v-loading="loading" class="log-cards">
-        <EmptyState v-if="!displayRows.length" title="无匹配日志" description="调整时间范围或筛选条件后重试" />
+      <div v-else v-loading="loading && displayRows.length > 0" class="log-cards">
+        <div v-if="firstLoad" class="log-skeleton" aria-busy="true" aria-label="日志加载中">
+          <div v-for="i in 4" :key="i" class="log-skeleton-card">
+            <SkeletonBlock width="56%" height="13" />
+            <SkeletonBlock width="78%" height="13" />
+            <SkeletonBlock width="40%" height="13" />
+          </div>
+        </div>
+        <EmptyState v-else-if="!displayRows.length" title="没有匹配的日志" description="换个时间范围或筛选条件再试" />
         <article
           v-for="row in displayRows"
           :key="row.request_id"
@@ -294,8 +325,8 @@
           <div v-if="row.error" class="log-card-error" :title="row.error">{{ row.error }}</div>
           <div class="log-card-foot">
             <span class="hint">
-              P {{ fmtInt(row.prompt_tokens) }} · C {{ fmtInt(row.completion_tokens) }} · Cache
-              {{ fmtInt(row.cache_read_tokens) }}
+              P {{ fmtTokens(row.prompt_tokens) }} · C {{ fmtTokens(row.completion_tokens) }} · Cache
+              {{ fmtTokens(row.cache_read_tokens) }}
             </span>
             <div class="spacer" />
             <el-button size="small" link type="primary" @click.stop="openDetail(row)">详情</el-button>
@@ -303,7 +334,7 @@
         </article>
       </div>
         <div v-if="cursorMode" class="cursor-foot">
-          <span class="hint">已加载 {{ cursorRows.length }} 条（游标模式不统计总数）</span>
+          <span class="hint">已加载 {{ cursorRows.length }} 条（不统计总数）</span>
           <el-button v-if="cursorNext" type="primary" plain :loading="cursorLoading" @click="loadMoreCursor">
             加载更多
           </el-button>
@@ -376,15 +407,15 @@
           <!-- 3. 用量与成本 -->
           <div class="group-title">用量与成本</div>
           <el-descriptions :column="descColumn" border>
-            <el-descriptions-item label="输入 Tokens">
-              {{ fmtInt(detail.prompt_tokens) }}
-              <el-tooltip content="未缓存输入 token；缓存命中量见「缓存读取」" placement="top">
+            <el-descriptions-item label="输入 Token">
+              {{ fmtTokens(detail.prompt_tokens) }}
+              <el-tooltip content="未缓存的输入；缓存命中量见「缓存读取」" placement="top">
                 <el-icon class="help-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </el-descriptions-item>
-            <el-descriptions-item label="输出 Tokens">{{ fmtInt(detail.completion_tokens) }}</el-descriptions-item>
-            <el-descriptions-item label="缓存写入">{{ fmtInt(detail.cache_write_tokens) }}</el-descriptions-item>
-            <el-descriptions-item label="缓存读取">{{ fmtInt(detail.cache_read_tokens) }}</el-descriptions-item>
+            <el-descriptions-item label="输出 Token">{{ fmtTokens(detail.completion_tokens) }}</el-descriptions-item>
+            <el-descriptions-item label="缓存写入">{{ fmtTokens(detail.cache_write_tokens) }}</el-descriptions-item>
+            <el-descriptions-item label="缓存读取">{{ fmtTokens(detail.cache_read_tokens) }}</el-descriptions-item>
             <el-descriptions-item v-if="detail.images" label="图片数">{{ fmtInt(detail.images) }}</el-descriptions-item>
             <el-descriptions-item v-if="detail.image_size" label="图片尺寸">{{ detail.image_size }}</el-descriptions-item>
             <el-descriptions-item v-if="detail.video_seconds" label="视频时长">
@@ -403,7 +434,7 @@
               <span v-if="detail.cost_cny != null || detail.cost_usd != null">
                 ¥ {{ fmtMoney(detail.cost_cny) }} / $ {{ fmtMoney(detail.cost_usd) }}
               </span>
-              <span v-else class="hint">未配置价格（不产生成本统计）</span>
+              <span v-else class="hint">未配置价格</span>
             </el-descriptions-item>
           </el-descriptions>
 
@@ -424,11 +455,11 @@
             </el-collapse-item>
             <el-collapse-item title="request_headers（白名单）" name="request_headers">
               <pre v-if="!isEmptyJson(detail?.request_headers)" class="mono">{{ jsonText(detail?.request_headers) }}</pre>
-              <span v-else class="hint">无记录（仅记录 user-agent 等白名单调试头，不含敏感头）</span>
+              <span v-else class="hint">无记录（只采集 UA 等白名单头）</span>
             </el-collapse-item>
             <el-collapse-item title="debug_payload" name="debug_payload">
               <pre v-if="!isEmptyJson(detail?.debug_payload)" class="mono">{{ jsonText(detail?.debug_payload) }}</pre>
-              <span v-else class="hint">无完整记录（该 Key 未开 debug 或已过期）</span>
+              <span v-else class="hint">该密钥未开调试，或记录已过期</span>
             </el-collapse-item>
           </el-collapse>
         </template>
@@ -437,15 +468,14 @@
       </div>
     </el-drawer>
 
-    <!-- 分区清理弹窗 -->
-    <el-dialog v-model="cleanupVisible" title="日志分区清理" class="dlg" :close-on-click-modal="false">
+    <!-- 清理旧日志弹窗 -->
+    <el-dialog v-model="cleanupVisible" title="清理旧日志" class="dlg" :close-on-click-modal="false">
       <div class="cleanup-desc hint">
-        日志按约 30 天为周期分区存储。清理仅删除「分区边界 to_ts ≤ 所选时间」的完整分区（整分区 DROP），
-        未到期的分区不受影响；系统不会自动清理历史分区。建议先点击「预览（dry-run）」查看将删除的分区，
-        确认无误后再执行删除。
+        日志按 30 天一个分区存储。清理只能整分区删除，不会动未到期的分区，系统也不会自动清理。
+        建议先预览要删的分区，确认后再删除。
       </div>
       <div class="f-item" style="margin-bottom: 6px">
-        <span class="f-label">before 日期</span>
+        <span class="f-label">截止时间</span>
         <el-date-picker
           v-model="cleanupBefore"
           type="datetime"
@@ -455,8 +485,7 @@
         />
       </div>
       <div class="hint" style="margin-bottom: 10px">
-        仅删除分区边界 to_ts ≤ before 的整分区；实际截止时间按分区边界对齐，滚动聚合表（usage_hourly）按同一边界清理。
-        独立配额计数器 quota_usage 不受影响。
+        实际截止时间会按分区边界向前对齐；配额计数不受影响。
       </div>
 
       <div v-if="cleanupPreviewDone">
@@ -470,8 +499,8 @@
           </el-descriptions-item>
           <el-descriptions-item label="待删聚合行数">{{ fmtInt(cleanupHourlyRows) }}</el-descriptions-item>
           <el-descriptions-item label="Token 合计">
-            输入 {{ fmtInt(cleanupSummary?.prompt_tokens ?? 0) }} · 输出
-            {{ fmtInt(cleanupSummary?.completion_tokens ?? 0) }}
+            输入 {{ fmtTokens(cleanupSummary?.prompt_tokens ?? 0) }} · 输出
+            {{ fmtTokens(cleanupSummary?.completion_tokens ?? 0) }}
           </el-descriptions-item>
           <el-descriptions-item label="成本合计">
             ¥ {{ fmtMoney(cleanupSummary?.cost_cny ?? '0') }} / $ {{ fmtMoney(cleanupSummary?.cost_usd ?? '0') }}
@@ -489,7 +518,7 @@
             <template #default="{ row }">{{ fmtInt(row.row_estimate) }}</template>
           </el-table-column>
         </el-table>
-        <el-empty v-else description="没有可清理分区" :image-size="80" />
+        <el-empty v-else description="没有可清理的分区" :image-size="80" />
       </div>
 
       <template #footer>
@@ -503,7 +532,7 @@
           :loading="cleanupExecuting"
           @click="confirmCleanup"
         >
-          确认删除 {{ cleanupPreview.length }} 个分区
+          删除 {{ cleanupPreview.length }} 个分区
         </el-button>
       </template>
     </el-dialog>
@@ -511,9 +540,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Delete, Download, QuestionFilled, Refresh, Search, Sort } from '@element-plus/icons-vue'
+import { ArrowDown, Delete, Download, QuestionFilled, Sort } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { useRoute, useRouter } from 'vue-router'
 import { keyApi, logApi, upstreamApi, type LogListQuery } from '@/api'
@@ -521,11 +550,13 @@ import { errMsg } from '@/api/http'
 import type { ApiKeyRow, CleanupSummary, LogItem, PartitionInfo, UpstreamOut } from '@/api/types'
 import { PROTOCOL_IN_LABELS, statusType } from '@/utils/consts'
 import { downloadBlob } from '@/utils/download'
-import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtTime, todayRange } from '@/utils/format'
+import { fmtBytes, fmtDur, fmtInt, fmtMoney, fmtTime, fmtTokens, todayRange } from '@/utils/format'
+import { RANGE_PRESET_LABELS } from '@/utils/consts'
 import { confirmDanger } from '@/utils/confirm'
 import { copyText } from '@/utils/clipboard'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
 type TriState = '' | 'true' | 'false'
@@ -564,6 +595,35 @@ function defaultRange(): [Date, Date] {
 }
 
 const range = ref<[Date, Date] | null>(defaultRange())
+
+/** 时间范围预设：筛选条保持一横条，自定义区间才展开宽日期控件 */
+type RangePreset = 'today' | '7d' | '30d' | '90d' | 'all' | 'custom'
+const rangePreset = ref<RangePreset>('today')
+let programmaticRange = false
+
+function applyPreset(v: string | number | boolean | undefined) {
+  const preset = typeof v === 'string' ? (v as RangePreset) : 'today'
+  rangePreset.value = preset
+  if (preset === 'custom') return
+  programmaticRange = true
+  if (preset === 'all') range.value = null
+  else if (preset === 'today') range.value = [dayjs().startOf('day').toDate(), dayjs().toDate()]
+  else {
+    const days = preset === '7d' ? 7 : preset === '30d' ? 30 : 90
+    range.value = [dayjs().subtract(days, 'day').toDate(), dayjs().toDate()]
+  }
+  void nextTick(() => {
+    programmaticRange = false
+  })
+}
+
+watch(
+  range,
+  () => {
+    if (!programmaticRange) rangePreset.value = 'custom'
+  },
+  { deep: true },
+)
 const keyId = ref('')
 const upstreamId = ref('')
 const model = ref('')
@@ -586,6 +646,24 @@ function hasAdvancedFilter(): boolean {
   )
 }
 
+/** 主/高级筛选任一非默认 → 才允许重置 */
+/** 移动端筛选区展开状态（默认收起） */
+const mobileFilterOpen = ref(false)
+const presetLabel = computed(() => RANGE_PRESET_LABELS[rangePreset.value] ?? '自定义区间')
+/** 生效条件总数：主筛选 + 高级筛选，收起时也能看出有几条 */
+const activeFilterCount = computed(
+  () => advancedFilterCount.value + (model.value !== '' ? 1 : 0) + (statusGroup.value !== '' ? 1 : 0) + (rangePreset.value !== 'today' ? 1 : 0),
+)
+
+const hasAnyFilter = computed(
+  () => hasAdvancedFilter() || model.value !== '' || statusGroup.value !== '' || rangePreset.value !== 'today',
+)
+
+/** 结果统计：分页模式看总数，游标模式只能报已加载条数 */
+const resultCountLabel = computed(() =>
+  cursorMode.value ? `已加载 ${fmtInt(cursorRows.value.length)} 条` : `共 ${fmtInt(total.value)} 条`,
+)
+
 /** 已启用的高级筛选条件数（按钮上显示，避免收起的条件被遗忘） */
 const advancedFilterCount = computed(
   () => [keyId.value, upstreamId.value, statusStr.value, streamOpt.value, degradedOpt.value].filter((v) => v !== '').length,
@@ -599,6 +677,8 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+/** 首屏（尚无任何行）加载：用骨架行代替整表遮罩 */
+const firstLoad = computed(() => loading.value && displayRows.value.length === 0)
 const listError = ref('')
 /** 响应式：手机端用卡片列表，平板（≤1280）隐藏低优先列 */
 const { isMobile, isCompact, isTablet } = useBreakpoint()
@@ -714,7 +794,7 @@ async function loadMoreCursor() {
 }
 
 /** 切换游标浏览 / 页码模式 */
-/** 低频操作菜单：游标浏览 / 分区清理，避免页头按钮过多 */
+/** 低频操作菜单：游标浏览 / 清理旧日志，避免页头按钮过多 */
 function onLogMoreCommand(command: string) {
   if (command === 'cursor') toggleCursorMode()
   else if (command === 'cleanup') openCleanup()
@@ -966,7 +1046,7 @@ async function exportCsv() {
   }
 }
 
-// —— 分区清理 ——
+// —— 清理旧日志 ——
 /** 最近一次列表加载完成时间（提示异步落库延迟） */
 const lastLoadedAt = ref('')
 /** 游标浏览模式（M14 §5.2 深页 keyset 分页）：与页码模式互斥 */
@@ -1045,13 +1125,34 @@ async function confirmCleanup() {
     cleanupExecuting.value = false
   }
 }
+// 供 /usage 页头「刷新全部」调用
+defineExpose({ refresh: loadLogs })
 </script>
 
 <style scoped>
-.filter-actions {
-  margin-top: var(--nx-space-3);
+
+/* 首屏骨架：列宽比例贴近真实表格，避免数据到达时跳动 */
+.log-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px;
 }
 
+.log-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.log-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--nx-radius-md);
+}
 .time-cell,
 .model-cell {
   display: flex;
@@ -1289,4 +1390,26 @@ async function confirmCleanup() {
   font-weight: 600;
   line-height: 1;
 }
+
+/* 数字列右对齐（对齐 M20 密度规范） */
+.token-cell,
+.cost-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-variant-numeric: tabular-nums;
+}
+.cost-cell > div {
+  white-space: nowrap;
+}
+
+/* 表尾：分页与游标区与表格用细分隔线隔开（与统计段表尾一致） */
+.pagination,
+.cursor-foot {
+  margin-top: var(--nx-space-3);
+  padding-top: var(--nx-space-3);
+  border-top: 1px solid var(--nx-border-subtle);
+}
+
 </style>

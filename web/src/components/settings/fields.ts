@@ -35,19 +35,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '监听地址',
     type: 'string',
     default: '0.0.0.0:8080',
-    help: '监听地址（host:port）。环境变量 NEXTAPI_LISTEN 覆盖。启动类，需重启。默认 0.0.0.0:8080',
+    help: '监听地址（host:port）。环境变量 NEXTAPI_LISTEN 覆盖。需重启生效。',
   },
   'server.admin_jwt_secret': {
     label: 'JWT 签名密钥',
     type: 'string',
     default: '',
-    help: '管理端 JWT 签名密钥，生产必填。敏感字段；环境变量 NEXTAPI_ADMIN_JWT_SECRET 覆盖。启动类，需重启。默认空（非 debug 模式拒绝启动）',
+    help: '管理端 JWT 签名密钥，生产必填。敏感字段；环境变量 NEXTAPI_ADMIN_JWT_SECRET 覆盖。需重启生效。',
   },
   'server.debug': {
     label: '调试模式',
     type: 'boolean',
     default: false,
-    help: '放宽启动检查，仅本地开发使用。启动类，需重启。默认 false',
+    help: '放宽启动检查，仅本地开发使用。需重启生效。',
   },
 
   // —— database（启动类）——
@@ -55,7 +55,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '数据库连接串',
     type: 'string',
     default: 'postgres://nextapi:nextapi@localhost:5432/nextapi',
-    help: 'Postgres 连接串。启动类，需重启；优先级 env DATABASE_URL > UI > YAML。默认 postgres://nextapi:nextapi@localhost:5432/nextapi',
+    help: 'Postgres 连接串。需重启；优先级 env DATABASE_URL > UI > YAML。',
   },
   'database.max_connections': {
     label: '数据库连接池',
@@ -63,7 +63,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 1,
     max: 256,
     default: 16,
-    help: 'PostgreSQL 连接池上限。启动类，保存后需重启生效；优先级 env NEXTAPI_DB_MAX_CONNECTIONS > UI > YAML。内存吃紧可调低（每条连接都有收发缓冲与语句缓存），高并发可调高。默认 16',
+    help: 'PostgreSQL 连接池上限。保存后需重启；优先级 env NEXTAPI_DB_MAX_CONNECTIONS > UI > YAML。内存吃紧可调低（每条连接都有收发缓冲与语句缓存），高并发可调高。',
   },
 
   // —— gateway 网关运行参数 ——
@@ -73,7 +73,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '次/分钟',
     default: 600,
-    help: '每个 Key 每分钟请求数上限。默认 600',
+    help: '每个密钥每分钟请求数上限。',
   },
   'gateway.default_timeout_secs': {
     label: '默认上游超时',
@@ -81,7 +81,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 300,
-    help: '非流式请求上游超时（秒）。默认 300',
+    help: '非流式请求上游超时（秒）。',
   },
   'gateway.stream_timeout_secs': {
     label: '流式上游超时',
@@ -89,19 +89,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 600,
-    help: '流式请求上游超时（秒）。默认 600',
+    help: '流式请求上游超时（秒）。',
   },
   'gateway.billing_timezone': {
     label: '计费时区',
     type: 'string',
     default: 'Asia/Shanghai',
-    help: '计费时区（分时段/窗口起点/日志日界）。默认 Asia/Shanghai',
+    help: '计费时区（分时段/窗口起点/日志日界）。',
   },
   'gateway.display_currency': {
     label: '展示币种',
     type: 'string',
     default: 'CNY',
-    help: '混合统计默认展示币种（CNY|USD）。默认 CNY',
+    help: '混合统计默认展示币种（CNY|USD）。',
   },
   'gateway.display_precision': {
     label: '展示精度',
@@ -109,7 +109,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     max: 10,
     default: 6,
-    help: '金额展示舍入小数位（DB 仍 NUMERIC(20,10)）。默认 6',
+    help: '金额展示舍入小数位（DB 仍 NUMERIC(20,10)）。',
   },
   'gateway.fx_stale_max_minutes': {
     label: '汇率过期阈值',
@@ -117,7 +117,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '分钟',
     default: 1440,
-    help: '最近成功汇率超过该分钟数视为过期不可用。默认 1440',
+    help: '最近成功汇率超过该分钟数视为过期不可用。',
   },
   'gateway.log_async': {
     label: '异步写库',
@@ -137,7 +137,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: 'WAL 目录',
     type: 'string',
     default: '/data/wal',
-    help: 'WAL 落盘目录。仅启动时生效，改动需重启。默认 /data/wal',
+    help: 'WAL 落盘目录。仅启动时生效，改动需重启。',
   },
   'gateway.log_wal_file_max_mb': {
     label: 'WAL 单文件上限',
@@ -145,7 +145,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: 'MB',
     default: 128,
-    help: 'WAL 单文件大小上限（MB）。仅启动时生效，改动需重启。默认 128',
+    help: 'WAL 单文件大小上限（MB）。仅启动时生效，改动需重启。',
   },
   'gateway.log_wal_archive_tail_mb': {
     label: 'WAL 归档尾部',
@@ -153,7 +153,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: 'MB',
     default: 64,
-    help: '尾部 N MB 全部写入并重放完成即归档。默认 64',
+    help: '尾部 N MB 全部写入并重放完成即归档。',
   },
   'gateway.log_partition_days': {
     label: '日志分区天数',
@@ -161,7 +161,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '天',
     default: 30,
-    help: 'usage_logs 每分区覆盖天数。首次建分区时固化到 app_meta，定时任务启动时读取；改此项仅对尚未建过分区的空库生效。默认 30',
+    help: 'usage_logs 每分区覆盖天数。首次建分区时固化到 app_meta，定时任务启动时读取；改此项仅对尚未建过分区的空库生效。',
   },
   'gateway.log_detail_retention_days': {
     label: '明细保留天数',
@@ -169,7 +169,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '天',
     default: 0,
-    help: '明细不自动清理；仅作手动清理默认 before（0=永久）。默认 0',
+    help: '明细不自动清理；仅作手动清理默认 before（0=永久）。',
   },
   'gateway.log_aggregate_retention_days': {
     label: '汇总保留天数',
@@ -177,7 +177,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '天',
     default: 365,
-    help: '汇总表保留建议值，不自动删除（0=永久）。默认 365',
+    help: '汇总表保留建议值，不自动删除（0=永久）。',
   },
   'gateway.log_debug_ttl_minutes': {
     label: 'Debug 最长时长',
@@ -185,7 +185,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '分钟',
     default: 60,
-    help: '按 Key debug 模式最长开启时长（分钟）。默认 60',
+    help: '按密钥 debug 模式最长开启时长（分钟）。',
   },
   'gateway.admin_login_rate_limit_per_min': {
     label: '登录限速',
@@ -193,7 +193,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '次/分钟',
     default: 10,
-    help: '登录接口防爆破限速（次/分钟）。默认 10',
+    help: '登录接口防爆破限速（次/分钟）。',
   },
   'gateway.admin_login_expire_minutes': {
     label: '登录有效期',
@@ -202,7 +202,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     max: 43200,
     unit: '分钟',
     default: 1440,
-    help: '管理员登录 JWT 有效期（分钟，1–43200）。到期需重新登录（含 TOTP 验证）；仅对新签发的 token 生效。默认 1440（24 小时）',
+    help: '管理员登录 JWT 有效期（分钟，1–43200）。到期需重新登录（含 TOTP 验证）；仅对新签发的 token 生效，默认 24 小时。',
   },
   'gateway.anthropic_default_max_tokens': {
     label: 'Anthropic 默认 max_tokens',
@@ -210,7 +210,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: 'tokens',
     default: 65536,
-    help: '转 Anthropic 缺省 max_tokens（64k）。默认 65536',
+    help: '转 Anthropic 缺省 max_tokens（64k）。',
   },
   'gateway.batch_insert_interval_ms': {
     label: '批量写库间隔',
@@ -218,7 +218,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '毫秒',
     default: 500,
-    help: '批量写库批次间隔（毫秒）。默认 500',
+    help: '批量写库批次间隔（毫秒）。',
   },
   'gateway.quota_check_cache_secs': {
     label: '用量缓存秒数',
@@ -226,13 +226,13 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 3,
-    help: '用量上限聚合结果缓存秒数。默认 3',
+    help: '用量上限聚合结果缓存秒数。',
   },
   'gateway.sticky_routing': {
-    label: 'Key 粘性路由',
+    label: '密钥粘性路由',
     type: 'boolean',
     default: false,
-    help: '同一 Key 同模型固定落到最近成功的上游（便于利用上游缓存）；pinned 上游不可用自动回落加权随机。默认 false',
+    help: '同一密钥同模型固定落到最近成功的上游（便于利用上游缓存）；pinned 上游不可用自动回落加权随机。',
   },
   'gateway.max_body_mb': {
     label: '请求体上限',
@@ -241,7 +241,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     max: 1024,
     unit: 'MiB',
     default: 100,
-    help: '单请求体上限。请求体会整体读入内存再解析，调低可明显压低大 body（多图 base64 等）请求的内存峰值，代价是超大请求会被拒（413）。仅启动时生效（改动需重启）。默认 100',
+    help: '单请求体上限。请求体会整体读入内存再解析，调低可明显压低大 body（多图 base64 等）请求的内存峰值，代价是超大请求会被拒（413）。仅启动时生效（改动需重启）。',
   },
   'gateway.argon2_memory_kib': {
     label: 'Argon2 内存成本',
@@ -250,19 +250,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     max: 1048576,
     unit: 'KiB',
     default: 19456,
-    help: '管理员密码 argon2 哈希的内存成本（默认 19456 KiB = 19 MiB）。调低可减小登录/改密时的内存峰值；只作用于新生成的哈希，调低后需改一次密码才见效（登录校验按库中哈希自带参数分配）。范围 8192–1048576',
+    help: '管理员密码 argon2 哈希的内存成本（默认 19456 KiB = 19 MiB）。调低可减小登录/改密时的内存峰值；只作用于新生成的哈希，调低后需改一次密码才见效（登录校验按库中哈希自带参数分配）。范围 8192–1048576。',
   },
   'gateway.auto_disable_upstreams': {
     label: '渠道自动禁用',
     type: 'boolean',
     default: false,
-    help: '默认关闭：不自动禁用任何渠道，失败只记日志并照常重试/故障转移。打开后，连续失败达阈值的渠道自动禁用 + 冷却 + 半开探活（熔断），单个渠道可在渠道表单里用「自动禁用」开关排除。手动禁用不受本开关影响',
+    help: '默认关闭：不自动禁用任何渠道，失败只记日志并照常重试/故障转移。打开后，连续失败达阈值的渠道自动禁用 + 冷却 + 半开探活（熔断），单个渠道可在渠道表单里用「自动禁用」开关排除。手动禁用不受本开关影响。',
   },
   'gateway.quota_exceed_action': {
     label: '超配额动作',
     type: 'string',
     default: 'block',
-    help: 'block=429 硬阻断 | warn=仅日志告警。默认 block',
+    help: 'block=429 硬阻断 | warn=仅日志告警。',
   },
 
   // —— fx_auto_fetch 汇率自动拉取 ——
@@ -270,25 +270,25 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '启用自动汇率',
     type: 'boolean',
     default: true,
-    help: '是否启用外部汇率自动拉取（source=auto）。默认 true',
+    help: '是否启用外部汇率自动拉取（source=auto）。',
   },
   'fx_auto_fetch.provider': {
     label: '汇率数据源',
     type: 'string',
     default: 'frankfurter',
-    help: 'frankfurter | ecb | custom。默认 frankfurter',
+    help: 'frankfurter | ecb | custom。',
   },
   'fx_auto_fetch.base': {
     label: '基准币种',
     type: 'string',
     default: 'USD',
-    help: '拉取汇率的基准货币。默认 USD',
+    help: '拉取汇率的基准货币。',
   },
   'fx_auto_fetch.symbols': {
     label: '目标币种',
     type: 'string',
     default: ['CNY'],
-    help: '需要兑换的目标币种列表（回车添加）。默认 [CNY]',
+    help: '需要兑换的目标币种列表（回车添加）。',
   },
   'fx_auto_fetch.refresh_interval_minutes': {
     label: '刷新间隔',
@@ -296,7 +296,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '分钟',
     default: 60,
-    help: '自动拉取间隔（分钟）。默认 60',
+    help: '自动拉取间隔（分钟）。',
   },
   'fx_auto_fetch.cache_ttl_minutes': {
     label: '缓存有效期',
@@ -304,7 +304,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '分钟',
     default: 60,
-    help: '汇率缓存 TTL（分钟）。默认 60',
+    help: '汇率缓存 TTL（分钟）。',
   },
   'fx_auto_fetch.timeout_secs': {
     label: '请求超时',
@@ -312,19 +312,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 10,
-    help: '拉取汇率超时（秒）。默认 10',
+    help: '拉取汇率超时（秒）。',
   },
   'fx_auto_fetch.use_proxy': {
     label: '使用代理',
     type: 'boolean',
     default: false,
-    help: '外联代理矩阵：拉取汇率是否走代理。默认 false',
+    help: '外联代理矩阵：拉取汇率是否走代理。',
   },
   'fx_auto_fetch.proxy_id': {
     label: '代理 UUID',
     type: 'string',
     default: '',
-    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。默认空',
+    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。',
   },
 
   // —— price_import 价格表导入 ——
@@ -332,7 +332,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '允许 URL 导入',
     type: 'boolean',
     default: true,
-    help: '是否允许从 URL 导入价格表（仅 https，SSRF 防护）。默认 true',
+    help: '是否允许从 URL 导入价格表（仅 https，SSRF 防护）。',
   },
   'price_import.max_size_mb': {
     label: '最大大小',
@@ -340,7 +340,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: 'MB',
     default: 1,
-    help: '导入内容最大大小（MB）。默认 1',
+    help: '导入内容最大大小（MB）。',
   },
   'price_import.timeout_secs': {
     label: '请求超时',
@@ -348,19 +348,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 10,
-    help: '导入拉取超时（秒）。默认 10',
+    help: '导入拉取超时（秒）。',
   },
   'price_import.use_proxy': {
     label: '使用代理',
     type: 'boolean',
     default: false,
-    help: '价格 URL 导入是否走代理。默认 false',
+    help: '价格 URL 导入是否走代理。',
   },
   'price_import.proxy_id': {
     label: '代理 UUID',
     type: 'string',
     default: '',
-    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。默认空',
+    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。',
   },
 
   // —— media_download 媒体下载 ——
@@ -368,7 +368,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '启用媒体下载',
     type: 'boolean',
     default: false,
-    help: '媒体 URL 下载转内联（默认关闭，SSRF 防护）。默认 false',
+    help: '媒体 URL 下载转内联（默认关闭，SSRF 防护）。',
   },
   'media_download.max_size_mb': {
     label: '最大大小',
@@ -376,7 +376,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: 'MB',
     default: 10,
-    help: '下载内容最大大小（MB）。默认 10',
+    help: '下载内容最大大小（MB）。',
   },
   'media_download.timeout_secs': {
     label: '请求超时',
@@ -384,19 +384,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 30,
-    help: '下载超时（秒）。默认 30',
+    help: '下载超时（秒）。',
   },
   'media_download.use_proxy': {
     label: '使用代理',
     type: 'boolean',
     default: false,
-    help: '媒体下载是否走代理。默认 false',
+    help: '媒体下载是否走代理。',
   },
   'media_download.proxy_id': {
     label: '代理 UUID',
     type: 'string',
     default: '',
-    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。默认空',
+    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。',
   },
 
   // —— media_poller 媒体轮询 ——
@@ -406,7 +406,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '秒',
     default: 5,
-    help: '图片/视频异步任务轮询间隔（秒）。默认 5',
+    help: '图片/视频异步任务轮询间隔（秒）。',
   },
   'media_poller.max_age_hours': {
     label: '最大任务年龄',
@@ -414,7 +414,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '小时',
     default: 24,
-    help: '轮询的任务最大年龄（小时），超过视为失败。默认 24',
+    help: '轮询的任务最大年龄（小时），超过视为失败。',
   },
 
   // —— proxy 代理（全局）——
@@ -422,19 +422,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '默认代理 UUID',
     type: 'string',
     default: '',
-    help: '系统默认代理；空=直连；use_proxy=true 且未显式指定 proxy_id 时跟随此值。默认空',
+    help: '系统默认代理；空=直连；use_proxy=true 且未显式指定 proxy_id 时跟随此值。',
   },
   'proxy.no_proxy': {
     label: '全局直连名单',
     type: 'string',
     default: [],
-    help: '全局直连名单（与所选代理自身 no_proxy 取并集；CIDR/域名，支持 * 后缀；回车添加）。默认 []',
+    help: '全局直连名单（与所选代理自身 no_proxy 取并集；CIDR/域名，支持 * 后缀；回车添加）。',
   },
   'proxy.probe_url': {
     label: '代理探测地址',
     type: 'string',
     default: 'https://api.github.com',
-    help: '代理连通性测试固定探测地址（白名单，防 SSRF）。默认 https://api.github.com',
+    help: '代理连通性测试固定探测地址（白名单，防 SSRF）。',
   },
 
   // —— model_sync 渠道模型同步 ——
@@ -442,7 +442,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '启用模型同步',
     type: 'boolean',
     default: true,
-    help: 'model_sync=auto 的渠道定时拉取上游模型列表，并对账托管路由（只增删 managed_by=auto 的路由，不覆盖手动路由）。默认 true',
+    help: 'model_sync=auto 的渠道定时拉取上游模型列表，并对账托管路由（只增删 managed_by=auto 的路由，不覆盖手动路由）。',
   },
   'model_sync.interval_minutes': {
     label: '同步间隔',
@@ -450,7 +450,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '分钟',
     default: 30,
-    help: '定时同步间隔（分钟）；0 = 关闭定时，仅保留手动同步。默认 30',
+    help: '定时同步间隔（分钟）；0 = 关闭定时，仅保留手动同步。',
   },
 
   // —— update_check 更新检查 ——
@@ -458,13 +458,13 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: '启用更新检查',
     type: 'boolean',
     default: false,
-    help: '是否启用定时检查更新。默认 false',
+    help: '是否启用定时检查更新。',
   },
   'update_check.repo': {
     label: 'GitHub 仓库',
     type: 'string',
     default: '',
-    help: '如 owner/nextapi；为空时无法检查更新（400）。默认空',
+    help: '如 owner/nextapi；为空时无法检查更新（400）。',
   },
   'update_check.interval_hours': {
     label: '检查间隔',
@@ -472,19 +472,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     min: 0,
     unit: '小时',
     default: 24,
-    help: '定时检查间隔（小时）；0=关闭定时，仅手动检查。默认 24',
+    help: '定时检查间隔（小时）；0=关闭定时，仅手动检查。',
   },
   'update_check.use_proxy': {
     label: '使用代理',
     type: 'boolean',
     default: false,
-    help: 'GitHub 更新检查是否走代理。默认 false',
+    help: 'GitHub 更新检查是否走代理。',
   },
   'update_check.proxy_id': {
     label: '代理 UUID',
     type: 'string',
     default: '',
-    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。默认空',
+    help: '指定代理 UUID，留空跟随默认（use_proxy=true 时）。',
   },
 }
 

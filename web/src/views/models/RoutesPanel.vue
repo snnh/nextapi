@@ -1,7 +1,7 @@
 <template>
-  <div class="page" v-loading="pageLoading">
+  <div class="section-body" v-loading="pageLoading">
     <div class="page-head">
-      <p class="page-desc">按对外模型名查看可调用情况（上游、价格、别名、健康度），或切换到路由视图编辑转发规则。</p>
+      <p class="page-desc">按对外模型名查看可调用情况（上游、价格、别名、健康度），或切到路由视图编辑转发规则。</p>
       <div class="page-head-summary">
         <span><b>{{ uniqueModelCount }}</b> 个模型</span>
         <span><b>{{ drafts.length }}</b> 条路由</span>
@@ -64,9 +64,9 @@
       <template #title>模型 → 上游绑定（模型名支持 <span class="mono">*</span> 通配）</template>
       <div class="hint">
         <div>· 优先级数字小者优先；同优先级按权重加权。</div>
-        <div>· 「保存全部」将整体替换后端路由表（PUT 裸数组）。</div>
-        <div>· 重试 / 熔断参数只在路由表维护。</div>
-        <div>· 锁定上游后，失败时不会自动故障转移。</div>
+        <div>· 「保存全部」会整体替换现有路由表。</div>
+        <div>· 重试与熔断参数只在路由表维护。</div>
+        <div>· 锁定上游后，失败时不再自动转移。</div>
       </div>
     </el-alert>
 
@@ -196,7 +196,7 @@
               <CopyText :text="row.model_pattern" :truncate="24" />
               <el-tooltip
                 v-if="row.managed_by === 'auto'"
-                content="由渠道模型同步托管：自动跟随上游模型列表增删；手动编辑请先关闭该渠道的自动跟随"
+                content="由上游模型同步托管：自动跟随上游模型列表增删。要手动编辑，先关闭该上游的自动跟随"
                 placement="top"
               >
                 <el-tag size="small" type="primary" effect="plain">自动</el-tag>

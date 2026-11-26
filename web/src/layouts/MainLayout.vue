@@ -26,7 +26,6 @@
           <div v-show="!collapsed || isMobile" class="brand-text"><strong>NextAPI</strong><small>网关控制台</small></div>
         </div>
         <el-menu
-          ref="menuRef"
           :default-active="active"
           router
           :collapse="collapsed && !isMobile"
@@ -35,17 +34,11 @@
           popper-class="aside-menu-popup"
           @select="onMenuSelect"
         >
-          <!-- 菜单按「概览 / 接入 / 监控 / 高级」分组展示（index 仍为路由 path，兼容旧书签） -->
-          <el-sub-menu v-for="g in menus" :key="g.label" :index="g.label">
-            <template #title>
-              <el-icon><component :is="g.icon" /></el-icon>
-              <span>{{ g.label }}</span>
-            </template>
-            <el-menu-item v-for="m in g.items" :key="m.path" :index="m.path">
-              <el-icon><component :is="m.icon" /></el-icon>
-              <template #title><span>{{ m.title }}</span></template>
-            </el-menu-item>
-          </el-sub-menu>
+          <!-- M20：4 个模块平铺（不再折叠分组），一次点击直达 -->
+          <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
+            <el-icon><component :is="m.icon" /></el-icon>
+            <template #title><span>{{ m.title }}</span></template>
+          </el-menu-item>
         </el-menu>
         <div v-show="!collapsed || isMobile" class="aside-version">v{{ version }}</div>
       </div>
@@ -70,6 +63,7 @@
         </div>
         <div class="header-right">
           <SystemStatusBadge />
+          <DensityToggle />
           <ThemeToggle />
           <el-dropdown @command="onCommand" trigger="click">
             <el-button class="user" link :aria-label="`用户菜单：${auth.username ?? 'admin'}`">
@@ -98,13 +92,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox, type MenuInstance } from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import { ArrowDown, Close, Expand, Fold, Menu as MenuIcon, UserFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
 import ChangePwdDialog from '@/components/common/ChangePwdDialog.vue'
 import SystemStatusBadge from '@/components/common/SystemStatusBadge.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import DensityToggle from '@/components/common/DensityToggle.vue'
 import AppLogo from '@/components/common/AppLogo.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
@@ -112,51 +107,25 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-// 侧栏菜单分组（低风险 IA 优化：仅调整展示结构，不新增/删除/改名任何路由）
-// 单源：router/index.ts 的 meta.title/meta.icon 仍负责标题与图标（review P3）。
-type MenuGroupItem = { path: string; title: string; icon: string }
-interface MenuGroupDef {
-  label: string
+// M20 信息架构：4 个模块平铺，菜单项与路由表同源（router/index.ts 的 meta.title/icon）
+interface MenuItem {
+  path: string
+  title: string
   icon: string
-  /** 组内路由 path（相对根路径），顺序即组内展示顺序 */
-  paths: string[]
-}
-interface MenuGroup extends MenuGroupDef {
-  items: MenuGroupItem[]
 }
 
-// 分组顺序即侧栏展示顺序；路由表顺序与组内顺序解耦
-const MENU_GROUPS: MenuGroupDef[] = [
-  { label: '概览', icon: 'Monitor', paths: ['/dashboard'] },
-  { label: '接入', icon: 'Connection', paths: ['/upstreams', '/routes', '/aliases', '/keys'] },
-  { label: '监控', icon: 'TrendCharts', paths: ['/logs', '/stats'] },
-  { label: '高级', icon: 'Setting', paths: ['/pricing', '/settings'] },
-]
-
-const menus = computed<MenuGroup[]>(() => {
+const menus = computed<MenuItem[]>(() => {
   const root = router.options.routes.find((r) => r.path === '/')
-  const flat = (root?.children ?? [])
+  return (root?.children ?? [])
     .filter((c) => typeof c.path === 'string' && c.meta?.title)
-    .map(
-      (c): MenuGroupItem => ({
-        path: `/${c.path}`,
-        title: c.meta!.title as string,
-        icon: (c.meta!.icon as string) ?? 'Menu',
-      }),
-    )
-  const known = new Set(MENU_GROUPS.flatMap((g) => g.paths))
-  // 兜底：未纳入分组的菜单项挂到「其他」，避免将来路由新增后被静默隐藏
-  const rest = flat.filter((m) => !known.has(m.path))
-  const groups = MENU_GROUPS.map((g) => ({
-    ...g,
-    items: flat.filter((m) => g.paths.includes(m.path)),
-  })).filter((g) => g.items.length > 0)
-  if (rest.length) groups.push({ label: '其他', icon: 'Menu', paths: [], items: rest })
-  return groups
+    .map((c) => ({
+      path: `/${c.path}`,
+      title: c.meta!.title as string,
+      icon: (c.meta!.icon as string) ?? 'Menu',
+    }))
 })
 
 const active = computed(() => route.path)
-const menuRef = ref<MenuInstance | null>(null)
 const NAV_COLLAPSED_KEY = 'nextapi.nav.collapsed'
 const collapsed = ref(readCollapsed())
 const navOpen = ref(false)
@@ -185,38 +154,9 @@ watch(isMobile, (mobile) => {
   if (!mobile) navOpen.value = false
 })
 
-/** 默认展开当前页面所在分组，其余分组收起；用户手动展开状态在当前页面内保持 */
-function syncOpenGroup(path: string) {
-  const menu = menuRef.value
-  // 桌面收起态只显示图标，不在这里触发分组弹层；展开侧栏时再同步
-  if (!menu || (collapsed.value && !isMobile.value)) return
-  const currentGroup = menus.value.find((g) => g.items.some((m) => m.path === path))
-  for (const g of menus.value) {
-    if (g.label === currentGroup?.label) menu.open(g.label)
-    else menu.close(g.label)
-  }
-}
-
-watch(
-  () => route.path,
-  async () => {
-    await nextTick()
-    syncOpenGroup(route.path)
-  },
-)
-
-// 从收起态展开时，重新定位到当前页面所在分组
-watch(collapsed, async (isCollapsed) => {
-  if (isCollapsed) return
-  await nextTick()
-  syncOpenGroup(route.path)
-})
-
 // 侧栏底部版本号（来自后端真实二进制版本，失败静默）
 const version = ref('')
 onMounted(async () => {
-  await nextTick()
-  syncOpenGroup(route.path)
   try {
     version.value = (await systemApi.version()).version
   } catch {
@@ -416,19 +356,9 @@ async function onCommand(cmd: string) {
   color: var(--nx-sidebar-active-text);
   box-shadow: inset 3px 0 0 var(--nx-sidebar-accent);
 }
-.menu :deep(.el-menu-item:focus-visible),
-.menu :deep(.el-sub-menu__title:focus-visible) {
+.menu :deep(.el-menu-item:focus-visible) {
   outline: 2px solid var(--nx-focus-ring);
   outline-offset: -2px;
-}
-/* 分组标题（el-sub-menu）与菜单项一致的圆角/悬停反馈 */
-.menu :deep(.el-sub-menu__title) {
-  border-radius: var(--nx-radius);
-  margin: 2px 0;
-}
-.menu :deep(.el-sub-menu__title:hover) {
-  background-color: var(--nx-sidebar-hover);
-  color: var(--nx-sidebar-strong);
 }
 
 /* ---------- 移动端：侧栏变滑出抽屉 ---------- */
@@ -544,7 +474,7 @@ async function onCommand(cmd: string) {
 }
 </style>
 
-<!-- 收起态（仅图标 64px）分组弹出面板由 el-sub-menu 渲染到 body，需非 scoped 才能命中 -->
+<!-- 收起态（仅图标 64px）菜单项提示浮层渲染到 body，需非 scoped 才能命中 -->
 <style>
 .aside-menu-popup.el-popper {
   border: 1px solid var(--nx-border);

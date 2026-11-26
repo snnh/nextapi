@@ -110,7 +110,7 @@ async function handleLogin() {
   loading.value = true
   try {
     await auth.login(form.username, form.password, form.totpCode || undefined)
-    const redirect = (route.query.redirect as string) || '/dashboard'
+    const redirect = (route.query.redirect as string) || '/usage'
     router.push(redirect)
   } catch (e) {
     const code = errCode(e)

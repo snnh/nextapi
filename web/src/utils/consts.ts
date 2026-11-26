@@ -55,12 +55,12 @@ export const CURRENCIES = ['CNY', 'USD'] as const
 
 /** 统计指标释义（仪表盘与统计页共用一个来源） */
 export const STAT_LABEL_TIPS = {
-  requests: '统计区间内的网关请求总数',
-  success: '成功率 = 状态码 < 400 的请求占比',
-  tokens: '总 Token 数 = 输入（未缓存）+ 输出 + 缓存命中（读）+ 缓存写入，与配额口径一致',
-  cacheRead: '缓存命中（读）Token：各协议已归一（OpenAI/Gemini 上游含缓存的输入已拆分）',
-  cacheHitRate: '缓存命中率 = 缓存命中 ÷（输入未缓存 + 缓存命中 + 缓存写入），仅统计输入侧',
-  cost: '按所选币种折算的合计成本；未计价（无定价规则）条数不计入',
+  requests: '区间内的请求总数',
+  success: '状态码小于 400 的请求占比',
+  tokens: '输入 + 输出 + 缓存读 + 缓存写，与配额口径一致',
+  cacheRead: '各协议已归一，OpenAI / Gemini 上游的缓存输入已拆分出来',
+  cacheHitRate: '缓存读 ÷ 输入侧合计（输入 + 缓存读 + 缓存写）',
+  cost: '按所选币种折算；无定价规则的请求不计入',
 } as const
 
 // —— 配额 ——
@@ -118,6 +118,16 @@ export const PROXY_KINDS = [
 export const DIMENSION_KEY_HINTS = ['image_size', 'width', 'height', 'resolution', 'task_type']
 
 // —— stats ——
+/** 时间预设 → 展示文案（筛选下拉与移动端摘要条共用） */
+export const RANGE_PRESET_LABELS: Record<string, string> = {
+  today: '今日',
+  '7d': '近 7 天',
+  '30d': '近 30 天',
+  '90d': '近 90 天',
+  all: '全部时间',
+  custom: '自定义区间',
+}
+
 export const DIMENSION_OPTIONS = [
   { value: '', label: '不分组（总量）' },
   { value: 'model', label: '按模型' },
