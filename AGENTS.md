@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-**NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 上游余额/额度只读监控 + 管理后台 API，定位为「面向团队/应用的工具型网关」。
+**NextAPI** 是一个**自托管（开源）的 LLM 网关**：协议转换（OpenAI Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四协议互转）+ 多上游聚合路由 + 日志/成本统计 + 图片生成透传（视频为占位 501）+ 上游余额/额度只读监控 + 管理后台 API，定位为「轻量、快速、适合个人自托管的工具型网关」。
 
 仓库为 Rust + axum 单体服务（PostgreSQL 存储），管理后台前端在 `web/`（Vue 3，构建产物经 rust-embed 内嵌进二进制，Docker 多阶段自动构建）；模块划分见「代码组织」。
 
@@ -45,7 +45,7 @@
 - 测试：`cargo test`（单元测试内联在 `src/**` 各模块，无外部依赖；`tests/` 集成测试目录尚未建立）
 - 前端开发：`cd web && npm run dev`（vite 5173，`/api` 代理到 127.0.0.1:3220，可用 `VITE_PROXY_TARGET` 覆盖）；类型检查 `npx vue-tsc --noEmit`
 - 部署：`docker-compose up -d`（默认拉 GHCR 发布镜像 `ghcr.io/snnh/nextapi` + `postgres:16`，自动迁移；首次先 `cp config.example.yaml config.yaml`；本地构建见 compose 内注释）
-- 发布：推送 `v*` 标签即触发 `.github/workflows/ci.yml` 发布流程（rust 检查兜底 + 原生 runner 分布式构建 amd64/arm64 多架构镜像推 GHCR）；GitHub Release 用 `gh release create` 另行创建（不触发构建）；发布前宜跑 `cargo audit` / `cargo deny` 依赖审计
+- 发布：先跑 `cargo fmt -- --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test --all-targets` 与前端 `npm run typecheck && npm run build`，同步 `Cargo.toml`/`Cargo.lock`/`web/package.json`/`web/package-lock.json` 版本号并更新 CHANGELOG；推送 `v*` 标签即触发 `.github/workflows/ci.yml` 发布流程（rust 检查兜底 + 原生 runner 分布式构建 amd64/arm64 多架构镜像推 GHCR）；GitHub Release 用 `gh release create` 另行创建（不触发构建）；发布前宜跑 `cargo audit` / `cargo deny` 依赖审计
 
 **注意**：所有 SQL 用 sqlx **运行时校验**（`sqlx::query`，禁用 `query!` 宏），保证无数据库环境也能 `cargo check`。
 
@@ -59,6 +59,8 @@ src/
 ├── db.rs            # sqlx 连接池 + 迁移（sqlx::migrate!）
 ├── seed.rs          # app_meta.seeded_at 标记 + admin/proxies/fx_rates 种子（argon2）
 ├── crypto.rs        # AES-256-GCM（NEXTAPI_SECRET_KEY，env-only）
+├── mem.rs           # glibc malloc_trim（登录后 + 周期回收，非 glibc 平台空操作）
+├── tls.rs           # rustls CryptoProvider 幂等安装（reqwest 0.13 需显式选择）
 ├── error.rs         # ApiError 统一错误
 ├── state.rs         # AppState（PgPool / ArcSwap<HotConfig> / SettingsEngine / Crypto / Jwt / Metrics / LogSink）
 ├── metrics.rs       # Prometheus /metrics（prometheus-client；requests/errors/latency/tokens + 日志队列深度/溢出）
@@ -177,6 +179,7 @@ web/                 # Vue3 管理后台：src/views 9 页面（含模型别名�
 - 实现与设计文档冲突时先确认是改文档还是改实现，不擅自扩散改动范围。
 - 前端 API 调用统一走 `apiBase()` 拼接前缀，不手写 `/api`（构建前自检脚本会拦截 `/api/api/...` 双拼，v0.3.1 事故）。
 - 前端 secret 输入框（上游 API Key / 代理密码 / Token 等）必须带 `autocomplete="new-password"` 与 `data-lpignore`/`data-1p-ignore` 标记：浏览器自动填充会把管理后台登录密码写进 Key 框并在保存其它字段时静默覆盖（v0.3.2 事故，务必遵守）。
+- 品牌标识统一用 `web/src/components/common/AppLogo.vue`（`size`/`monochrome`，颜色走 CSS 变量）；`web/public/logo.svg`、`logo-mono.svg`、`favicon.svg` 分别供彩色、黑白灰与站点图标使用，不引入外部字体/图片依赖。
 - 增删 `usage_logs` / `media_tasks` 表列时，必须同步更新 `logging::LOG_COLS`+`LOG_ARRAY_TYPES`、`entities` 行结构与 `admin/logs.rs` 查询列（sqlx 运行时校验，编译期不检查）。
 - **本文件会随仓库公开**：只写项目技术内容，不写部署环境细节（主机 / 宿主路径 / 端口映射 / 凭据 / 内网与代理信息）；这类信息写到 `.owc/memory.md`（已 gitignore，不随仓库发布）。
 
