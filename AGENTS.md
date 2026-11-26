@@ -71,6 +71,8 @@ src/
 │                    # + 渠道 extra.auto_disable=false 排除）
 ├── limit/mod.rs     # RPM 滑窗、TPM 预检、quota_usage 用量上限（含判定缓存）
 ├── upstream/mod.rs  # reqwest 按代理/直连分池、透传改写（模型/鉴权头/头体覆盖）、SSE 流处理
+├── upstream/params.rs # 渠道参数整形（extra.params：thinking_style / effort_field / strip /
+│                    # max_tokens_field / include_thoughts；透传与转换两条路径都生效）
 │   ├── devin/       # Devin Connect 渠道：proto wire 编解码 + Responses↔Devin 转换 +
 │   │                # CLI 形态请求（工具循环三形态消息：f3 正文 / f6 工具 / f11 思维链）
 │   │                # + 响应双流分流（f9 思维链→reasoning、f3 回答→output_text）
@@ -96,16 +98,19 @@ src/
 │                    # Dashscope 同步 multimodal-generation/Dashscope 异步 text2image+tasks；size 映射）
 │                    # + tasks（media_tasks poller 轮询计费闭环 + /v1/images/tasks/{id} 归属校验查询）
 │                    # + resolve（图片引用解析/data-URL）+ download（远程图下载，netguard 防护）
-├── presets.rs       # 供应商预设（13 个内置预设，含 devin OAuth 免 Key 预设 + 一键接入 provision
+├── presets.rs       # 供应商预设（16 个内置预设：含 OpenAI/Anthropic/Google 三家官方 +
+│                    # devin OAuth 免 Key；一键接入 provision 写入 extra.params 渠道参数声明
 │                    # + Preset.auth_kind（api_key/oauth）+ media_base_url /
-│                     # protocol_base_urls / models_path 处理；含百度/腾讯/阿里 Token Plan 专属根地址；
+│                     # protocol_base_urls / models_path / params 处理；含百度/腾讯/阿里 Token Plan 专属根地址；
 │                     # dashscope 含阿里云百炼统一域名 unified_domain / 业务空间专属域名 workspace_domain）
 ├── embed.rs         # 前端静态资源内嵌（rust-embed 读 web/dist）+ SPA fallback（API 前缀保持 JSON 404）
 ├── gateway.rs       # 网关入口与请求主链路（/v1/chat/completions 等 + /v1/responses/compact
 │                    # 凭证失效联动：命中鉴权失败 → 502 upstream_auth_failed + 临时跳过该上游
 │                    # 直接转发 + /v1/images/* + 视频 501 占位）
 │                    # + 打点（tee 收集/失败记账）
-├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集
+├── protocol/        # IR + 4 协议适配器（chat/responses/anthropic/gemini）+ sse + errors + 降级收集；
+│                    # 思考强度四协议原样互转（不换算档位）、Gemini thoughtSignature 双向保真、
+│                    # 入口专有字段仅同源协议回写（跨协议记降级）、Gemini 3.6+ 模型级参数规则
 ├── text.rs          # 文本截断工具（字节/字符上限 + UTF-8 边界安全，单一实现）
 ├── stats.rs         # 统计聚合查询（summary/series/model_rank；长区间优先 usage_hourly，dimension 非 model 回退明细；
 │                    # cost_display 展示币种合计 + cost_na_count 缺失计数；Token 全量口径

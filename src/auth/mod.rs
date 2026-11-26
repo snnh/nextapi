@@ -89,11 +89,9 @@ impl JwtService {
             iat: now,
             session_version,
         };
-        let token = encode(
-            &Header::default(),
-            &claims,
-            &EncodingKey::from_secret(self.secret.as_bytes()),
-        )?;
+        let key = EncodingKey::from_secret(self.secret.as_bytes())
+            .map_err(|e| anyhow::anyhow!("JWT 签名密钥不可用（长度非法）: {e}"))?;
+        let token = encode(&Header::default(), &claims, &key)?;
         Ok(token)
     }
 
@@ -106,11 +104,9 @@ impl JwtService {
     fn verify_claims(&self, token: &str) -> anyhow::Result<Claims> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_aud = false; // 我们不用 aud 声明
-        let data = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(self.secret.as_bytes()),
-            &validation,
-        )?;
+        let key = DecodingKey::from_secret(self.secret.as_bytes())
+            .map_err(|e| anyhow::anyhow!("JWT 校验密钥不可用（长度非法）: {e}"))?;
+        let data = decode::<Claims>(token, &key, &validation)?;
         Ok(data.claims)
     }
 }

@@ -25,14 +25,14 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde"] }
 arc-swap = "1"
-notify = "8"
+notify = "9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-prometheus-client = "0.25"
+prometheus-client = "0.26"
 crc32fast = "1"
 quick-xml = { version = "0.42", features = ["serialize"] }
 argon2 = "0.6"
-jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+jsonwebtoken = { version = "12", features = ["rust_crypto"] }
 aes-gcm = "0.11"
 sha2 = "0.10"
 hmac = "0.12"
