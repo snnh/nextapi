@@ -116,7 +116,11 @@ finish_reason 归一化为 OpenAI 词汇（`stop/length/tool_calls/content_filte
 ### 3.1 Gemini 3.6+ 的模型级规则
 
 - 禁止末轮 `model` 预填（400）：跨协议带入的 assistant 预填会被丢弃并记降级；
-- `temperature` / `top_p` / `top_k` 已弃用（当前被忽略、后续版本报错）：新代模型不再下发。
+- `temperature` / `top_p` / `top_k` 已弃用（当前被忽略、后续版本报错）：新代模型不再下发；
+- 思考档位不做换算，原样透传：Gemini 4 系（`gemini-4-*`）只认 `low/medium/high/xhigh`，
+  客户端传 `minimal` 时由上游返回 400，网关不代改档位；
+- Gemini 4 系的 `frequency_penalty` / `presence_penalty` / `candidate_count` 一律 400，
+  IR 不承载这三个字段，转换时不会下发。
 
 ## 4. 流式转换要点
 

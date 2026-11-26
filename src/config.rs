@@ -145,6 +145,9 @@ pub struct GatewayCfg {
     pub admin_login_expire_minutes: u64,
     /// 转 Anthropic 缺省 max_tokens
     pub anthropic_default_max_tokens: u64,
+    /// Anthropic API 版本头（`anthropic-version`）；官方按日期发版，可随文档更新，
+    /// 渠道也可用 extra.anthropic_version 单独覆盖
+    pub anthropic_version: String,
     pub batch_insert_interval_ms: u64,
     /// 用量上限聚合结果缓存秒数
     pub quota_check_cache_secs: u64,
@@ -189,6 +192,7 @@ impl Default for GatewayCfg {
             admin_login_rate_limit_per_min: 10,
             admin_login_expire_minutes: 1440,
             anthropic_default_max_tokens: 65536,
+            anthropic_version: "2023-06-01".into(),
             batch_insert_interval_ms: 500,
             quota_check_cache_secs: 3,
             quota_exceed_action: "block".into(),

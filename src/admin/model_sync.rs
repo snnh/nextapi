@@ -104,7 +104,12 @@ pub async fn fetch_upstream_models(
             reqwest::header::HeaderValue::from_static("application/json"),
         );
     } else {
-        upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+        upstream::apply_auth(
+            &mut headers,
+            proto,
+            up.api_key_plain.as_deref(),
+            Some(up.anthropic_version(upstream::ANTHROPIC_VERSION_FALLBACK)),
+        );
     }
 
     let resp = client

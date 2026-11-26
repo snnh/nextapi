@@ -131,6 +131,17 @@ impl UpstreamRow {
         self.base_url.clone()
     }
 
+    /// Anthropic API 版本头：extra.anthropic_version 覆盖 > 全局默认（gateway.anthropic_version）。
+    /// 官方按日期发版（如 2026-10-21），支持不发版随时调整某个渠道。
+    pub fn anthropic_version<'a>(&'a self, fallback: &'a str) -> &'a str {
+        self.extra
+            .get("anthropic_version")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(fallback)
+    }
+
     /// 模型列表路径：extra.models_path 覆盖（如千帆 Token Plan 为 "/v1/models"），默认 "/models"。
     pub fn models_path(&self) -> &str {
         self.extra

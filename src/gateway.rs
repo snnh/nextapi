@@ -1694,11 +1694,15 @@ async fn run_gateway(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
+        let hot_cfg = state.hot.load();
+        let anthropic_ver = upstream.anthropic_version(&hot_cfg.gateway.anthropic_version);
         upstream::apply_auth(
             &mut req_headers,
             outbound.protocol,
             upstream.api_key_plain.as_deref(),
+            Some(anthropic_ver),
         );
+        drop(hot_cfg);
         upstream::apply_header_overrides(&mut req_headers, overrides.as_ref());
         // no_proxy 合并规则（PLAN §5.9）：目标 URL 命中全局 proxy.no_proxy 或所选代理
         // 自身 no_proxy 任一列表 → 直连池。
@@ -2476,10 +2480,17 @@ async fn openai_responses_compact(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
+        let anthropic_ver = {
+            let hot_cfg = state.hot.load();
+            upstream
+                .anthropic_version(&hot_cfg.gateway.anthropic_version)
+                .to_string()
+        };
         upstream::apply_auth(
             &mut req_headers,
             entry_protocol,
             upstream.api_key_plain.as_deref(),
+            Some(&anthropic_ver),
         );
         upstream::apply_header_overrides(&mut req_headers, overrides.as_ref());
 
@@ -3057,6 +3068,7 @@ async fn images_generations(
                     &mut req_headers,
                     Protocol::OpenaiChat,
                     upstream.api_key_plain.as_deref(),
+                    None,
                 );
             }
             ImageApi::Gemini => {
@@ -3065,6 +3077,7 @@ async fn images_generations(
                     &mut req_headers,
                     Protocol::Gemini,
                     upstream.api_key_plain.as_deref(),
+                    None,
                 );
             }
         }

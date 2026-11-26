@@ -317,12 +317,21 @@ fn encode_path_segment(s: &str) -> String {
     out
 }
 
+/// Anthropic API 版本头的内置默认（官方按日期发版，可用 `gateway.anthropic_version`
+/// 或渠道 `extra.anthropic_version` 覆盖，无需改代码）。
+pub const ANTHROPIC_VERSION_FALLBACK: &str = "2023-06-01";
+
 /// 应用协议鉴权头：
 /// - openai_chat/openai_responses：Authorization: Bearer {key}
-/// - anthropic：x-api-key + anthropic-version: 2023-06-01
+/// - anthropic：x-api-key + anthropic-version（取值见 `anthropic_version`，缺省用兜底常量）
 /// - gemini：x-goog-api-key
 ///   api_key 为 None 时不设置（部分自建上游无需鉴权）。
-pub fn apply_auth(headers: &mut reqwest::header::HeaderMap, p: Protocol, api_key: Option<&str>) {
+pub fn apply_auth(
+    headers: &mut reqwest::header::HeaderMap,
+    p: Protocol,
+    api_key: Option<&str>,
+    anthropic_version: Option<&str>,
+) {
     let Some(key) = api_key else { return };
     match p {
         Protocol::OpenaiChat | Protocol::OpenaiResponses => {
@@ -334,7 +343,11 @@ pub fn apply_auth(headers: &mut reqwest::header::HeaderMap, p: Protocol, api_key
             if let Ok(v) = reqwest::header::HeaderValue::from_str(key) {
                 headers.insert("x-api-key", v);
             }
-            if let Ok(v) = reqwest::header::HeaderValue::from_str("2023-06-01") {
+            let ver = anthropic_version
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(ANTHROPIC_VERSION_FALLBACK);
+            if let Ok(v) = reqwest::header::HeaderValue::from_str(ver) {
                 headers.insert("anthropic-version", v);
             }
         }
@@ -957,12 +970,12 @@ mod tests {
     #[test]
     fn apply_auth_openai() {
         let mut h = HeaderMap::new();
-        apply_auth(&mut h, Protocol::OpenaiChat, Some("sk-1"));
+        apply_auth(&mut h, Protocol::OpenaiChat, Some("sk-1"), None);
         assert_eq!(
             h.get("authorization").unwrap().to_str().unwrap(),
             "Bearer sk-1"
         );
-        apply_auth(&mut h, Protocol::OpenaiResponses, Some("sk-2"));
+        apply_auth(&mut h, Protocol::OpenaiResponses, Some("sk-2"), None);
         assert_eq!(
             h.get("authorization").unwrap().to_str().unwrap(),
             "Bearer sk-2"
@@ -972,26 +985,38 @@ mod tests {
     #[test]
     fn apply_auth_anthropic() {
         let mut h = HeaderMap::new();
-        apply_auth(&mut h, Protocol::Anthropic, Some("key"));
+        apply_auth(&mut h, Protocol::Anthropic, Some("key"), None);
         assert_eq!(h.get("x-api-key").unwrap().to_str().unwrap(), "key");
         assert_eq!(
             h.get("anthropic-version").unwrap().to_str().unwrap(),
-            "2023-06-01"
+            ANTHROPIC_VERSION_FALLBACK
+        );
+        // 可配置版本（全局设置或渠道 extra）覆盖兜底值
+        apply_auth(&mut h, Protocol::Anthropic, Some("key"), Some("2026-10-21"));
+        assert_eq!(
+            h.get("anthropic-version").unwrap().to_str().unwrap(),
+            "2026-10-21"
+        );
+        // 空串视为未配置，回退兜底值
+        apply_auth(&mut h, Protocol::Anthropic, Some("key"), Some("  "));
+        assert_eq!(
+            h.get("anthropic-version").unwrap().to_str().unwrap(),
+            ANTHROPIC_VERSION_FALLBACK
         );
     }
 
     #[test]
     fn apply_auth_gemini() {
         let mut h = HeaderMap::new();
-        apply_auth(&mut h, Protocol::Gemini, Some("gkey"));
+        apply_auth(&mut h, Protocol::Gemini, Some("gkey"), None);
         assert_eq!(h.get("x-goog-api-key").unwrap().to_str().unwrap(), "gkey");
     }
 
     #[test]
     fn apply_auth_none_key_skips() {
         let mut h = HeaderMap::new();
-        apply_auth(&mut h, Protocol::OpenaiChat, None);
-        apply_auth(&mut h, Protocol::Gemini, None);
+        apply_auth(&mut h, Protocol::OpenaiChat, None, None);
+        apply_auth(&mut h, Protocol::Gemini, None, None);
         assert!(h.is_empty());
     }
 

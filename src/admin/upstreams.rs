@@ -1164,7 +1164,12 @@ async fn test_upstream(
         }
     } else {
         // api_key_plain 仅在内存快照中持有；此处加鉴权头（绝不回传）
-        upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+        upstream::apply_auth(
+            &mut headers,
+            proto,
+            up.api_key_plain.as_deref(),
+            Some(up.anthropic_version(upstream::ANTHROPIC_VERSION_FALLBACK)),
+        );
     }
 
     let started = std::time::Instant::now();

@@ -212,6 +212,12 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     default: 65536,
     help: '转 Anthropic 缺省 max_tokens（64k）。',
   },
+  'gateway.anthropic_version': {
+    label: 'Anthropic API 版本',
+    type: 'string',
+    default: '2023-06-01',
+    help: 'Anthropic 请求头 anthropic-version（官方按日期发版，如 2026-10-21）。可按官方文档随时修改，无需升级；单个渠道可用 extra.anthropic_version 覆盖。',
+  },
   'gateway.batch_insert_interval_ms': {
     label: '批量写库间隔',
     type: 'number',
@@ -534,6 +540,7 @@ export const SETTING_SCENARIOS: { id: string; title: string; desc: string; keys:
       'gateway.default_timeout_secs',
       'gateway.stream_timeout_secs',
       'gateway.anthropic_default_max_tokens',
+      'gateway.anthropic_version',
       'gateway.max_body_mb',
     ],
   },

@@ -66,6 +66,9 @@ gateway:
   admin_login_expire_minutes: 1440  # 管理端登录 JWT 有效期（分钟，1–43200）。到期需重新登录
                                     # （含 TOTP）。仅对新签发 token 生效，已发 token 到期时间不变。
   anthropic_default_max_tokens: 65536 # 转 Anthropic 缺省 max_tokens（64k）
+  # Anthropic API 版本头：官方按日期发版（如 2026-10-21），可按文档随时改，无需升级版本；
+  # 单个渠道也可用 extra.anthropic_version 覆盖
+  anthropic_version: "2023-06-01"
   max_body_mb: 100                  # 单请求体上限（MiB，1–1024）。请求体整体读入内存后解析，
                                     # 调低可压低大 body（多图 base64）请求的内存峰值，代价是
                                     # 超大请求被拒（413）。⚠️ 仅启动时生效（改动需重启）

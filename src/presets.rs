@@ -177,14 +177,17 @@ static PRESETS: [Preset; 16] = [
         kind: "baidu",
         auth_kind: "api_key",
         base_url: "https://qianfan.baidubce.com/v2",
-        protocols: &["openai_chat"],
+        // 官方双协议：OpenAI 兼容 /v2 + Anthropic 兼容 /anthropic（Claude Code 直连用）
+        protocols: &["openai_chat", "anthropic"],
         media_base_url: None,
-        protocol_base_urls: None,
+        // Anthropic 的 SDK base_url 为 /anthropic，实际端点为 /anthropic/v1/messages
+        protocol_base_urls: Some(&[("anthropic", "https://qianfan.baidubce.com/anthropic/v1")]),
         models_path: None,
         params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "百度千帆：OpenAI 兼容对话，接入即用。",
+        description:
+            "百度千帆：OpenAI 兼容对话与 Anthropic 兼容（Anthropic 走独立 /anthropic 根），接入即用。",
     },
     Preset {
         name: "qianfan_tokenplan",
@@ -213,14 +216,17 @@ static PRESETS: [Preset; 16] = [
         kind: "kimi",
         auth_kind: "api_key",
         base_url: "https://api.moonshot.cn/v1",
-        protocols: &["openai_chat"],
+        // 官方三协议：OpenAI 兼容 Chat 与 Responses 同根；Anthropic 走独立 /anthropic 根
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
-        protocol_base_urls: None,
+        protocol_base_urls: Some(&[("anthropic", "https://api.moonshot.cn/anthropic/v1")]),
         models_path: None,
+        // K3 用顶层 reasoning_effort（low/high/max，默认 max），K2.x 用 thinking{type}，两者原样透传
         params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "月之暗面 Kimi：OpenAI 兼容对话，接入即用。",
+        description:
+            "月之暗面 Kimi：OpenAI 兼容 Chat/Responses 与 Anthropic 兼容三协议（Anthropic 走独立 /anthropic 根），接入即用。",
     },
     Preset {
         name: "hunyuan",
@@ -228,36 +234,37 @@ static PRESETS: [Preset; 16] = [
         kind: "tencent",
         auth_kind: "api_key",
         base_url: "https://tokenhub.tencentmaas.com/v1",
-        // hy4-preview 等兼容三协议；Anthropic 为独立根（Claude Code 拼接 /v1/messages）
+        // hy4 等模型兼容三协议；Anthropic 为同一 host 的 /v1/messages 路径
         protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
         protocol_base_urls: Some(&[("anthropic", "https://tokenhub.tencentmaas.com/v1")]),
         models_path: None,
+        // 思考统一 thinking{type: enabled|disabled|adaptive}，深度用 reasoning_effort，原样透传
         params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
-            "腾讯云 TokenHub：混元及第三方模型，OpenAI 兼容 Chat/Responses 与 Anthropic 兼容，接入即用。",
+            "腾讯云 TokenHub：混元及第三方模型，OpenAI 兼容 Chat/Responses 与 Anthropic 兼容三协议（Anthropic 同 host 的 /v1/messages），思考走 thinking{type} + reasoning_effort。",
     },
     Preset {
         name: "tencent_tokenplan",
         display_name: "腾讯云 Token Plan",
         kind: "tencent",
         auth_kind: "api_key",
-        base_url: "https://api.lkeap.cloud.tencent.com/plan/v3",
-        // 官方双根：OpenAI 兼容 /plan/v3；Anthropic 独立根 /plan/anthropic（+ /v1/messages）
-        protocols: &["openai_chat", "anthropic"],
+        base_url: "https://tokenhub.tencentmaas.com/plan/v3",
+        // 官方三协议：Chat/Responses 同根 /plan/v3；Anthropic 独立根 /plan/anthropic（+ /v1/messages）
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
         protocol_base_urls: Some(&[(
             "anthropic",
-            "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
+            "https://tokenhub.tencentmaas.com/plan/anthropic/v1",
         )]),
         models_path: None,
         params: None,
         workspace_domain: None,
         unified_domain: None,
         description:
-            "腾讯云 Token Plan（个人版，订阅专属 Key：sk-tp- 开头）：OpenAI 兼容与 Anthropic 兼容，接入即用。",
+            "腾讯云 Token Plan（通用/Hy 订阅套餐，专属 Key）：OpenAI 兼容 Chat/Responses 与 Anthropic 兼容，接入即用；套餐条款限制非交互式 API 调用。",
     },
     Preset {
         name: "dashscope_tokenplan",
@@ -302,14 +309,17 @@ static PRESETS: [Preset; 16] = [
         kind: "volcano",
         auth_kind: "api_key",
         base_url: "https://ark.cn-beijing.volces.com/api/v3",
-        protocols: &["openai_chat"],
+        // 官方双协议：Chat 与 Responses 同根（250615 及之后模型默认支持 Responses）
+        protocols: &["openai_chat", "openai_responses"],
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        // 思考为 Responses 原生 thinking{type} + reasoning.effort（none..max 七档），原样透传
         params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "字节火山方舟：OpenAI 兼容对话，接入即用。",
+        description:
+            "字节火山方舟：OpenAI 兼容 Chat 与 Responses 双协议（同根），深度思考走 thinking{type} + reasoning.effort。",
     },
     Preset {
         name: "openai",
@@ -342,7 +352,8 @@ static PRESETS: [Preset; 16] = [
         params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "Anthropic Claude 官方：Messages 协议，thinking 与 output_config.effort 原样透传。",
+        description:
+            "Anthropic Claude 官方：Messages 协议，thinking{type} 与 output_config.effort 原样透传（5 系起 adaptive 为默认思考形状）。",
     },
     Preset {
         name: "google",
@@ -359,7 +370,7 @@ static PRESETS: [Preset; 16] = [
         workspace_domain: None,
         unified_domain: None,
         description:
-            "Google Gemini 官方：generateContent 协议，thinkingConfig 透传；3.6 起自动剔除已弃用的采样参数。",
+            "Google Gemini 官方：generateContent 协议，thinkingConfig 透传；4 系（neon/hydrogen/carbon/argon）支持 low/medium/high/xhigh 四档且拒绝 minimal，采样参数被忽略、由协议层自动剔除。",
     },
     Preset {
         name: "openrouter",
@@ -367,30 +378,43 @@ static PRESETS: [Preset; 16] = [
         kind: "openrouter",
         auth_kind: "api_key",
         base_url: "https://openrouter.ai/api/v1",
-        protocols: &["openai_chat", "openai_responses"],
+        // 三种协议同根：/chat/completions、/responses、Anthropic 的 /messages
+        protocols: &["openai_chat", "openai_responses", "anthropic"],
         media_base_url: None,
         protocol_base_urls: None,
         models_path: None,
+        // reasoning{effort,max_tokens,enabled} 由渠道透传；模型不支持某参数时上游忽略而非报错
         params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "OpenRouter：OpenAI Chat/Responses 兼容聚合站，模型路由 + 联网搜索透传。",
+        description:
+            "OpenRouter：Chat/Responses/Anthropic 三协议同根聚合站，模型路由 + 联网搜索透传。",
     },
     Preset {
         name: "zenmux",
         display_name: "Zenmux",
         kind: "zenmux",
         auth_kind: "api_key",
-        base_url: "https://api.zenmux.ai/v1",
-        // 四协议兼容：OpenAI Chat / Responses / Anthropic / Gemini
+        // 官方域名是 zenmux.ai/api（不是 api.zenmux.ai）
+        base_url: "https://zenmux.ai/api/v1",
+        // 四协议兼容：OpenAI Chat / Responses 同根，Anthropic 与 Gemini(Vertex) 各自独立根
         protocols: &["openai_chat", "openai_responses", "anthropic", "gemini"],
         media_base_url: None,
-        protocol_base_urls: None,
+        // Anthropic 根为 /api/anthropic（端点是 /api/anthropic/v1/messages）；
+        // Gemini 走 Vertex 形状，路径必须带 publishers/google 前缀（/api/vertex-ai/v1/publishers/google/models/...）
+        protocol_base_urls: Some(&[
+            ("anthropic", "https://zenmux.ai/api/anthropic/v1"),
+            (
+                "gemini",
+                "https://zenmux.ai/api/vertex-ai/v1/publishers/google",
+            ),
+        ]),
         models_path: None,
         params: None,
         workspace_domain: None,
         unified_domain: None,
-        description: "Zenmux：四协议兼容聚合站，zenmux/auto 自动路由、跨协议调用。",
+        description:
+            "Zenmux：四协议兼容聚合站（OpenAI Chat/Responses 同根，Anthropic 与 Gemini 各自独立根），跨协议调用。",
     },
     Preset {
         name: "deepseek",
@@ -736,7 +760,12 @@ async fn probe_upstream(state: &AppState, snap: &Snapshot, up: &UpstreamRow) -> 
     let url = up.models_url();
     let mut headers = reqwest::header::HeaderMap::new();
     // api_key_plain 仅在内存快照中持有；此处加鉴权头（绝不回传）
-    upstream::apply_auth(&mut headers, proto, up.api_key_plain.as_deref());
+    upstream::apply_auth(
+        &mut headers,
+        proto,
+        up.api_key_plain.as_deref(),
+        Some(up.anthropic_version(upstream::ANTHROPIC_VERSION_FALLBACK)),
+    );
 
     let started = std::time::Instant::now();
     let resp = client
@@ -901,8 +930,22 @@ mod tests {
             &["openai_chat", "openai_responses", "anthropic", "gemini"]
         );
 
+        // OpenRouter/腾讯 TokenHub 三协议；Zenmux 的四协议各自独立根（Anthropic /api/anthropic，
+        // Gemini 走 Vertex 形状带 publishers/google 前缀）
         let or = find("openrouter").unwrap();
-        assert_eq!(or.protocols, &["openai_chat", "openai_responses"]);
+        assert_eq!(
+            or.protocols,
+            &["openai_chat", "openai_responses", "anthropic"]
+        );
+        assert_eq!(zen.base_url, "https://zenmux.ai/api/v1");
+        let zen_roots: &[(&str, &str)] = &[
+            ("anthropic", "https://zenmux.ai/api/anthropic/v1"),
+            (
+                "gemini",
+                "https://zenmux.ai/api/vertex-ai/v1/publishers/google",
+            ),
+        ];
+        assert_eq!(zen.protocol_base_urls, Some(zen_roots));
 
         // 千帆 Token Plan：三协议 + 独立 Anthropic 根 + /v1/models 模型列表
         let tp = find("qianfan_tokenplan").unwrap();
@@ -932,13 +975,16 @@ mod tests {
         let hy_anthropic: &[(&str, &str)] = &[("anthropic", "https://tokenhub.tencentmaas.com/v1")];
         assert_eq!(hy.protocol_base_urls, Some(hy_anthropic));
 
-        // 腾讯云 Token Plan（个人版）：OpenAI /plan/v3 + Anthropic /plan/anthropic
+        // 腾讯云 Token Plan（通用/Hy 订阅套餐）：OpenAI /plan/v3 + Anthropic /plan/anthropic
         let tctp = find("tencent_tokenplan").unwrap();
-        assert_eq!(tctp.base_url, "https://api.lkeap.cloud.tencent.com/plan/v3");
-        assert_eq!(tctp.protocols, &["openai_chat", "anthropic"]);
+        assert_eq!(tctp.base_url, "https://tokenhub.tencentmaas.com/plan/v3");
+        assert_eq!(
+            tctp.protocols,
+            &["openai_chat", "openai_responses", "anthropic"]
+        );
         let tctp_anthropic: &[(&str, &str)] = &[(
             "anthropic",
-            "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1",
+            "https://tokenhub.tencentmaas.com/plan/anthropic/v1",
         )];
         assert_eq!(tctp.protocol_base_urls, Some(tctp_anthropic));
 
@@ -979,14 +1025,19 @@ mod tests {
         );
         assert_eq!(google.protocols, &["gemini"]);
 
-        // 其余单协议
-        for name in ["qianfan", "kimi", "volcano"] {
+        // 国内厂商与聚合站的协议集合（按官方文档核对：千帆/Kimi 补 Anthropic，火山补 Responses）
+        let expect: [(&str, &[&str]); 4] = [
+            ("qianfan", &["openai_chat", "anthropic"]),
+            ("kimi", &["openai_chat", "openai_responses", "anthropic"]),
+            ("volcano", &["openai_chat", "openai_responses"]),
+            (
+                "openrouter",
+                &["openai_chat", "openai_responses", "anthropic"],
+            ),
+        ];
+        for (name, protos) in expect {
             let p = find(name).unwrap();
-            assert_eq!(
-                p.protocols,
-                &["openai_chat"],
-                "预设 `{name}` 应仅支持 openai_chat"
-            );
+            assert_eq!(p.protocols, protos, "预设 `{name}` 的协议集合");
             assert!(
                 p.media_base_url.is_none(),
                 "预设 `{name}` 不应有 media_base_url"
@@ -1076,9 +1127,9 @@ mod tests {
             ),
             (
                 "tencent_tokenplan",
-                "https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions",
-                "https://api.lkeap.cloud.tencent.com/plan/anthropic/v1/messages",
-                "https://api.lkeap.cloud.tencent.com/plan/v3/models",
+                "https://tokenhub.tencentmaas.com/plan/v3/chat/completions",
+                "https://tokenhub.tencentmaas.com/plan/anthropic/v1/messages",
+                "https://tokenhub.tencentmaas.com/plan/v3/models",
             ),
             (
                 "dashscope_tokenplan",

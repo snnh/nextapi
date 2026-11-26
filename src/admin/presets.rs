@@ -220,11 +220,17 @@ mod tests {
             "https://maas.qianwenaiapi.com/apps/anthropic/v1"
         );
 
-        // 无专属域名的预设不输出这些键（前端按缺失判断）
+        // 无专属/统一域名的预设不输出这些键（前端按缺失判断）；
+        // protocol_base_urls 仅在多根供应商上出现
         let kimi = preset_json(presets::find("kimi").unwrap());
         assert!(kimi.get("workspace_domain").is_none());
         assert!(kimi.get("unified_domain").is_none());
-        assert!(kimi.get("protocol_base_urls").is_none());
+        assert_eq!(
+            kimi["protocol_base_urls"]["anthropic"],
+            "https://api.moonshot.cn/anthropic/v1"
+        );
+        let volcano = preset_json(presets::find("volcano").unwrap());
+        assert!(volcano.get("protocol_base_urls").is_none());
     }
 
     /// provision 域名参数解析：缺省 / shared / unified / workspace / 兼容旧字段 / 非法值。
