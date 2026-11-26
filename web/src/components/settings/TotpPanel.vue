@@ -11,7 +11,7 @@
     <template v-else>
       <!-- 状态行 -->
       <div class="status-row">
-        <el-tag :type="status?.enabled ? 'success' : 'info'">
+        <el-tag effect="plain" size="small" :type="status?.enabled ? 'success' : 'info'">
           {{ status?.enabled ? '已启用' : status?.pending ? '待确认' : '未启用' }}
         </el-tag>
         <span class="status-text">
@@ -25,13 +25,13 @@
           <el-form inline @submit.prevent>
             <el-form-item label="当前密码">
               <el-input
+                class="w-200"
                 v-model="setupPassword"
                 type="password"
                 show-password
                 autocomplete="current-password"
-                style="width: 200px"
                 placeholder="设置 TOTP 需验证密码"
-              />
+                />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="busy" :disabled="!setupPassword" @click="doSetup">
@@ -55,13 +55,13 @@
           <el-form inline @submit.prevent>
             <el-form-item label="验证码">
               <el-input
+                class="w-180"
                 v-model="enableCode"
                 inputmode="numeric"
                 placeholder="认证器 6 位数字"
                 maxlength="6"
-                style="width: 180px"
                 @input="onEnableCodeInput"
-              />
+                />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="busy" :disabled="enableCode.length !== 6" @click="doEnable">
@@ -79,22 +79,22 @@
         <el-form v-else inline @submit.prevent>
           <el-form-item label="密码">
             <el-input
+              class="w-180"
               v-model="disableForm.password"
               type="password"
               show-password
               autocomplete="current-password"
-              style="width: 180px"
-            />
+              />
           </el-form-item>
           <el-form-item label="验证码">
             <el-input
+              class="w-140"
               v-model="disableForm.code"
               inputmode="numeric"
               placeholder="6 位数字"
               maxlength="6"
-              style="width: 140px"
               @input="onDisableCodeInput"
-            />
+              />
           </el-form-item>
           <el-form-item>
             <el-button

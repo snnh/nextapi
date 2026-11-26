@@ -17,7 +17,7 @@
     </div>
 
     <el-card shadow="never" class="section-card">
-      <el-table :data="rows" v-loading="loading">
+      <el-table :data="rows" v-loading="loading" size="small">
         <template #empty>
           <el-empty description="暂无审计日志" :image-size="60" />
         </template>
@@ -61,19 +61,14 @@
         </el-table-column>
       </el-table>
 
-      <div class="pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :total="total"
-          :page-sizes="[20, 50, 100]"
-          :small="isMobile"
-          :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
-          background
-          @current-change="load"
-          @size-change="onSizeChange"
-        />
-      </div>
+      <TablePager
+        v-model:page="page"
+        v-model:size="pageSize"
+        :total="total"
+        :page-sizes="[20, 50, 100]"
+        @update:page="load"
+        @update:size="onSizeChange"
+      />
     </el-card>
 
     <el-dialog v-model="summaryVisible" title="摘要详情" class="dlg">
@@ -95,14 +90,13 @@ import { errMsg } from '@/api/http'
 import { fmtTime } from '@/utils/format'
 import { copyText } from '@/utils/clipboard'
 import CopyText from '@/components/common/CopyText.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
+import TablePager from '@/components/common/TablePager.vue'
 import type { AuditRow } from '@/api/types'
 
 const rows = ref<AuditRow[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(50)
-const { isMobile } = useBreakpoint()
 const action = ref('')
 const objectType = ref('')
 const loading = ref(false)
@@ -174,11 +168,6 @@ onMounted(load)
 <style scoped>
 .filter-input {
   width: 200px;
-}
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 14px;
 }
 .summary-pre {
   margin: 0;

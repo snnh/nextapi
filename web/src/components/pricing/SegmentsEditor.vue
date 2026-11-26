@@ -42,13 +42,13 @@
           <div class="seg-row">
             <span class="seg-label"><span class="seg-req" aria-hidden="true">*</span>单价</span>
             <el-input-number
+              class="w-200"
               v-model="seg.price"
               :min="0"
               :precision="6"
               :controls="false"
-              style="width: 200px"
               placeholder="必填"
-            />
+              />
             <span class="hint">必填，按当前 unit 计价（如每 1M token）</span>
           </div>
 
@@ -89,11 +89,11 @@
             <span class="seg-label">上下文 Token</span>
             <span class="seg-token">
               最小
-              <el-input-number v-model="seg.min_prompt_tokens" :min="0" :controls="false" style="width: 140px" placeholder="可空" />
+              <el-input-number class="w-140" v-model="seg.min_prompt_tokens" :min="0" :controls="false" placeholder="可空" />
             </span>
             <span class="seg-token">
               最大
-              <el-input-number v-model="seg.max_prompt_tokens" :min="0" :controls="false" style="width: 140px" placeholder="可空" />
+              <el-input-number class="w-140" v-model="seg.max_prompt_tokens" :min="0" :controls="false" placeholder="可空" />
             </span>
             <span class="hint">按 context_basis（prompt/total tokens）判定，双空则不校验</span>
           </div>

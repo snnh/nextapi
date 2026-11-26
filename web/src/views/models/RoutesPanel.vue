@@ -17,12 +17,12 @@
 
       <template v-if="viewMode === 'models'">
         <el-input
+          class="w-260"
           v-model="modelKeyword"
           placeholder="搜索模型名 / 上游 / 别名"
           clearable
           :prefix-icon="Search"
-          style="width: 260px"
-        />
+          />
         <el-button :icon="Refresh" @click="refresh">刷新</el-button>
         <div class="spacer" />
         <el-button :icon="Plus" @click="openCreate">新增路由</el-button>
@@ -77,7 +77,7 @@
 
     <!-- ===== 模型视图：按对外模型名聚合 ===== -->
     <el-card v-if="!listError && viewMode === 'models'" shadow="never" class="section-card">
-      <el-table :data="filteredOverviewRows" v-loading="pageLoading">
+      <el-table :data="filteredOverviewRows" v-loading="pageLoading" size="small">
         <template #empty>
           <EmptyState title="暂无模型路由" :description="modelsEmptyText">
             <template #actions>
@@ -139,7 +139,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isCompact" label="价格" width="118" align="center">
+        <el-table-column v-if="!isCompact" label="价格" width="118" align="right">
           <template #default="{ row }">
             <el-tooltip :content="priceTooltip(row)" placement="top">
               <el-tag :type="priceTagType(row.priceState)" size="small" effect="plain">
@@ -181,7 +181,7 @@
 
     <!-- ===== 路由视图：现有编辑表格 ===== -->
     <el-card v-else-if="!listError" shadow="never" class="section-card">
-      <el-table :data="drafts" border>
+      <el-table :data="drafts" size="small">
         <template #empty>
           <EmptyState title="暂无模型路由" description="点击「新增规则」创建第一条路由" />
         </template>
@@ -234,7 +234,7 @@
 
         <el-table-column label="启用" :width="isNarrow ? 70 : 80" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
+            <el-tag effect="plain" :type="row.enabled ? 'success' : 'info'" size="small">
               {{ row.enabled ? '启用' : '禁用' }}
             </el-tag>
           </template>
@@ -296,10 +296,10 @@
 
         <el-form-item label="上游" prop="upstream_id">
           <el-select
+            class="w-full"
             v-model="form.upstream_id"
             filterable
             placeholder="请选择上游"
-            style="width: 100%"
           >
             <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
           </el-select>
@@ -316,12 +316,12 @@
         <el-divider content-position="left">路由参数</el-divider>
 
         <el-form-item label="优先级" prop="priority">
-          <el-input-number v-model="form.priority" :min="0" :step="1" :precision="0" style="width: 200px" />
-          <div class="hint" style="width: 100%">数字小者优先；同优先级按权重加权。</div>
+          <el-input-number class="w-200" v-model="form.priority" :min="0" :step="1" :precision="0" />
+          <div class="hint w-full">数字小者优先；同优先级按权重加权。</div>
         </el-form-item>
 
         <el-form-item label="权重" prop="weight">
-          <el-input-number v-model="form.weight" :min="1" :step="1" :precision="0" style="width: 200px" />
+          <el-input-number class="w-200" v-model="form.weight" :min="1" :step="1" :precision="0" />
         </el-form-item>
 
         <el-form-item label="启用" prop="enabled">
@@ -329,13 +329,13 @@
         </el-form-item>
 
         <el-form-item label="排序" prop="sort_order">
-          <el-input-number v-model="form.sort_order" :min="0" :step="1" :precision="0" style="width: 200px" />
+          <el-input-number class="w-200" v-model="form.sort_order" :min="0" :step="1" :precision="0" />
         </el-form-item>
 
         <el-divider content-position="left">重试 / 熔断</el-divider>
 
         <el-form-item label="重试次数" prop="retries">
-          <el-input-number v-model="form.retries" :min="0" :step="1" :precision="0" style="width: 200px" />
+          <el-input-number class="w-200" v-model="form.retries" :min="0" :step="1" :precision="0" />
         </el-form-item>
 
         <el-form-item label="重试状态码" prop="retry_status_codes">
@@ -349,7 +349,7 @@
 
         <el-form-item label="锁定上游" prop="lock_upstream">
           <el-switch v-model="form.lock_upstream" />
-          <div class="hint" style="width: 100%">锁定后失败不自动故障转移。</div>
+          <div class="hint w-full">锁定后失败不自动故障转移。</div>
         </el-form-item>
       </el-form>
 

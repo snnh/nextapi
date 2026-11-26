@@ -51,7 +51,7 @@
           新增路由
         </el-button>
       </div>
-      <el-table :data="row.routes" border size="small">
+      <el-table :data="row.routes" size="small">
         <el-table-column label="上游" min-width="150" show-overflow-tooltip>
           <template #default="{ row: r }">
             <span class="cell-inline">
@@ -77,7 +77,7 @@
         <el-table-column prop="weight" label="权重" width="70" align="center" />
         <el-table-column label="状态" width="86" align="center">
           <template #default="{ row: r }">
-            <el-tag :type="r.enabled ? 'success' : 'info'" size="small">
+            <el-tag effect="plain" :type="r.enabled ? 'success' : 'info'" size="small">
               {{ r.enabled ? '启用' : '禁用' }}
             </el-tag>
           </template>
@@ -102,7 +102,7 @@
           管理别名
         </el-button>
       </div>
-      <el-table v-if="row.aliases.length" :data="row.aliases" border size="small">
+      <el-table v-if="row.aliases.length" :data="row.aliases" size="small">
         <el-table-column label="别名" min-width="160">
           <template #default="{ row: a }">
             <CopyText :text="a.alias" :truncate="24" />
@@ -110,7 +110,7 @@
         </el-table-column>
         <el-table-column label="状态" width="90" align="center">
           <template #default="{ row: a }">
-            <el-tag :type="a.enabled ? 'success' : 'info'" size="small">
+            <el-tag effect="plain" :type="a.enabled ? 'success' : 'info'" size="small">
               {{ a.enabled ? '启用' : '停用' }}
             </el-tag>
           </template>
@@ -137,7 +137,7 @@
           价格管理
         </el-button>
       </div>
-      <el-table :data="priceRows" border size="small">
+      <el-table :data="priceRows" size="small">
         <el-table-column label="上游" min-width="140" show-overflow-tooltip>
           <template #default="{ row: p }">{{ p.upstreamName }}</template>
         </el-table-column>
@@ -162,7 +162,7 @@
       <!-- 5. 调用示例 -->
       <div class="group-title">调用示例</div>
       <div class="hint">
-        将 <span class="mono">&lt;API_KEY&gt;</span> 替换为「API 密钥」页创建的完整密钥。
+        将 <span class="mono">&lt;API_KEY&gt;</span> 替换为「密钥」页创建的完整密钥。
       </div>
       <pre class="code">{{ curlExample }}</pre>
       <el-button size="small" :icon="CopyDocument" @click="copyCurl">复制示例</el-button>

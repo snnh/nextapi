@@ -130,7 +130,7 @@
             <span class="hint">{{ dimLabelText }}</span>
           </div>
         </template>
-        <el-table :data="detailRows" max-height="420">
+        <el-table :data="detailRows" max-height="420" size="small">
           <el-table-column v-if="!isMobile && !isCompact" label="时间" :width="splitLayout ? 116 : 140">
             <template #default="{ row }">{{ row.bucketText }}</template>
           </el-table-column>
@@ -195,7 +195,7 @@
             </div>
           </div>
         </template>
-        <el-table v-if="rankRows.length" :data="rankRows" max-height="420">
+        <el-table v-if="rankRows.length" :data="rankRows" max-height="420" size="small">
           <el-table-column label="模型" :min-width="isMobile ? 118 : isCompact ? 140 : splitLayout ? 130 : 180" show-overflow-tooltip>
             <template #default="{ row }">
               <el-link type="primary" :underline="false" @click="drillToLogs(row.model)">

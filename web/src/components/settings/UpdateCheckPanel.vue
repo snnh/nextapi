@@ -2,7 +2,7 @@
   <div class="update-panel">
     <el-card shadow="never" class="summary-card">
       <template #header>
-        <div class="card-head"><span>更新检查现状</span></div>
+        <div class="card-title"><span>更新检查现状</span></div>
       </template>
       <div v-if="updateItems.length" class="summary-grid">
         <div v-for="it in updateItems" :key="it.key" class="summary-item">
@@ -30,7 +30,7 @@
 
     <el-card v-if="resp" shadow="never" class="result-card">
       <template #header>
-        <div class="card-head"><span>检查结果</span></div>
+        <div class="card-title"><span>检查结果</span></div>
       </template>
 
       <div class="version-row">
@@ -43,7 +43,7 @@
           <span class="version-sub">最新版本</span>
           <span class="version-big mono">{{ resp.latest_version }}</span>
         </div>
-        <el-tag :type="resp.update_available ? 'danger' : 'success'" size="large" effect="dark" class="version-tag">
+        <el-tag :type="resp.update_available ? 'danger' : 'success'" size="small" effect="plain" class="version-tag">
           {{ resp.update_available ? '可更新' : '已是最新' }}
         </el-tag>
       </div>
@@ -133,14 +133,6 @@ async function check() {
 .summary-card,
 .result-card {
   margin-bottom: 16px;
-}
-.card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--nx-font-body);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
 }
 .summary-grid {
   display: grid;

@@ -9,7 +9,7 @@
       class="priority-row"
       :class="{ 'is-unselected': !selectedSet.has(p) }"
     >
-      <el-tag :type="selectedSet.has(p) ? 'primary' : 'info'" size="small">{{ PROTOCOL_LABELS[p] }}</el-tag>
+      <el-tag effect="plain" :type="selectedSet.has(p) ? 'primary' : 'info'" size="small">{{ PROTOCOL_LABELS[p] }}</el-tag>
       <span class="priority-state">{{ selectedSet.has(p) ? '已选' : '未选' }}</span>
       <span class="priority-ops">
         <el-tooltip content="上移优先级" placement="top">

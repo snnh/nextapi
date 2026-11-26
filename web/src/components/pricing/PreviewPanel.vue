@@ -9,7 +9,7 @@
       style="margin-bottom: 14px"
     />
 
-    <el-table :data="resp.lines" border size="small" empty-text="无可计价行">
+    <el-table :data="resp.lines" size="small" empty-text="无可计价行">
       <el-table-column label="计价单位" min-width="180">
         <template #default="{ row }">{{ UNIT_LABEL(row.unit) }}</template>
       </el-table-column>

@@ -170,6 +170,7 @@
         :data="cursorMode ? cursorRows : rows"
         v-loading="loading"
         class="log-table"
+        size="small"
         @row-click="openDetail"
       >
         <template #empty>
@@ -231,7 +232,7 @@
           <template #default="{ row }">
             <div class="status-cell">
               <el-tooltip :disabled="!row.error" :content="row.error || ''" placement="top">
-                <el-tag :type="statusType(row.status)" size="small" :class="{ 'has-error': !!row.error }">
+                <el-tag effect="plain" :type="statusType(row.status)" size="small" :class="{ 'has-error': !!row.error }">
                   {{ row.status }}
                 </el-tag>
               </el-tooltip>
@@ -300,7 +301,7 @@
           @keydown.enter="openDetail(row)"
         >
           <div class="log-card-head">
-            <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
+            <el-tag effect="plain" :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
             <span class="log-card-model">{{ row.model || '-' }}</span>
             <div class="spacer" />
             <span class="log-card-cost">
@@ -340,18 +341,16 @@
           </el-button>
           <span v-else class="hint">没有更多了</span>
         </div>
-        <div v-else class="pagination">
-          <el-pagination
-            v-model:current-page="currentPage"
-            v-model:page-size="pageSize"
-            :total="total"
-            :page-sizes="[20, 50, 100]"
-            :small="isMobile"
-            :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'"
-            @current-change="onPageChange"
-            @size-change="onSizeChange"
-          />
-        </div>
+        <TablePager
+          v-else
+          v-model:page="currentPage"
+          v-model:size="pageSize"
+          :total="total"
+          :page-sizes="[20, 50, 100]"
+          class="pagination"
+          @update:page="onPageChange"
+          @update:size="onSizeChange"
+        />
       </template>
     </el-card>
 
@@ -361,7 +360,7 @@
         <template v-if="detail">
           <!-- 1. 请求结果 -->
           <div class="detail-head">
-            <el-tag :type="statusType(detail.status)" size="small">{{ detail.status }}</el-tag>
+            <el-tag effect="plain" :type="statusType(detail.status)" size="small">{{ detail.status }}</el-tag>
             <span class="mono rid">{{ detail.request_id }}</span>
             <el-button size="small" link type="primary" @click="copyRequestId(detail.request_id)">
               复制
@@ -477,12 +476,12 @@
       <div class="f-item" style="margin-bottom: 6px">
         <span class="f-label">截止时间</span>
         <el-date-picker
+          class="w-260"
           v-model="cleanupBefore"
           type="datetime"
           placeholder="选择分区截止时间"
           :clearable="false"
-          style="width: 260px"
-        />
+          />
       </div>
       <div class="hint" style="margin-bottom: 10px">
         实际截止时间会按分区边界向前对齐；配额计数不受影响。
@@ -506,7 +505,7 @@
             ¥ {{ fmtMoney(cleanupSummary?.cost_cny ?? '0') }} / $ {{ fmtMoney(cleanupSummary?.cost_usd ?? '0') }}
           </el-descriptions-item>
         </el-descriptions>
-        <el-table v-if="cleanupPreview.length" :data="cleanupPreview" size="small" border max-height="260">
+        <el-table v-if="cleanupPreview.length" :data="cleanupPreview" size="small" max-height="260">
           <el-table-column prop="name" label="分区" min-width="180" show-overflow-tooltip />
           <el-table-column label="时间范围" min-width="230">
             <template #default="{ row }">{{ fmtTime(row.from_ts) }} ~ {{ fmtTime(row.to_ts) }}</template>
@@ -556,6 +555,7 @@ import { confirmDanger } from '@/utils/confirm'
 import { copyText } from '@/utils/clipboard'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import TablePager from '@/components/common/TablePager.vue'
 import SkeletonBlock from '@/components/common/SkeletonBlock.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
@@ -1262,16 +1262,6 @@ defineExpose({ refresh: loadLogs })
   color: var(--el-text-color-primary);
 }
 
-.pagination {
-  margin-top: var(--nx-space-3);
-  display: flex;
-  justify-content: center;
-}
-@media (min-width: 801px) {
-  .pagination {
-    justify-content: flex-end;
-  }
-}
 
 .json-cards {
   margin-top: 16px;
@@ -1305,9 +1295,6 @@ defineExpose({ refresh: loadLogs })
   font-size: var(--nx-font-small);
   font-weight: 600;
   color: var(--el-text-color-primary);
-}
-.tag-gap {
-  margin-left: 6px;
 }
 .help-icon {
   flex-shrink: 0;

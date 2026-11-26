@@ -253,10 +253,10 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     help: '管理员密码 argon2 哈希的内存成本（默认 19456 KiB = 19 MiB）。调低可减小登录/改密时的内存峰值；只作用于新生成的哈希，调低后需改一次密码才见效（登录校验按库中哈希自带参数分配）。范围 8192–1048576。',
   },
   'gateway.auto_disable_upstreams': {
-    label: '渠道自动禁用',
+    label: '上游自动禁用',
     type: 'boolean',
     default: false,
-    help: '默认关闭：不自动禁用任何渠道，失败只记日志并照常重试/故障转移。打开后，连续失败达阈值的渠道自动禁用 + 冷却 + 半开探活（熔断），单个渠道可在渠道表单里用「自动禁用」开关排除。手动禁用不受本开关影响。',
+    help: '默认关闭：不自动禁用任何上游，失败只记日志并照常重试/故障转移。打开后，连续失败达阈值的上游自动禁用 + 冷却 + 半开探活（熔断），单个上游可在上游表单里用「自动禁用」开关排除。手动禁用不受本开关影响。',
   },
   'gateway.quota_exceed_action': {
     label: '超配额动作',
@@ -437,12 +437,12 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     help: '代理连通性测试固定探测地址（白名单，防 SSRF）。',
   },
 
-  // —— model_sync 渠道模型同步 ——
+  // —— model_sync 上游模型同步 ——
   'model_sync.enabled': {
     label: '启用模型同步',
     type: 'boolean',
     default: true,
-    help: 'model_sync=auto 的渠道定时拉取上游模型列表，并对账托管路由（只增删 managed_by=auto 的路由，不覆盖手动路由）。',
+    help: 'model_sync=auto 的上游定时拉取上游模型列表，并对账托管路由（只增删 managed_by=auto 的路由，不覆盖手动路由）。',
   },
   'model_sync.interval_minutes': {
     label: '同步间隔',
@@ -511,7 +511,7 @@ export const SETTING_GROUPS: { prefix: string; title: string }[] = [
   { prefix: 'media_download', title: '媒体下载' },
   { prefix: 'media_poller', title: '媒体轮询' },
   { prefix: 'proxy', title: '代理（全局）' },
-  { prefix: 'model_sync', title: '渠道模型同步' },
+  { prefix: 'model_sync', title: '上游模型同步' },
   { prefix: 'update_check', title: '更新检查' },
   { prefix: 'server', title: '服务（启动类）' },
   { prefix: 'database', title: '数据库（启动类）' },

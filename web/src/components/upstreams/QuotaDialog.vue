@@ -8,7 +8,7 @@
     @open="load(false)"
   >
     <div v-if="!isSupported" class="hint">
-      该渠道未配置余额/额度查询。可在渠道编辑中启用「余额/额度」，或选择对应适配器。
+      该上游未配置余额/额度查询。可在上游编辑中启用「余额/额度」，或选择对应适配器。
     </div>
     <template v-else>
       <div class="toolbar">
@@ -219,13 +219,13 @@ const probeHint = computed(() => {
   switch (adapter.value) {
     case 'openrouter':
     case 'zenmux':
-      return '这两个渠道需要 Management Key；普通推理 Key 会返回 403。'
+      return '这两个上游需要 Management Key；普通推理 Key 会返回 403。'
     case 'zhipu':
-      return '智谱额度接口为实验性契约（GLM Coding Plan）；失败只提示，不影响渠道。'
+      return '智谱额度接口为实验性契约（GLM Coding Plan）；失败只提示，不影响上游。'
     case 'openai_billing':
       return '按 OpenAI billing 兼容语义读取：hard_limit_usd 为美元，total_usage 按分。'
     case 'custom':
-      return '读取自定义余额端点；相对路径走渠道同源，绝对地址仅允许公网 HTTPS。'
+      return '读取自定义余额端点；相对路径走上游同源，绝对地址仅允许公网 HTTPS。'
     default:
       return '「立即探测」会强制实时查询；不点则读取最近一次快照。'
   }

@@ -2,7 +2,7 @@
   <div class="section-body" v-loading="pageLoading">
     <!-- 页面说明与页级操作：标题由顶栏统一负责 -->
     <div class="page-head">
-      <p class="hint">管理实际提供模型的上游。接入后到「模型路由」把上游绑定给对外模型。</p>
+      <p class="page-desc">管理实际提供模型的上游。接入后到「模型路由」把上游绑定给对外模型。</p>
       <div class="page-head-actions">
         <el-dropdown trigger="click" @command="onAddCommand">
           <el-button type="primary" :icon="Plus">
@@ -49,7 +49,7 @@
       </template>
 
       <ErrorState v-if="listError" :message="`上游列表加载失败：${listError}`" @retry="loadUpstreams" />
-      <el-table v-else :data="filteredUpstreams">
+      <el-table v-else :data="filteredUpstreams" size="small">
         <template #empty>
           <EmptyState
             v-if="hasFilter"
@@ -123,7 +123,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column v-if="!isNarrow" label="余额" width="160">
+        <el-table-column v-if="!isNarrow" label="余额" width="160" align="right">
           <template #default="{ row }">
             <span
               v-if="quotaSummary(row)"

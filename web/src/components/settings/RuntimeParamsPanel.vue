@@ -1,13 +1,14 @@
 <template>
   <div class="runtime-panel">
-    <!-- 顶部工具栏：搜索 + 来源/改动筛选 + 展开收起；保存统一在吸底栏 -->
+    <!-- 工具栏：搜索 + 来源 + 快捷筛选（已修改 / 需重启 / 敏感）；保存统一在吸底栏 -->
     <div class="toolbar settings-toolbar">
       <el-input
+        ref="searchInputRef"
         v-model="keyword"
         class="search-input"
         clearable
         :prefix-icon="Search"
-        placeholder="搜索名称、键名或说明"
+        placeholder="搜索名称、键名或说明（Ctrl+F）"
       />
       <el-select v-model="sourceFilter" class="source-filter" aria-label="来源筛选">
         <el-option label="全部来源" value="all" />
@@ -15,17 +16,22 @@
         <el-option label="界面" value="ui" />
         <el-option label="环境变量" value="env" />
       </el-select>
-      <el-checkbox v-model="onlyDirty" class="dirty-filter" :disabled="!dirtyCount">
-        仅看已修改
-      </el-checkbox>
-      <el-button @click="toggleAll">{{ allOpen ? '全部收起' : '全部展开' }}</el-button>
-      <div class="spacer" />
-      <div class="source-stats" aria-label="设置项来源统计">
-        <span class="stat-chip"><b>{{ settings.length }}</b> 项</span>
-        <span class="stat-chip"><i class="dot file" />配置文件 {{ sourceStats.file }}</span>
-        <span class="stat-chip"><i class="dot ui" />界面 {{ sourceStats.ui }}</span>
-        <span class="stat-chip"><i class="dot env" />环境 {{ sourceStats.env }}</span>
+      <div class="view-chips" role="group" aria-label="快捷筛选">
+        <button
+          v-for="f in viewFilters"
+          :key="f.value"
+          type="button"
+          class="view-chip"
+          :class="{ 'is-active': viewFilter === f.value }"
+          :disabled="f.value !== 'all' && f.count === 0"
+          :aria-pressed="viewFilter === f.value"
+          @click="viewFilter = f.value"
+        >
+          {{ f.label }}<span v-if="f.value !== 'all'" class="chip-count">{{ f.count }}</span>
+        </button>
       </div>
+      <div class="spacer" />
+      <el-button @click="toggleAll">{{ allOpen ? '全部收起' : '全部展开' }}</el-button>
     </div>
 
     <el-empty v-if="!groups.length" description="暂无运行参数" />
@@ -47,6 +53,9 @@
         <el-collapse-item v-for="g in displayGroups" :key="g.prefix" :name="g.prefix">
           <template #title>
             <div class="group-head">
+              <span class="group-icon" aria-hidden="true">
+                <el-icon><component :is="groupIcon(g.prefix)" /></el-icon>
+              </span>
               <span class="group-title">{{ g.title }}</span>
               <span v-if="g.desc" class="group-desc">{{ g.desc }}</span>
               <span class="group-count">{{ g.items.length }} 项</span>
@@ -54,7 +63,7 @@
                 v-if="dirtyCountOfGroup(g)"
                 size="small"
                 type="warning"
-                effect="light"
+                effect="plain"
                 class="group-dirty"
               >
                 未保存 {{ dirtyCountOfGroup(g) }}
@@ -86,7 +95,7 @@
             <div class="setting-main">
               <div class="setting-title">
                 <span class="label-text">{{ labelOf(it) }}</span>
-                <el-tag v-if="dirtyKeys.has(it.key)" size="small" type="warning" effect="light">未保存</el-tag>
+                <el-tag v-if="dirtyKeys.has(it.key)" size="small" type="warning" effect="plain">未保存</el-tag>
                 <el-tag v-if="needsRestart(it)" size="small" type="danger" effect="plain">下次启动</el-tag>
                 <el-tag v-if="it.secret" size="small" type="warning" effect="plain">敏感</el-tag>
                 <el-tooltip v-if="helpOf(it)" placement="top">
@@ -149,7 +158,7 @@
                   @update:model-value="(v: string) => setSecret(it, v)"
                 />
                 <div v-else-if="kindOf(it) === 'tags'" class="tags-editor">
-                  <el-tag
+                  <el-tag effect="plain"
                     v-for="(t, i) in arrVal(it.key)"
                     :key="i"
                     closable
@@ -202,11 +211,17 @@
     </template>
 
     <!-- 吸底保存栏 -->
-    <div v-if="groups.length" class="savebar">
-      <span class="dirty-count" :class="{ 'is-dirty': dirtyCount > 0 }" aria-live="polite">
-        <template v-if="dirtyCount">变更 {{ dirtyCount }} 项</template>
-        <template v-else>无变更</template>
-      </span>
+    <div v-if="groups.length" class="savebar" aria-live="polite">
+      <button
+        v-if="dirtyCount"
+        type="button"
+        class="dirty-count is-dirty is-jumpable"
+        title="定位到第一处未保存项"
+        @click="jumpToFirstDirty"
+      >
+        变更 {{ dirtyCount }} 项
+      </button>
+      <span v-else class="dirty-count">无变更</span>
       <span v-if="dirtyCount" class="save-shortcut"><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>S</kbd> 保存</span>
       <div class="spacer" />
       <el-button :disabled="!dirtyCount" @click="resetAll">重置改动</el-button>
@@ -218,7 +233,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Lock, QuestionFilled, Search } from '@element-plus/icons-vue'
+import {
+  Coin,
+  Connection,
+  Download,
+  Lock,
+  Money,
+  Monitor,
+  Operation,
+  QuestionFilled,
+  Refresh,
+  Search,
+  Setting,
+  Upload,
+} from '@element-plus/icons-vue'
 import { proxyApi, settingsApi } from '@/api'
 import { errMsg } from '@/api/http'
 import type { ProxyOut, SettingItem } from '@/api/types'
@@ -232,7 +260,9 @@ const saving = ref(false)
 const keyword = ref('')
 const sourceFilter = ref<'all' | SettingItem['source']>('all')
 const flashKey = ref<string | null>(null)
-const onlyDirty = ref(false)
+type ViewFilter = 'all' | 'dirty' | 'restart' | 'secret'
+const viewFilter = ref<ViewFilter>('all')
+const searchInputRef = ref<{ focus: () => void } | null>(null)
 const proxies = ref<ProxyOut[]>([])
 const proxyLoadFailed = ref(false)
 
@@ -327,6 +357,22 @@ const groups = computed<GroupView[]>(() => {
 })
 
 
+/** 快捷筛选选项（含实时计数；为 0 时禁用，避免点进去看空列表） */
+const viewFilters = computed(() => [
+  { value: 'all' as ViewFilter, label: '全部', count: props.settings.length },
+  { value: 'dirty' as ViewFilter, label: '已修改', count: dirtyCount.value },
+  { value: 'restart' as ViewFilter, label: '需重启', count: props.settings.filter((it) => needsRestart(it)).length },
+  { value: 'secret' as ViewFilter, label: '敏感', count: props.settings.filter((it) => it.secret).length },
+])
+
+/** 吸底栏「变更 N 项」→ 展开并滚到第一处未保存项 */
+function jumpToFirstDirty() {
+  const key = [...dirtyKeys.value][0]
+  if (!key) return
+  if (viewFilter.value === 'restart' || viewFilter.value === 'secret') viewFilter.value = 'all'
+  focusKey(key)
+}
+
 /** 当前有未保存改动的键集合（行标记 / 分组计数 / 仅看改动共用）。 */
 const dirtyKeys = computed(() => {
   return new Set(props.settings.filter((it) => isItemDirty(it)).map((it) => it.key))
@@ -335,19 +381,24 @@ const dirtyKeys = computed(() => {
 // —— 搜索与筛选 ——
 // 关键词命中名称 / 键名 / 说明；「仅看已修改」可与来源筛选叠加。
 const searching = computed(
-  () => keyword.value.trim() !== '' || sourceFilter.value !== 'all' || onlyDirty.value,
+  () =>
+    keyword.value.trim() !== '' ||
+    sourceFilter.value !== 'all' ||
+    viewFilter.value !== 'all',
 )
 const filteredItems = computed<SettingItem[]>(() => {
   const q = keyword.value.trim().toLowerCase()
   return sourceSettings.value.filter((it) => {
-    if (onlyDirty.value && !dirtyKeys.value.has(it.key)) return false
+    if (viewFilter.value === 'dirty' && !dirtyKeys.value.has(it.key)) return false
+    if (viewFilter.value === 'restart' && !needsRestart(it)) return false
+    if (viewFilter.value === 'secret' && !it.secret) return false
     if (!q) return true
     const hay = [labelOf(it), it.key, helpOf(it)]
     return hay.some((s) => s.toLowerCase().includes(q))
   })
 })
 const emptySearchDesc = computed(() =>
-  onlyDirty.value && !dirtyCount.value ? '没有未保存的修改' : '未找到匹配的参数',
+  viewFilter.value === 'dirty' && !dirtyCount.value ? '没有未保存的修改' : '未找到匹配的参数',
 )
 
 /** 搜索模式下的伪分组（占位前缀，不会与真实分组冲突） */
@@ -390,16 +441,6 @@ function toggleAll() {
 }
 
 // —— 来源统计 ——
-const sourceStats = computed(() => {
-  const s = { file: 0, ui: 0, env: 0 }
-  for (const it of props.settings) {
-    if (it.source === 'file') s.file++
-    else if (it.source === 'ui') s.ui++
-    else if (it.source === 'env') s.env++
-  }
-  return s
-})
-
 // —— 展示辅助 ——
 function fieldOf(it: SettingItem): SettingField | null {
   return SETTING_FIELDS[it.key] ?? null
@@ -518,8 +559,8 @@ async function setBool(it: SettingItem, v: string | number | boolean) {
   if (it.key === 'gateway.auto_disable_upstreams' && !next) {
     try {
       await ElMessageBox.confirm(
-        '关闭后，系统会立即解除全部历史「自动禁用」渠道并让它们回到候选池；失败请求仍会照常记录日志与重试。',
-        '关闭渠道自动禁用？',
+        '关闭后，系统会立即解除全部历史「自动禁用」上游并让它们回到候选池；失败请求仍会照常记录日志与重试。',
+        '关闭上游自动禁用？',
         {
           type: 'warning',
           confirmButtonText: '关闭并解除',
@@ -612,13 +653,42 @@ function isItemDirty(it: SettingItem): boolean {
 const dirtyCount = computed(() => dirtyKeys.value.size)
 
 /** 分组内未保存数量（折叠状态下也能看到改动分布）。 */
+/** 分组图标：按配置前缀/场景 id 映射，纯装饰（不参与筛选） */
+function groupIcon(prefix: string) {
+  if (prefix.startsWith('scn-')) return Operation
+  switch (prefix) {
+    case 'gateway':
+      return Setting
+    case 'server':
+      return Monitor
+    case 'database':
+      return Coin
+    case 'proxy':
+      return Connection
+    case 'update_check':
+      return Refresh
+    case 'media_download':
+      return Download
+    case 'media_poller':
+      return Refresh
+    case 'fx_auto_fetch':
+      return Money
+    case 'price_import':
+      return Upload
+    case 'model_sync':
+      return Refresh
+    default:
+      return Operation
+  }
+}
+
 function dirtyCountOfGroup(g: GroupView): number {
   return g.items.reduce((n, it) => n + (dirtyKeys.value.has(it.key) ? 1 : 0), 0)
 }
 
 watch(dirtyCount, (n) => {
   emit('dirty-change', n)
-  if (n === 0) onlyDirty.value = false
+  if (n === 0 && viewFilter.value === 'dirty') viewFilter.value = 'all'
 })
 
 /** 暴露给父组件的脏状态（Settings.vue 切换 Tab / 离开页面前确认用） */
@@ -739,7 +809,7 @@ async function save() {
     ElMessage.success(
       effects.length ? `已保存：${shown}（${effects.join('，')}）` : `已保存：${shown}（立即生效）`,
     )
-    onlyDirty.value = false
+    viewFilter.value = 'all'
     emit('saved')
   } catch (e) {
     ElMessage.error(errMsg(e))
@@ -759,6 +829,12 @@ function onKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && dirtyCount.value) {
     e.preventDefault()
     void save()
+    return
+  }
+  // Ctrl/⌘+F：直接聚焦参数搜索框（浏览器自带查找对长列表无效）
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    searchInputRef.value?.focus()
   }
 }
 async function loadProxies() {
@@ -796,38 +872,6 @@ onBeforeUnmount(() => {
   width: 132px;
   flex-shrink: 0;
 }
-.dirty-filter {
-  margin-left: 2px;
-  white-space: nowrap;
-}
-.source-stats {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  font-size: var(--nx-font-caption);
-  color: var(--nx-text-3);
-}
-.stat-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border: 1px solid var(--nx-border-subtle);
-  border-radius: var(--nx-radius-round);
-  background: var(--nx-subtle);
-  line-height: 1.6;
-}
-.stat-chip b {
-  color: var(--nx-text);
-  font-weight: 600;
-}
-.dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--nx-text-placeholder);
-}
 .dot.file {
   background: var(--nx-text-3);
 }
@@ -841,18 +885,39 @@ onBeforeUnmount(() => {
 /* ---------------------------------------------------------------------------
    分组：标题、说明、数量、未保存标记
    --------------------------------------------------------------------------- */
+/* 分组卡片：每个分组一张圆角卡，替代原来的通栏折叠面板 */
 .group-collapse {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   border: none;
 }
+.group-collapse :deep(.el-collapse-item) {
+  overflow: hidden;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--nx-radius-lg);
+  background: var(--nx-surface);
+}
 .group-collapse :deep(.el-collapse-item__header) {
-  height: 48px;
-  padding: 0 4px;
+  height: auto;
+  min-height: 60px;
+  padding: 10px 16px;
+  border-bottom: none;
+  background: transparent;
   font-size: var(--nx-font-body);
   font-weight: 600;
   color: var(--el-text-color-primary);
+  line-height: 1.4;
+}
+.group-collapse :deep(.el-collapse-item__header:hover) {
+  background: var(--nx-subtle);
+}
+.group-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+  background: transparent;
 }
 .group-collapse :deep(.el-collapse-item__content) {
-  padding: 0 0 6px;
+  padding: 0 16px 10px;
 }
 .group-head {
   display: flex;
@@ -860,6 +925,18 @@ onBeforeUnmount(() => {
   gap: 8px;
   width: 100%;
   min-width: 0;
+}
+.group-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--nx-accent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 16px;
 }
 .group-title {
   flex-shrink: 0;
@@ -908,6 +985,7 @@ onBeforeUnmount(() => {
 }
 .setting-row:hover {
   background: var(--nx-subtle);
+  border-radius: var(--nx-radius-md);
 }
 .setting-row.row-flash {
   background: var(--nx-warning-soft);
@@ -1002,7 +1080,7 @@ onBeforeUnmount(() => {
   font-size: var(--nx-font-small);
   line-height: 1.55;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1080,6 +1158,18 @@ onBeforeUnmount(() => {
   color: var(--nx-warning);
   font-weight: 600;
 }
+/* 可点击的「变更 N 项」：跳到第一处未保存项 */
+.dirty-count.is-jumpable {
+  padding: 2px 8px;
+  border: 1px solid var(--nx-warning-border);
+  border-radius: var(--nx-radius-sm);
+  background: var(--nx-warning-soft);
+  font-size: var(--nx-font-small);
+  cursor: pointer;
+}
+.dirty-count.is-jumpable:hover {
+  border-color: var(--nx-warning);
+}
 .save-shortcut {
   color: var(--nx-text-3);
   font-size: var(--nx-font-caption);
@@ -1098,7 +1188,7 @@ onBeforeUnmount(() => {
 /* ---------------------------------------------------------------------------
    响应式：≤1400 单列；≤1000 收紧分组说明；≤800 工具栏与控件全宽
    --------------------------------------------------------------------------- */
-@media (max-width: 1400px) {
+@media (max-width: 1000px) {
   .setting-row {
     grid-template-columns: 1fr;
     gap: 9px;
@@ -1120,18 +1210,9 @@ onBeforeUnmount(() => {
   .settings-toolbar .source-filter {
     width: 100%;
   }
-  .dirty-filter {
-    margin-left: 0;
-  }
-  .source-stats {
-    width: 100%;
-  }
-  .source-stats .stat-chip:first-child {
-    display: none;
-  }
+  /* 手机：说明保留 2 行，兼顾可读与高度 */
   .help-line {
-    display: block;
-    -webkit-line-clamp: unset;
+    -webkit-line-clamp: 2;
   }
   .number-input,
   .select-input,
@@ -1142,6 +1223,13 @@ onBeforeUnmount(() => {
   }
   .savebar {
     align-items: stretch;
+    /* 贴底时避开 iOS 安全区 */
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .view-chips {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
   .savebar .spacer {
     display: none;

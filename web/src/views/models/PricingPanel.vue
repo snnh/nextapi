@@ -4,8 +4,8 @@
       <p class="page-desc">维护每个上游模型的输入、输出、缓存读写单价（按每百万 tokens）；支持分段、分时与图片/视频维度规则。</p>
     </div>
 
-    <div class="page-card tabs-card">
-    <el-tabs v-model="activeTab" @tab-change="onTabChange">
+    <!-- 页签本身不做卡片容器：内容区各卡自带边框，避免卡片套卡片 -->
+    <el-tabs v-model="activeTab" class="page-tabs" @tab-change="onTabChange">
       <!-- ===== Tab1 价格规则 ===== -->
       <el-tab-pane label="价格规则" name="rules">
         <div class="toolbar">
@@ -37,7 +37,7 @@
         <el-card shadow="never" class="section-card">
           <ErrorState v-if="rulesError" title="价格规则加载失败" :message="rulesError" @retry="loadRules" />
           <template v-else>
-          <el-table :data="pageGroups" :empty-text="rulesEmptyText" v-loading="rulesLoading" row-key="key">
+          <el-table :data="pageGroups" :empty-text="rulesEmptyText" v-loading="rulesLoading" row-key="key" size="small">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div class="rule-expand">
@@ -241,7 +241,7 @@
           style="margin-bottom: 14px"
         />
         <el-card shadow="never" class="section-card">
-          <el-table :data="unpricedItems" empty-text="暂无未定价模型" v-loading="unpricedLoading">
+          <el-table :data="unpricedItems" empty-text="暂无未定价模型" v-loading="unpricedLoading" size="small">
             <el-table-column label="上游" min-width="180">
               <template #default="{ row }">{{ row.upstream_name }}</template>
             </el-table-column>
@@ -272,56 +272,56 @@
             @keyup.enter="onPreviewEnter"
           >
             <el-form-item label="上游" prop="upstream_id">
-              <el-select v-model="previewForm.upstream_id" filterable placeholder="请选择上游" style="width: 300px">
+              <el-select class="w-300" v-model="previewForm.upstream_id" filterable placeholder="请选择上游">
                 <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
               </el-select>
             </el-form-item>
             <el-form-item label="模型 ID" prop="model_id">
-              <el-input v-model="previewForm.model_id" placeholder="如 gpt-4o" clearable style="width: 300px" />
+              <el-input class="w-300" v-model="previewForm.model_id" placeholder="如 gpt-4o" clearable />
             </el-form-item>
             <el-form-item label="计费时间 (at)">
               <el-date-picker
+                class="w-300"
                 v-model="previewForm.at"
                 type="datetime"
                 value-format="YYYY-MM-DD HH:mm:ss"
                 placeholder="（可选）默认当前时间"
                 clearable
-                style="width: 300px"
-              />
+                />
               <span class="hint" style="margin-left: 10px">留空 = 现在</span>
             </el-form-item>
 
             <el-divider content-position="left">用量（数字，可空）</el-divider>
             <el-form-item label="输入 tokens">
-              <el-input-number v-model="previewForm.prompt_tokens" :min="0" :controls="false" style="width: 200px" />
+              <el-input-number class="w-200" v-model="previewForm.prompt_tokens" :min="0" :controls="false" />
             </el-form-item>
             <el-form-item label="输出 tokens">
-              <el-input-number v-model="previewForm.completion_tokens" :min="0" :controls="false" style="width: 200px" />
+              <el-input-number class="w-200" v-model="previewForm.completion_tokens" :min="0" :controls="false" />
             </el-form-item>
             <el-form-item label="缓存写 tokens">
-              <el-input-number v-model="previewForm.cache_write_tokens" :min="0" :controls="false" style="width: 200px" />
+              <el-input-number class="w-200" v-model="previewForm.cache_write_tokens" :min="0" :controls="false" />
             </el-form-item>
             <el-form-item label="缓存读 tokens">
-              <el-input-number v-model="previewForm.cache_read_tokens" :min="0" :controls="false" style="width: 200px" />
+              <el-input-number class="w-200" v-model="previewForm.cache_read_tokens" :min="0" :controls="false" />
             </el-form-item>
             <el-form-item label="图片数量">
-              <el-input-number v-model="previewForm.images" :min="0" :controls="false" style="width: 200px" />
+              <el-input-number class="w-200" v-model="previewForm.images" :min="0" :controls="false" />
             </el-form-item>
 
             <el-collapse v-model="mediaOpen" class="preview-advanced">
               <el-collapse-item name="media" title="媒体参数（图片 / 视频，可选）">
                 <el-form-item label="图片尺寸">
-                  <el-input v-model="previewForm.image_size" placeholder="如 1024x1024" clearable style="width: 300px" />
+                  <el-input class="w-300" v-model="previewForm.image_size" placeholder="如 1024x1024" clearable />
                 </el-form-item>
                 <el-form-item label="视频秒数">
-                  <el-input-number v-model="previewForm.video_seconds" :min="0" :max="86400" :precision="3"
-                    :controls="false" placeholder="如 10（支持小数）" style="width: 300px" />
+                  <el-input-number class="w-300" v-model="previewForm.video_seconds" :min="0" :max="86400" :precision="3"
+                    :controls="false" placeholder="如 10（支持小数）" />
                 </el-form-item>
                 <el-form-item label="视频分辨率">
-                  <el-input v-model="previewForm.video_resolution" placeholder="如 1080p" clearable style="width: 300px" />
+                  <el-input class="w-300" v-model="previewForm.video_resolution" placeholder="如 1080p" clearable />
                 </el-form-item>
                 <el-form-item label="视频任务类型">
-                  <el-input v-model="previewForm.video_task_type" placeholder="如 text2video" clearable style="width: 300px" />
+                  <el-input class="w-300" v-model="previewForm.video_task_type" placeholder="如 text2video" clearable />
                 </el-form-item>
               </el-collapse-item>
             </el-collapse>
@@ -335,7 +335,7 @@
 
         <el-card shadow="never" class="section-card">
           <template #header>
-            <div class="card-head"><span>试算结果</span></div>
+            <div class="card-title"><span>试算结果</span></div>
           </template>
           <el-alert
             v-if="previewStale"
@@ -355,7 +355,7 @@
       <el-tab-pane label="导入 / 导出" name="import" lazy>
         <el-card shadow="never" class="section-card">
           <template #header>
-            <div class="card-head"><span>导出价格</span></div>
+            <div class="card-title"><span>导出价格</span></div>
           </template>
           <div class="hint" style="margin-bottom: 12px">
             导出的文件包含全部价格规则（XML 为缩进换行的易读格式），字段结构参考：<span class="mono">input_per_m / output_per_m / cache_* / image / video</span>，可用于备份或迁移到其它实例。
@@ -380,7 +380,6 @@
         <FxPanel />
       </el-tab-pane>
     </el-tabs>
-    </div>
 
     <!-- 规则新建/编辑弹窗 -->
     <RuleFormDialog ref="formDialogRef" :upstreams="upstreams" @saved="onRuleSaved" />
@@ -876,14 +875,6 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--nx-font-body);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
 .currency {
   margin-left: 2px;
 }

@@ -35,7 +35,7 @@
         >
           <div class="preset-head">
             <span class="preset-name">{{ p.display_name }}</span>
-            <el-tag size="small" type="info">{{ p.kind }}</el-tag>
+            <el-tag effect="plain" size="small" type="info">{{ p.kind }}</el-tag>
             <el-tag v-if="p.auth_kind === 'oauth'" size="small" type="warning" effect="plain">
               OAuth 授权
             </el-tag>
@@ -74,7 +74,7 @@
           <div class="hint">
             凭证为 devin CLI 的 session token（<span class="mono">devin-session-token$…</span>）：
             点击「开始授权」在浏览器登录 Devin 账号，把页面给出的授权码粘贴回来兑换，
-            token 将随渠道一起加密保存。未授权也可先建渠道，之后到上游列表补授权。
+            token 将随上游一起加密保存。未授权也可先建上游，之后到上游列表补授权。
           </div>
           <div class="oauth-state">
             <el-button size="small" :loading="devinAuthLoading" @click="devinStartAuth">
@@ -131,7 +131,7 @@
           />
         </el-form-item>
         <el-form-item label="地域" required>
-          <el-select v-model="region" style="width: 100%">
+          <el-select class="w-full" v-model="region">
             <el-option
               v-for="r in workspaceDomain?.regions ?? []"
               :key="r.id"
@@ -181,14 +181,14 @@
         <div class="hint">
           {{
             isOauth && !apiKey.trim()
-              ? '上游已创建但尚未绑定凭证：到「上游」列表点击该渠道的「Devin 授权」完成授权后，再点「测试」与「拉取模型」。'
+              ? '上游已创建但尚未绑定凭证：到「上游」列表点击该上游的「Devin 授权」完成授权后，再点「测试」与「拉取模型」。'
               : '上游已创建，可稍后到列表页修改凭证或重试连通测试。'
           }}
         </div>
       </el-alert>
 
       <div v-if="isOauth && !apiKey.trim()" class="hint">
-        未授权渠道不会参与路由：请先完成 Devin 授权，再回到「上游」页拉取模型并建立路由。
+        未授权上游不会参与路由：请先完成 Devin 授权，再回到「上游」页拉取模型并建立路由。
       </div>
 
       <div v-if="!isOauth || apiKey.trim()" class="group-title">模型发现</div>
@@ -212,7 +212,7 @@
         <div class="sync-actions">
           <template v-if="modelSync === 'auto'">
             <div class="hint">
-              该渠道为「自动同步」：托管路由会跟随上游模型列表增删。
+              该上游为「自动同步」：托管路由会跟随上游模型列表增删。
             </div>
             <el-button
               type="primary"
@@ -225,7 +225,7 @@
           </template>
           <template v-else>
             <div class="hint">
-              该渠道为「手动同步」：勾选创建路由请到「上游详情 → 拉取模型」，或在此一键创建全部新模型路由。
+              该上游为「手动同步」：勾选创建路由请到「上游详情 → 拉取模型」，或在此一键创建全部新模型路由。
             </div>
             <el-button
               type="primary"

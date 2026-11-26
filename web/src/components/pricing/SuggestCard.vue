@@ -30,7 +30,7 @@
         <div v-for="rule in g.rules" :key="rule.id" class="suggest-rule">
           <div class="suggest-rule-info">
             <span class="suggest-unit">{{ UNIT_LABEL(rule.unit) }}</span>
-            <el-tag size="small" type="info">{{ rule.currency }}</el-tag>
+            <el-tag effect="plain" size="small" type="info">{{ rule.currency }}</el-tag>
             <span class="suggest-price">单价 {{ fmtMoney(rule.base_price) }}</span>
             <span v-if="rule.segments && rule.segments.length" class="suggest-segs">共 {{ rule.segments.length }} 段</span>
             <span v-else class="suggest-no-seg">无分段</span>

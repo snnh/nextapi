@@ -17,7 +17,7 @@
 
     <el-card shadow="never" class="fx-manual">
       <template #header>
-        <div class="card-head">
+        <div class="card-title">
           <span>手动设定汇率</span>
           <span class="hint">输入框留空 = 该方向不修改；均需 &gt; 0</span>
         </div>
@@ -25,24 +25,24 @@
       <div class="manual-row">
         <span class="manual-pair">USD → CNY</span>
         <el-input-number
+          class="w-220"
           v-model="usdCny"
           :min="0"
           :precision="6"
           :controls="false"
           placeholder="US Dollar → RMB"
-          style="width: 220px"
-        />
+          />
       </div>
       <div class="manual-row">
         <span class="manual-pair">CNY → USD</span>
         <el-input-number
+          class="w-220"
           v-model="cnyUsd"
           :min="0"
           :precision="6"
           :controls="false"
           placeholder="RMB → US Dollar"
-          style="width: 220px"
-        />
+          />
       </div>
       <div class="manual-actions">
         <el-button type="primary" :loading="saving" @click="saveManual">保存</el-button>
@@ -52,9 +52,9 @@
 
     <el-card shadow="never" class="section-card">
       <template #header>
-        <div class="card-head"><span>汇率列表</span></div>
+        <div class="card-title"><span>汇率列表</span></div>
       </template>
-      <el-table :data="fxRows" empty-text="暂无汇率数据">
+      <el-table :data="fxRows" empty-text="暂无汇率数据" size="small">
         <el-table-column label="币对" min-width="140">
           <template #default="{ row }">{{ row.currency_from }} → {{ row.currency_to }}</template>
         </el-table-column>
@@ -75,7 +75,7 @@
         </el-table-column>
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.stale" type="danger" size="small">已过期</el-tag>
+            <el-tag effect="plain" v-if="row.stale" type="danger" size="small">已过期</el-tag>
             <el-tag v-else type="success" size="small" effect="plain">有效</el-tag>
           </template>
         </el-table-column>
@@ -163,14 +163,6 @@ async function refreshAuto() {
 </script>
 
 <style scoped>
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: var(--nx-font-body);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
 .manual-row {
   display: flex;
   align-items: center;

@@ -11,7 +11,7 @@
     <el-form label-width="110px" @submit.prevent>
       <div class="head-grid">
         <el-form-item label="上游" required>
-          <el-select v-model="upstreamId" filterable placeholder="请选择上游" style="width: 100%" @change="onPairChange">
+          <el-select class="w-full" v-model="upstreamId" filterable placeholder="请选择上游" @change="onPairChange">
             <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
           </el-select>
         </el-form-item>
@@ -28,7 +28,7 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="上下文基准">
-          <el-select v-model="contextBasis" style="width: 100%">
+          <el-select class="w-full" v-model="contextBasis">
             <el-option value="prompt_tokens" label="按 prompt_tokens（仅输入）" />
             <el-option value="total_tokens" label="按 total_tokens（输入+输出）" />
           </el-select>
@@ -41,7 +41,7 @@
         <el-dropdown v-for="g in suggestGroups" :key="g.upstream_id" trigger="click" @command="(cmd: string) => adoptGroup(g, cmd)">
           <el-button size="small" plain>
             {{ g.upstream_name }}
-            <el-tag v-if="g.upstream_id !== upstreamId" size="small" type="warning" effect="plain" style="margin-left: 4px">其他上游</el-tag>
+            <el-tag v-if="g.upstream_id !== upstreamId" size="small" type="warning" effect="plain" class="tag-gap">其他上游</el-tag>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -73,7 +73,7 @@
           <div v-if="u.enabled" class="unit-body">
             <div class="unit-row">
               <span class="unit-label">单价</span>
-              <el-input-number v-model="u.base_price" :min="0" :precision="10" :controls="false" style="width: 200px" placeholder="必填" />
+              <el-input-number class="w-200" v-model="u.base_price" :min="0" :precision="10" :controls="false" placeholder="必填" />
               <span class="hint">每 1M token（{{ currency }}）</span>
             </div>
             <el-collapse class="unit-segs">

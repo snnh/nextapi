@@ -22,7 +22,7 @@
     <el-card shadow="never" class="section-card">
       <ErrorState v-if="listError" title="别名列表加载失败" :message="listError" @retry="load" />
       <template v-else>
-      <el-table :data="pagedItems" :row-key="(row: ModelAliasRow) => row.id">
+      <el-table :data="pagedItems" :row-key="(row: ModelAliasRow) => row.id" size="small">
         <template #empty>
           <EmptyState title="暂无别名" :description="emptyText">
             <template #actions>
@@ -121,14 +121,14 @@
         </el-form-item>
         <el-form-item label="实际模型" prop="model">
           <el-autocomplete
+            class="w-full"
             v-model="dlg.form.model"
             :fetch-suggestions="suggestModels"
             placeholder="选择已有模型，或直接输入真实模型 ID"
             clearable
-            style="width: 100%"
             @focus="loadModelOptions"
-          />
-          <div class="hint" style="width: 100%">建议来自现有路由与别名；未来模型仍可直接手动输入。</div>
+            />
+          <div class="hint w-full">建议来自现有路由与别名；未来模型仍可直接手动输入。</div>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="dlg.form.enabled" />

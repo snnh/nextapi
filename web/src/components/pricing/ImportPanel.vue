@@ -4,7 +4,7 @@
       <el-col :xs="24" :md="12">
         <el-card shadow="never">
           <template #header>
-            <div class="card-head"><span>本地文件导入</span></div>
+            <div class="card-title"><span>本地文件导入</span></div>
           </template>
           <div class="hint" style="margin-bottom: 12px">
             支持 nextapi 导出的 XML / JSON 价格文件。「预览」只校验并展示写入条数，不落库；确认无误后再点「导入」正式写入。
@@ -49,7 +49,7 @@
       <el-col :xs="24" :md="12">
         <el-card shadow="never">
           <template #header>
-            <div class="card-head"><span>URL 导入</span></div>
+            <div class="card-title"><span>URL 导入</span></div>
           </template>
           <div class="hint" style="margin-bottom: 12px">
             从网络地址拉取价格文件（仅 https 协议；已做 SSRF 防护；单文件 ≤ 1MB）。先「预览」确认写入条数，再「导入」正式写入。
@@ -318,11 +318,6 @@ async function confirmImport() {
 </script>
 
 <style scoped>
-.card-head {
-  font-size: var(--nx-font-body);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
 .import-action {
   display: flex;
   align-items: center;

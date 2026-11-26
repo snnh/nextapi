@@ -1,16 +1,25 @@
 <template>
   <div class="proxy-panel">
-    <el-alert type="info" :closable="false" show-icon class="info-banner">
-      <template #title>
-        <div class="info-text">
-          系统默认代理在「运行参数 → 代理（全局）」的 <span class="mono">proxy.default_proxy_id</span> 配置（当前
-          <span class="mono">{{ defaultProxyLabel }}</span>）。外联矩阵：供应商请求 / GitHub 更新检查 / FX 拉取 /
-          价格 URL 导入 / 媒体下载 的各场景 <span class="mono">use_proxy</span> 与
-          <span class="mono">proxy_id</span> 在「运行参数」对应分组内配置；代理自身
+    <!-- 说明默认收起：一行摘要 + 展开全文（原文只在需要排查时看） -->
+    <div class="proxy-note">
+      <div class="proxy-note-head">
+        <el-icon class="proxy-note-icon"><InfoFilled /></el-icon>
+        <span class="proxy-note-summary">
+          系统默认代理：<b class="mono">{{ defaultProxyLabel }}</b>
+        </span>
+        <el-button link type="primary" size="small" @click="noteOpen = !noteOpen">
+          {{ noteOpen ? '收起说明' : '说明' }}
+        </el-button>
+      </div>
+      <el-collapse-transition>
+        <div v-show="noteOpen" class="proxy-note-body">
+          默认代理在「运行参数 → 代理（全局）」的 <span class="mono">proxy.default_proxy_id</span> 配置。
+          各场景的 <span class="mono">use_proxy</span> 与 <span class="mono">proxy_id</span>（供应商请求、GitHub 更新检查、
+          FX 拉取、价格 URL 导入、媒体下载）在「运行参数」对应分组内配置。代理自身
           <span class="mono">no_proxy</span> 与全局 <span class="mono">proxy.no_proxy</span> 取并集，命中即直连。
         </div>
-      </template>
-    </el-alert>
+      </el-collapse-transition>
+    </div>
 
     <div class="toolbar">
       <el-button type="primary" :icon="Plus" @click="openCreate">新建代理</el-button>
@@ -26,7 +35,7 @@
     </div>
 
     <el-card shadow="never" class="section-card">
-      <el-table :data="filtered" v-loading="loading">
+      <el-table :data="filtered" v-loading="loading" size="small">
         <template #empty>
           <el-empty :description="keyword.trim() ? '无匹配的代理' : '暂无代理'" :image-size="60" />
         </template>
@@ -56,14 +65,16 @@
         </el-table-column>
         <el-table-column v-if="!isNarrow && !isTablet" label="密码" width="110" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.has_password" type="success" size="small" effect="light">已设密码</el-tag>
+            <el-tag v-if="row.has_password" type="success" size="small" effect="plain">已设密码</el-tag>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
         <el-table-column v-if="!isNarrow && !isTablet" label="直连名单" min-width="180">
           <template #default="{ row }">
             <template v-if="row.no_proxy.length">
-              <el-tag v-for="(t, i) in showNoProxy(row)" :key="i" size="small" style="margin-right: 4px">{{ t }}</el-tag>
+              <span class="tag-group">
+                <el-tag v-for="(t, i) in showNoProxy(row)" :key="i" size="small" effect="plain">{{ t }}</el-tag>
+              </span>
               <el-tooltip v-if="row.no_proxy.length > 3" placement="top">
                 <template #content>
                   <div v-for="(t, i) in row.no_proxy" :key="i" class="tip-item">{{ t }}</div>
@@ -130,7 +141,7 @@
           <el-input v-model="dlg.form.name" placeholder="代理名称（唯一）" clearable />
         </el-form-item>
         <el-form-item label="类型" prop="kind">
-          <el-select v-model="dlg.form.kind" style="width: 100%">
+          <el-select class="w-full" v-model="dlg.form.kind">
             <el-option v-for="k in PROXY_KINDS" :key="k.value" :value="k.value" :label="k.label" />
           </el-select>
         </el-form-item>
@@ -138,7 +149,7 @@
           <el-input v-model="dlg.form.host" placeholder="如 proxy.example.com" clearable />
         </el-form-item>
         <el-form-item label="端口" prop="port">
-          <el-input-number v-model="dlg.form.port" :min="1" :max="65535" :controls-position="'right'" style="width: 200px" />
+          <el-input-number class="w-200" v-model="dlg.form.port" :min="1" :max="65535" :controls-position="'right'" />
         </el-form-item>
         <el-form-item label="用户名">
           <el-input v-model="dlg.form.username" placeholder="（可选）" clearable />
@@ -167,7 +178,7 @@
         </el-form-item>
         <el-form-item label="直连名单">
           <div class="tags-editor">
-            <el-tag v-for="(t, i) in dlg.form.no_proxy" :key="i" closable size="small" @close="removeTag(i)">{{ t }}</el-tag>
+            <el-tag effect="plain" v-for="(t, i) in dlg.form.no_proxy" :key="i" closable size="small" @close="removeTag(i)">{{ t }}</el-tag>
             <el-input v-model="noProxyInput" placeholder="域名/CIDR/*后缀 回车添加" size="small" class="tag-input" @keyup.enter="addTag" />
           </div>
           <div class="hint">与全局 proxy.no_proxy 取并集命中即直连。</div>
@@ -187,7 +198,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
+import { Plus, ArrowDown, InfoFilled, Refresh, Search } from '@element-plus/icons-vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { proxyApi } from '@/api'
 import { errMsg } from '@/api/http'
@@ -238,6 +249,9 @@ const defaultProxyId = computed(() => {
   const it = props.settings.find((s) => s.key === 'proxy.default_proxy_id')
   return it ? String(it.value ?? '') : ''
 })
+/** 顶部说明默认收起，只在需要时展开全文 */
+const noteOpen = ref(false)
+
 const defaultProxyLabel = computed(() =>
   defaultProxyId.value ? defaultProxyId.value : '未设置（直连）',
 )
@@ -498,13 +512,32 @@ onMounted(load)
 </script>
 
 <style scoped>
-.info-banner {
-  margin-bottom: 14px;
+.proxy-note {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--nx-radius-md);
+  background: var(--nx-subtle);
 }
-.info-text {
-  line-height: 1.7;
+.proxy-note-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: var(--nx-font-small);
 }
-.info-text .mono,
+.proxy-note-icon {
+  color: var(--nx-accent);
+}
+.proxy-note-summary {
+  color: var(--nx-text-2);
+}
+.proxy-note-body {
+  margin-top: 8px;
+  color: var(--nx-text-3);
+  font-size: var(--nx-font-small);
+  line-height: 1.65;
+}
 .proxy-panel .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--nx-font-caption);

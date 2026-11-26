@@ -12,7 +12,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="重新授权会换取新的 session token 并直接写回该渠道"
+      title="重新授权会换取新的 session token 并直接写回该上游"
       description="适用于 Devin session token 过期/失效（列表标注「凭证失效」）。授权码沿用官方 Devin CLI 的 PKCE 流程，旧 token 会被新 token 覆盖。"
     />
 

@@ -286,9 +286,6 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tag-gap {
-  margin-right: 4px;
-}
 .pop-foot {
   display: flex;
   align-items: center;

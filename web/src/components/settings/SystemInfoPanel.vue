@@ -2,7 +2,7 @@
   <div class="system-panel" v-loading="pageLoading">
     <el-card shadow="never" class="card">
       <template #header>
-        <div class="card-head"><span>网关信息</span></div>
+        <div class="card-title"><span>网关信息</span></div>
       </template>
       <el-descriptions :column="descColumns" border>
         <el-descriptions-item label="版本">
@@ -14,7 +14,7 @@
 
     <el-card shadow="never" class="card">
       <template #header>
-        <div class="card-head">
+        <div class="card-title">
           <span>反向代理诊断</span>
           <el-button link type="primary" :loading="diagLoading" :icon="Refresh" @click="loadDiag">
             重新检测
@@ -38,7 +38,7 @@
         </el-descriptions-item>
         <el-descriptions-item label="TCP 对端">
           <span class="mono">{{ diag.client.peer_addr || '-' }}</span>
-          <el-tag
+          <el-tag effect="plain"
             :type="diag.client.peer_trusted ? 'success' : 'warning'"
             size="small"
             style="margin-left: 6px"
@@ -76,7 +76,7 @@
 
     <el-card shadow="never" class="card">
       <template #header>
-        <div class="card-head">
+        <div class="card-title">
           <span>运行状态</span>
           <el-button link type="primary" :loading="statusLoading" :icon="Refresh" @click="loadStatus">刷新</el-button>
         </div>
@@ -84,7 +84,7 @@
       <el-descriptions v-if="status" :column="descColumns" border>
         <el-descriptions-item label="运行时长">{{ fmtUptime(status.uptime_secs) }}</el-descriptions-item>
         <el-descriptions-item label="数据库">
-          <el-tag :type="status.database.ok ? 'success' : 'danger'" size="small">
+          <el-tag effect="plain" :type="status.database.ok ? 'success' : 'danger'" size="small">
             {{ status.database.ok ? '正常' : '异常' }}
           </el-tag>
           <span class="hint" style="margin-left: 6px">{{ status.database.latency_ms }}ms</span>
@@ -105,11 +105,11 @@
           <span class="hint">（待回联任务 {{ status.media_poller.pending_tasks }}）</span>
         </el-descriptions-item>
         <el-descriptions-item label="熔断上游" :span="descColumns === 1 ? 1 : 2">
-          <template v-if="status.breakers.length">
-            <el-tag v-for="b in status.breakers" :key="b.name" size="small" type="danger" effect="plain" style="margin-right: 6px">
+          <span v-if="status.breakers.length" class="tag-group">
+            <el-tag v-for="b in status.breakers" :key="b.name" size="small" type="danger" effect="plain">
               {{ b.name }}（连续失败 {{ b.consecutive_failures }}<template v-if="b.disabled_by">，{{ b.disabled_by === 'manual' ? '手动禁用' : '自动熔断' }}</template>）
             </el-tag>
-          </template>
+          </span>
           <span v-else class="hint">无</span>
         </el-descriptions-item>
       </el-descriptions>
@@ -128,7 +128,7 @@
 
     <el-card shadow="never" class="card">
       <template #header>
-        <div class="card-head"><span>当前配置（YAML 文件视图）</span></div>
+        <div class="card-title"><span>当前配置（YAML 文件视图）</span></div>
       </template>
       <div class="hint" style="margin-bottom: 12px">
         <span class="mono">***</span> = 已设置；导出文件中的 <span class="mono">***</span> 回传即保持原值。
@@ -149,7 +149,7 @@
 
     <el-card shadow="never" class="card">
       <template #header>
-        <div class="card-head"><span>修改密码</span></div>
+        <div class="card-title"><span>修改密码</span></div>
       </template>
       <p class="hint pwd-hint">直接修改当前账号的登录密码（新密码至少 8 位），无需再到右上角头像菜单操作。</p>
       <el-button type="primary" @click="pwdDlg?.open()">修改密码</el-button>
@@ -370,14 +370,6 @@ onMounted(() => {
 <style scoped>
 .card {
   margin-bottom: 16px;
-}
-.card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--nx-font-body);
-  font-weight: 600;
-  color: var(--el-text-color-primary);
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

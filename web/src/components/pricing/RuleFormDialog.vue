@@ -10,7 +10,7 @@
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" @submit.prevent @keyup.enter="onFormKeyEnter">
       <el-form-item label="上游" prop="upstream_id">
-        <el-select v-model="form.upstream_id" filterable placeholder="请选择上游" style="width: 100%">
+        <el-select class="w-full" v-model="form.upstream_id" filterable placeholder="请选择上游">
           <el-option v-for="u in upstreams" :key="u.id" :value="u.id" :label="u.name" />
         </el-select>
       </el-form-item>
@@ -20,7 +20,7 @@
       </el-form-item>
 
       <el-form-item label="计价单位" prop="unit">
-        <el-select v-model="form.unit" style="width: 100%">
+        <el-select class="w-full" v-model="form.unit">
           <el-option v-for="o in UNIT_OPTIONS" :key="o.value" :value="o.value" :label="o.label" />
         </el-select>
       </el-form-item>
@@ -32,12 +32,12 @@
       </el-form-item>
 
       <el-form-item label="基础单价" prop="base_price">
-        <el-input-number v-model="form.base_price" :min="0" :precision="10" :controls="false" style="width: 240px" />
+        <el-input-number class="w-240" v-model="form.base_price" :min="0" :precision="10" :controls="false" />
         <span class="hint" style="margin-left: 10px">按计价单位设置（如每 1M token / 每张 / 每秒）</span>
       </el-form-item>
 
       <el-form-item label="上下文基准" prop="context_basis">
-        <el-select v-model="form.context_basis" style="width: 240px">
+        <el-select class="w-240" v-model="form.context_basis">
           <el-option value="prompt_tokens" label="按 prompt_tokens（仅输入 token）" />
           <el-option value="total_tokens" label="按 total_tokens（输入 + 输出）" />
         </el-select>
@@ -68,40 +68,40 @@
       </template>
 
       <el-form-item label="分段" prop="segments">
-        <div style="width: 100%">
+        <div class="w-full">
           <SegmentsEditor ref="segEditorRef" v-model="form.segments" :unit="form.unit" />
         </div>
       </el-form-item>
 
       <el-form-item label="有效期开始" prop="effective_from">
         <el-date-picker
+          class="w-240"
           v-model="form.effective_from"
           type="datetime"
           value-format="YYYY-MM-DD HH:mm:ss"
           placeholder="（可选）"
           clearable
-          style="width: 240px"
-        />
+          />
       </el-form-item>
 
       <el-form-item label="有效期结束" prop="effective_to">
         <el-date-picker
+          class="w-240"
           v-model="form.effective_to"
           type="datetime"
           value-format="YYYY-MM-DD HH:mm:ss"
           placeholder="（可选）"
           clearable
-          style="width: 240px"
-        />
+          />
       </el-form-item>
 
       <el-form-item label="优先级">
-        <el-input-number v-model="form.priority" :min="0" style="width: 160px" />
+        <el-input-number class="w-160" v-model="form.priority" :min="0" />
         <span class="hint" style="margin-left: 10px">数值大优先</span>
       </el-form-item>
 
       <el-form-item label="排序">
-        <el-input-number v-model="form.sort_order" :min="0" style="width: 160px" />
+        <el-input-number class="w-160" v-model="form.sort_order" :min="0" />
       </el-form-item>
 
       <el-form-item label="启用">

@@ -44,12 +44,12 @@
 
       <el-form-item label="类型（kind）" prop="kind">
         <el-select
+          class="w-full"
           v-model="form.kind"
           filterable
           allow-create
           default-first-option
           placeholder="选择或输入类型"
-          style="width: 100%"
         >
           <el-option v-for="k in UPSTREAM_KINDS" :key="k" :value="k" :label="k">
             <div class="kind-option">
@@ -124,7 +124,7 @@
         <el-form-item label="OAuth 凭证">
           <div class="api-key-block">
             <div v-if="isEdit && form.hasOauth" class="oauth-state">
-              <el-tag type="success" size="small">已授权</el-tag>
+              <el-tag effect="plain" type="success" size="small">已授权</el-tag>
               <span class="hint">账号 {{ form.oauthAccountId || '-' }}</span>
               <span class="hint">令牌有效期至 {{ form.oauthExpiresAt ? fmtTime(form.oauthExpiresAt) : '-' }}</span>
               <el-button size="small" :loading="oauthRefreshing" @click="refreshOAuth">手动刷新</el-button>
@@ -157,7 +157,7 @@
 
         <!-- Codex 传输方式：auto=WS 优先（官方 CLI 行为），失败自动回落 HTTP -->
         <el-form-item label="传输方式">
-          <el-select v-model="form.codexTransport" style="width: 260px">
+          <el-select class="w-260" v-model="form.codexTransport">
             <el-option label="auto（WebSocket 优先，失败回落 HTTP）" value="auto" />
             <el-option label="WebSocket（仅 WS）" value="ws" />
             <el-option label="HTTP SSE" value="http" />
@@ -191,8 +191,8 @@
       <el-form-item v-else label="API Key" prop="api_key">
         <div v-if="isEdit" class="api-key-block">
           <div class="api-key-row">
-            <el-tag v-if="form.hasApiKey" type="success" size="small" class="api-key-tag">已设置</el-tag>
-            <el-tag v-else type="info" size="small" class="api-key-tag">未设置</el-tag>
+            <el-tag effect="plain" v-if="form.hasApiKey" type="success" size="small" class="api-key-tag">已设置</el-tag>
+            <el-tag effect="plain" v-else type="info" size="small" class="api-key-tag">未设置</el-tag>
             <el-input
               v-model="form.api_key"
               type="password"
@@ -310,8 +310,8 @@
       <template v-if="!isCodex && !isDevin">
         <el-divider content-position="left">余额/额度</el-divider>
         <el-form-item label="查询方式">
-          <el-select v-model="form.balanceAdapter" style="width: 100%">
-            <el-option label="自动（按渠道类型识别）" value="auto" />
+          <el-select class="w-full" v-model="form.balanceAdapter">
+            <el-option label="自动（按上游类型识别）" value="auto" />
             <el-option label="关闭" value="off" />
             <el-option label="DeepSeek 余额" value="deepseek" />
             <el-option label="Kimi 余额" value="kimi" />
@@ -334,7 +334,7 @@
               clearable
             />
             <div class="hint">
-              以 / 开头拼到渠道 origin；否则拼到 base_url；绝对地址仅允许公网 HTTPS。
+              以 / 开头拼到上游 origin；否则拼到 base_url；绝对地址仅允许公网 HTTPS。
             </div>
           </el-form-item>
           <el-form-item label="鉴权 Header">
@@ -363,8 +363,8 @@
         <el-form-item label="查询凭证">
           <div v-if="isEdit" class="api-key-block">
             <div class="api-key-row">
-              <el-tag v-if="form.hasBalanceKey" type="success" size="small" class="api-key-tag">已设置</el-tag>
-              <el-tag v-else type="info" size="small" class="api-key-tag">未设置</el-tag>
+              <el-tag effect="plain" v-if="form.hasBalanceKey" type="success" size="small" class="api-key-tag">已设置</el-tag>
+              <el-tag effect="plain" v-else type="info" size="small" class="api-key-tag">未设置</el-tag>
               <el-input
                 v-model="form.balance_key"
                 type="password"
@@ -415,12 +415,12 @@
 
       <el-form-item label="协议" prop="protocols">
         <el-select
+          class="w-full"
           v-model="form.protocols"
           multiple
           collapse-tags
           collapse-tags-tooltip
           placeholder="选择支持的协议"
-          style="width: 100%"
         >
           <el-option-group label="标准协议">
             <el-option v-for="p in STANDARD_PROTOCOLS" :key="p" :label="PROTOCOL_LABELS[p]" :value="p" />
@@ -439,27 +439,27 @@
         <el-divider content-position="left">模型与路由</el-divider>
 
         <el-form-item label="同步策略">
-          <div style="width: 100%">
+          <div class="w-full">
             <el-radio-group v-model="form.model_sync">
               <el-radio-button value="manual">手动管理</el-radio-button>
               <el-radio-button value="auto">跟随上游自动更新</el-radio-button>
             </el-radio-group>
             <div class="hint" style="margin-top: 6px">
               自动模式：按系统间隔（model_sync.interval_minutes）拉取上游模型列表并全量对账——新模型自动建路由、
-              消失模型自动删托管路由；手动路由（含其他渠道）绝不受影响。保存后生效。
+              消失模型自动删托管路由；手动路由（含其他上游）绝不受影响。保存后生效。
             </div>
           </div>
         </el-form-item>
 
         <el-form-item v-if="form.model_sync === 'auto'" label="排除名单">
           <el-select
+            class="w-full"
             v-model="form.model_exclude"
             multiple
             filterable
             allow-create
             default-first-option
             placeholder="输入模型名回车加入：同步时跳过，已托管的会移除"
-            style="width: 100%"
           >
             <el-option v-for="m in form.model_exclude" :key="m" :value="m" :label="m" />
           </el-select>
@@ -487,7 +487,7 @@
               >
                 <el-option label="全部状态" value="all" />
                 <el-option label="仅未路由" value="new" />
-                <el-option label="已路由（本渠道）" value="routed" />
+                <el-option label="已路由（本上游）" value="routed" />
                 <el-option label="占用 / 排除" value="other" />
               </el-select>
               <span v-if="modelItems.length" class="hint">{{ modelStatsText }}</span>
@@ -516,14 +516,14 @@
                 <el-tag size="small" :type="MODEL_TAG[it.status]" effect="plain">{{ MODEL_STATUS[it.status] }}</el-tag>
               </div>
             </el-checkbox-group>
-            <div v-else-if="filteredItems.length && usingCache" class="cache-list">
-              <el-tag v-for="m in filteredItems" :key="m.name" size="small" effect="plain" style="margin: 2px 4px 2px 0">
+            <div v-else-if="filteredItems.length && usingCache" class="cache-list tag-group">
+              <el-tag v-for="m in filteredItems" :key="m.name" size="small" effect="plain">
                 {{ m.name }}
               </el-tag>
             </div>
             <div v-else-if="modelItems.length" class="hint">无匹配「{{ modelSearch }}」的模型。</div>
             <div v-else class="hint">
-              尚未拉取；点击「拉取模型列表」查看该渠道可用模型，或在下方手动输入模型 ID。
+              尚未拉取；点击「拉取模型列表」查看该上游可用模型，或在下方手动输入模型 ID。
             </div>
             <div v-if="modelItems.length && !usingCache" class="models-actions">
               <template v-if="form.model_sync === 'auto'">
@@ -571,7 +571,7 @@
                 <el-button size="small" :disabled="!manualInput.trim()" @click="addManualModels">添加</el-button>
               </div>
               <div v-if="manualPending.length" class="manual-pending">
-                <el-tag
+                <el-tag effect="plain"
                   v-for="m in manualPending"
                   :key="m"
                   size="small"
@@ -598,18 +598,18 @@
       <el-row :gutter="16">
         <el-col :xs="24" :sm="12">
           <el-form-item label="超时（ms）" prop="timeout_ms">
-            <el-input-number v-model="form.timeout_ms" :min="0" :step="1000" style="width: 200px" />
+            <el-input-number class="w-200" v-model="form.timeout_ms" :min="0" :step="1000" />
           </el-form-item>
         </el-col>
         <el-col :xs="24" :sm="12">
           <el-form-item label="熔断阈值" prop="breaker_threshold">
             <el-input-number
+              class="w-200"
               v-model="form.breaker_threshold"
               :min="0"
               :step="1"
               :disabled="!form.autoDisable"
-              style="width: 200px"
-            />
+              />
           </el-form-item>
         </el-col>
         <el-col :xs="24" :sm="12">
@@ -618,8 +618,8 @@
               <el-switch v-model="form.autoDisable" />
               <span class="hint">
                 {{ form.autoDisable
-                  ? '允许被自动禁用；还需在系统设置里打开「渠道自动禁用」（默认关闭）'
-                  : '该渠道永不自动禁用，失败仅记日志并故障转移' }}
+                  ? '允许被自动禁用；还需在系统设置里打开「上游自动禁用」（默认关闭）'
+                  : '该上游永不自动禁用，失败仅记日志并故障转移' }}
               </span>
             </div>
           </el-form-item>
@@ -647,11 +647,11 @@
         <el-col :xs="24" :sm="12">
           <el-form-item label="代理" prop="proxy_id">
             <el-select
+              class="w-full"
               v-model="form.proxy_id"
               clearable
               :disabled="!form.use_proxy"
               placeholder="（跟随系统默认代理）"
-              style="width: 100%"
             >
               <el-option label="（跟随系统默认代理）" value="" />
               <el-option v-for="p in proxies" :key="p.id" :value="p.id" :label="p.name" />
@@ -678,31 +678,31 @@
           <el-form-item label="能力矩阵" label-width="120px">
             <div class="caps-grid">
               <span class="caps-label">流式</span>
-              <el-select v-model="form.capStream" style="width: 170px">
+              <el-select class="w-170" v-model="form.capStream">
                 <el-option label="未设置（假设支持）" value="unset" />
                 <el-option label="明确支持" value="on" />
                 <el-option label="不支持（路由过滤）" value="off" />
               </el-select>
               <span class="caps-label">工具调用</span>
-              <el-select v-model="form.capTools" style="width: 170px">
+              <el-select class="w-170" v-model="form.capTools">
                 <el-option label="未设置（假设支持）" value="unset" />
                 <el-option label="明确支持" value="on" />
                 <el-option label="不支持（路由过滤）" value="off" />
               </el-select>
               <span class="caps-label">视觉（图片输入）</span>
-              <el-select v-model="form.capVision" style="width: 170px">
+              <el-select class="w-170" v-model="form.capVision">
                 <el-option label="未设置（假设支持）" value="unset" />
                 <el-option label="明确支持" value="on" />
                 <el-option label="不支持（路由过滤）" value="off" />
               </el-select>
               <span class="caps-label">最大上下文</span>
               <el-input-number
+                class="w-170"
                 v-model="form.capMaxContext"
                 :min="0"
                 :step="8192"
                 placeholder="tokens"
-                style="width: 170px"
-              />
+                />
             </div>
             <div class="hint" style="margin-top: 6px">
               标记「不支持」的能力，带该需求的请求路由时自动跳过此上游；最大上下文仅记录展示，暂不参与过滤。
@@ -763,9 +763,9 @@ const emit = defineEmits<{ (e: 'saved'): void }>()
 
 const IMAGE_PROTOCOLS = PROTOCOL_OPTIONS.filter((o) => o.value.startsWith('images_')).map((o) => o.value)
 
-/** Codex 渠道默认值（与后端 upstream/codex.rs 常量一致） */
+/** Codex 上游默认值（与后端 upstream/codex.rs 常量一致） */
 const CODEX_DEFAULT_BASE_URL = 'https://chatgpt.com/backend-api/codex'
-/** Devin 渠道默认值（与后端 upstream/devin/mod.rs 常量一致） */
+/** Devin 上游默认值（与后端 upstream/devin/mod.rs 常量一致） */
 const DEVIN_DEFAULT_BASE_URL = 'https://server.codeium.com'
 const CODEX_DEFAULT_USER_AGENT =
   'codex-tui/0.153.4 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.153.4)'
@@ -782,7 +782,7 @@ const MODEL_STATUS: Record<UpstreamModelItem['status'], string> = {
   new: '未路由',
   routed_manual: '已路由·手动',
   routed_auto: '已路由·自动',
-  routed_other: '他渠道占用',
+  routed_other: '其他上游占用',
   excluded: '已排除',
 }
 const MODEL_TAG: Record<UpstreamModelItem['status'], 'success' | 'info' | 'warning' | 'danger' | 'primary'> = {
@@ -812,7 +812,7 @@ interface FormState {
   protocolPriority: ProtocolName[]
   timeout_ms: number
   breaker_threshold: number
-  /** 渠道自动禁用（extra.auto_disable；关闭=该渠道永不自动禁用） */
+  /** 上游自动禁用（extra.auto_disable；关闭=该渠道永不自动禁用） */
   autoDisable: boolean
   probe_model: string
   enabled: boolean
@@ -1036,9 +1036,9 @@ function rowDisabledReason(it: UpstreamModelItem): string {
   if (form.model_sync === 'auto') return '自动模式下由同步策略管理，无需勾选'
   const map: Record<UpstreamModelItem['status'], string> = {
     new: '',
-    routed_manual: '已有本渠道手动路由',
-    routed_auto: '已有本渠道自动托管路由',
-    routed_other: '已被其他渠道路由占用',
+    routed_manual: '已有本上游手动路由',
+    routed_auto: '已有本上游自动托管路由',
+    routed_other: '已被其他上游路由占用',
     excluded: '在排除名单内（同步时跳过）',
   }
   return map[it.status]
